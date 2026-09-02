@@ -14,6 +14,7 @@ pip install pyinstaller
 pyinstaller --noconfirm --onefile --windowed ^
     --name "DersProgrami" ^
     --paths src ^
+    --add-data "src\dersprogram\assets;dersprogram\assets" ^
     src\run_app.py
 
 echo.

@@ -8,7 +8,6 @@ yoksa kalıcı mı olacağı sorulur.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTableWidget,
-    QTableWidgetItem,
     QListWidget,
     QListWidgetItem,
     QAbstractItemView,
@@ -25,17 +23,16 @@ from PySide6.QtWidgets import (
     QSplitter,
 )
 
-from ..db import Database
+from ..db import Database, LESSON_TYPES
 from .. import scheduling
 from .widgets import WeekNavigator, ScopeDialog
 from .add_lesson_dialog import AddLessonDialog
-
-COLOR_EMPTY = QBrush(QColor("#f5f5f5"))
-COLOR_FILLED = QBrush(QColor("#ffffff"))
-COLOR_VALID_DROP = QBrush(QColor("#bff2c8"))
-COLOR_INVALID_DROP = QBrush(QColor("#f8b4b4"))
+from . import theme
 
 MIME_PREFIX = "lesson-block:"
+
+VALID_STYLE = f"#cellFrame {{ border:2px dashed {theme.VALID_BORDER}; border-radius:8px; background:{theme.VALID_BG}; }}"
+INVALID_STYLE = f"#cellFrame {{ border:2px solid {theme.CONFLICT_BORDER}; border-radius:8px; background:{theme.CONFLICT_BG}; }}"
 
 
 class PoolList(QListWidget):
@@ -45,6 +42,11 @@ class PoolList(QListWidget):
         super().__init__()
         self.setDragEnabled(True)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setFlow(QListWidget.LeftToRight)
+        self.setWrapping(True)
+        self.setResizeMode(QListWidget.Adjust)
+        self.setSpacing(6)
+        self.setStyleSheet(f"QListWidget {{ background:{theme.APP_BG}; border:none; }}")
 
     def mimeData(self, items):
         md = super().mimeData(items)
@@ -54,24 +56,46 @@ class PoolList(QListWidget):
         return md
 
 
+def _pool_chip(block) -> QWidget:
+    _bg, dot = theme.LESSON_TYPE_COLORS.get(block.type, (theme.SURFACE, theme.INK_MUTED_58))
+    chip = QWidget()
+    layout = QHBoxLayout(chip)
+    layout.setContentsMargins(11, 8, 12, 9)
+    layout.setSpacing(7)
+    dot_label = QLabel()
+    dot_label.setFixedSize(7, 7)
+    dot_label.setStyleSheet(f"background:{dot}; border-radius:3.5px;")
+    layout.addWidget(dot_label)
+    text = QLabel(block.pool_label())
+    text.setStyleSheet(f"font-size:9pt; font-weight:600; color:{theme.INK_MUTED_30}; background:transparent;")
+    layout.addWidget(text)
+    chip.setStyleSheet(
+        f"background:{theme.SURFACE}; border:1px solid {theme.BORDER_SUBTLE}; border-radius:14px;"
+    )
+    chip.setMinimumHeight(32)
+    return chip
+
+
 class MainGrid(QTableWidget):
     def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request):
         super().__init__()
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DropOnly)
+        self.setShowGrid(False)
         self._get_block_by_id = get_block_by_id
         self._validate_drop = validate_drop
         self._on_drop = on_drop
         self._on_remove_request = on_remove_request
         self._hover_cell = None
+        self._hover_original = ""
         self.cellDoubleClicked.connect(self._handle_double_click)
 
     def _cell_of(self, pos):
-        item = self.itemAt(pos)
-        if item is None:
+        index = self.indexAt(pos)
+        if not index.isValid():
             return None
-        return item.row(), item.column()
+        return index.row(), index.column()
 
     def dragEnterEvent(self, event):
         text = event.mimeData().text()
@@ -89,14 +113,15 @@ class MainGrid(QTableWidget):
         if cell != self._hover_cell:
             self._restore_hover()
             self._hover_cell = cell
-            block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
-            block = self._get_block_by_id(block_id)
             row, col = cell
-            day, period = col, row + 1
-            valid = block is not None and self._validate_drop(block, day, period)
-            item = self.item(row, col)
-            if item is not None:
-                item.setBackground(COLOR_VALID_DROP if valid else COLOR_INVALID_DROP)
+            widget = self.cellWidget(row, col)
+            if widget is not None:
+                self._hover_original = widget.styleSheet()
+                block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
+                block = self._get_block_by_id(block_id)
+                day, period = col, row + 1
+                valid = block is not None and self._validate_drop(block, day, period)
+                widget.setStyleSheet(VALID_STYLE if valid else INVALID_STYLE)
         event.acceptProposedAction()
 
     def dragLeaveEvent(self, event):
@@ -106,9 +131,9 @@ class MainGrid(QTableWidget):
     def _restore_hover(self) -> None:
         if self._hover_cell is not None:
             row, col = self._hover_cell
-            item = self.item(row, col)
-            if item is not None:
-                item.setBackground(COLOR_FILLED if item.text() else COLOR_EMPTY)
+            widget = self.cellWidget(row, col)
+            if widget is not None:
+                widget.setStyleSheet(self._hover_original)
         self._hover_cell = None
 
     def dropEvent(self, event):
@@ -137,17 +162,39 @@ class ScheduleTab(QWidget):
         self._blocks_by_id: dict[int, object] = {}
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(12)
 
         self.navigator = WeekNavigator(lambda: len(self.db.day_names))
         layout.addWidget(self.navigator)
 
-        top_row = QHBoxLayout()
-        self.add_lesson_button = QPushButton("Ders Ekle")
-        self.auto_assign_button = QPushButton("Oto Ata")
-        top_row.addWidget(self.add_lesson_button)
-        top_row.addWidget(self.auto_assign_button)
-        top_row.addStretch()
-        layout.addLayout(top_row)
+        toolbar = QHBoxLayout()
+        self.add_lesson_button = QPushButton("  Ders Ekle")
+        self.add_lesson_button.setObjectName("outlineButton")
+        self.add_lesson_button.setIcon(theme.icon(theme.NAV_ICONS["plus"], theme.ACCENT_HOVER))
+        self.auto_assign_button = QPushButton("  Oto Ata")
+        self.auto_assign_button.setObjectName("primaryButton")
+        self.auto_assign_button.setIcon(theme.icon(theme.NAV_ICONS["bolt"], theme.AMBER_TEXT))
+        toolbar.addStretch()
+        toolbar.addWidget(self.add_lesson_button)
+        toolbar.addWidget(self.auto_assign_button)
+        layout.addLayout(toolbar)
+
+        legend = QHBoxLayout()
+        legend.setSpacing(18)
+        for lesson_type in LESSON_TYPES:
+            bg, dot = theme.LESSON_TYPE_COLORS[lesson_type]
+            item = QHBoxLayout()
+            item.setSpacing(6)
+            dot_label = QLabel()
+            dot_label.setFixedSize(8, 8)
+            dot_label.setStyleSheet(f"background:{dot}; border-radius:4px;")
+            item.addWidget(dot_label)
+            text = QLabel(theme.lesson_type_label(lesson_type))
+            text.setStyleSheet(f"font-size:9pt; color:{theme.INK_MUTED_42};")
+            item.addWidget(text)
+            legend.addLayout(item)
+        legend.addStretch()
+        layout.addLayout(legend)
 
         splitter = QSplitter(Qt.Vertical)
 
@@ -162,14 +209,18 @@ class ScheduleTab(QWidget):
         pool_container = QWidget()
         pool_layout = QVBoxLayout(pool_container)
         pool_layout.setContentsMargins(0, 0, 0, 0)
-        pool_layout.addWidget(QLabel(
-            "Atanmamış Dersler (sürükleyip yukarıdaki tabloya bırakın; "
-            "yerleştirilmiş bir dersi kaldırmak için üstündeki hücreye çift tıklayın):"
-        ))
+        self.pool_label = QLabel("Atanmamış Dersler")
+        self.pool_label.setStyleSheet(
+            f"font-family:'{theme.FONT_HEADING}'; font-weight:700; font-size:10pt; color:{theme.INK_MUTED_30};"
+        )
+        pool_layout.addWidget(self.pool_label)
+        hint = QLabel("Sürükleyip yukarıya bırakın. Yerleştirilmiş bir dersi kaldırmak için üstündeki hücreye çift tıklayın.")
+        hint.setStyleSheet(f"font-size:8.3pt; color:{theme.INK_MUTED_58};")
+        pool_layout.addWidget(hint)
         self.pool_list = PoolList()
         pool_layout.addWidget(self.pool_list)
         splitter.addWidget(pool_container)
-        splitter.setSizes([500, 200])
+        splitter.setSizes([520, 190])
 
         layout.addWidget(splitter, 1)
 
@@ -198,21 +249,21 @@ class ScheduleTab(QWidget):
         self.grid.setVerticalHeaderLabels([f"{p}. Ders" for p in range(1, period_count + 1)])
 
         for period in range(1, period_count + 1):
+            self.grid.setRowHeight(period - 1, 88)
             for day in range(len(day_names)):
                 blocks = self._schedule.get((day, period), [])
-                text = "\n───\n".join(b.short_label() for b in blocks)
-                item = QTableWidgetItem(text)
-                item.setTextAlignment(Qt.AlignCenter)
-                item.setBackground(COLOR_FILLED if blocks else COLOR_EMPTY)
-                self.grid.setItem(period - 1, day, item)
-        self.grid.resizeRowsToContents()
+                self.grid.setCellWidget(period - 1, day, theme.make_multi_cell(blocks))
 
     def _render_pool(self) -> None:
+        self.pool_label.setText(f"Atanmamış Dersler ({len(self._pool)})")
         self.pool_list.clear()
         for block in sorted(self._pool, key=lambda b: b.pool_label()):
-            item = QListWidgetItem(block.pool_label())
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, block.id)
+            chip = _pool_chip(block)
             self.pool_list.addItem(item)
+            self.pool_list.setItemWidget(item, chip)
+            item.setSizeHint(chip.sizeHint())
 
     # ---------- yerleştirme / kaldırma ----------
     def _validate_drop(self, block, day: int, period: int) -> bool:

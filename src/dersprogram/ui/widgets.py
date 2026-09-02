@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from ..db import Database, LESSON_TYPE_LABELS
 from .. import scheduling
+from . import theme
 
 
 class WeekNavigator(QWidget):
@@ -32,18 +33,54 @@ class WeekNavigator(QWidget):
         self._day_count_provider = day_count_provider
         self.week_start = scheduling.monday_of(_dt.date.today())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.prev_button = QPushButton("◀ Önceki Hafta")
+        container = QHBoxLayout(self)
+        container.setContentsMargins(0, 0, 0, 0)
+        bar = QWidget()
+        bar.setObjectName("navBar")
+        bar.setStyleSheet(
+            f"#navBar {{ background:{theme.SURFACE}; border:1px solid {theme.BORDER_SUBTLE}; border-radius:11px; }}"
+        )
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(10, 7, 10, 7)
+        layout.setSpacing(8)
+
+        icon_btn_style = (
+            f"QPushButton {{ border:1px solid {theme.BORDER_INPUT}; border-radius:8px; "
+            f"background:{theme.SURFACE}; padding:5px; }}"
+            f"QPushButton:hover {{ background:{theme.APP_BG}; }}"
+        )
+
+        self.prev_button = QPushButton()
+        self.prev_button.setIcon(theme.icon(theme.NAV_ICONS["prev"], theme.INK_MUTED_38, 13))
+        self.prev_button.setFixedSize(28, 28)
+        self.prev_button.setStyleSheet(icon_btn_style)
+
         self.label = QLabel()
         self.label.setAlignment(Qt.AlignCenter)
-        self.next_button = QPushButton("Sonraki Hafta ▶")
+        self.label.setMinimumWidth(190)
+        self.label.setStyleSheet(
+            f"font-family:'{theme.FONT_HEADING}'; font-weight:700; font-size:9.8pt; color:{theme.INK_MUTED_30};"
+        )
+
+        self.next_button = QPushButton()
+        self.next_button.setIcon(theme.icon(theme.NAV_ICONS["next"], theme.INK_MUTED_38, 13))
+        self.next_button.setFixedSize(28, 28)
+        self.next_button.setStyleSheet(icon_btn_style)
+
         self.today_button = QPushButton("Bu Hafta")
+        self.today_button.setStyleSheet(
+            f"QPushButton {{ border:1px solid {theme.BORDER_INPUT}; border-radius:8px; "
+            f"background:{theme.SURFACE}; padding:6px 12px; font-size:9pt; font-weight:600; color:{theme.INK_MUTED_38}; }}"
+            f"QPushButton:hover {{ background:{theme.APP_BG}; }}"
+        )
 
         layout.addWidget(self.prev_button)
-        layout.addWidget(self.label, 1)
+        layout.addWidget(self.label)
         layout.addWidget(self.next_button)
+        layout.addSpacing(6)
         layout.addWidget(self.today_button)
+        layout.addStretch()
+        container.addWidget(bar)
 
         self.prev_button.clicked.connect(self.go_prev)
         self.next_button.clicked.connect(self.go_next)
@@ -76,6 +113,7 @@ class MiniScheduleGrid(QTableWidget):
     def __init__(self):
         super().__init__()
         self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setShowGrid(False)
 
     def render(self, db: Database, blocks_by_cell: dict[tuple[int, int], list]) -> None:
         day_names = db.day_names
@@ -87,12 +125,10 @@ class MiniScheduleGrid(QTableWidget):
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         for period in range(1, period_count + 1):
+            self.setRowHeight(period - 1, 40)
             for day in range(len(day_names)):
                 blocks = blocks_by_cell.get((day, period), [])
-                item = QTableWidgetItem("\n".join(b.short_label() for b in blocks))
-                item.setTextAlignment(Qt.AlignCenter)
-                self.setItem(period - 1, day, item)
-        self.resizeRowsToContents()
+                self.setCellWidget(period - 1, day, theme.make_multi_cell(blocks, compact=True))
 
 
 class SummaryTable(QTableWidget):

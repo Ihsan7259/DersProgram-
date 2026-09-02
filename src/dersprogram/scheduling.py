@@ -9,7 +9,14 @@ from __future__ import annotations
 import datetime as _dt
 from dataclasses import dataclass
 
-from .db import Database, LESSON_TYPE_LABELS
+from .db import (
+    Database,
+    LESSON_TYPE_LABELS,
+    TYPE_CLASS,
+    TYPE_ONE_ON_ONE,
+    TYPE_COACHING,
+    TYPE_DEPARTMENT,
+)
 
 SCOPE_WEEK_ONLY = "week"
 SCOPE_ALWAYS = "always"
@@ -71,6 +78,18 @@ class BlockView:
         if self.teacher_name:
             bits.append(f"({self.teacher_name})")
         return " · ".join(bits)
+
+    def card_lines(self) -> tuple[str, str, str]:
+        """Renkli hücre kartında gösterilecek 3 satır: (başlık, alt, öğretmen)."""
+        if self.type == TYPE_CLASS:
+            return self.subject_name or "Sınıf Dersi", self.class_name or "", self.teacher_name or ""
+        if self.type == TYPE_ONE_ON_ONE:
+            return self.subject_name or "Birebir", self.student_name or "", self.teacher_name or ""
+        if self.type == TYPE_COACHING:
+            return "Öğrenci Koçluk", self.student_name or "", self.teacher_name or ""
+        if self.type == TYPE_DEPARTMENT:
+            return "Zümre", self.subject_name or "", self.teacher_name or ""
+        return "Soru Çözümü", self.subject_name or "", self.teacher_name or ""
 
     def group_key(self):
         """Aynı ihtiyaçtan gelen (ör. '9-A Matematik, X öğretmeni, haftada
