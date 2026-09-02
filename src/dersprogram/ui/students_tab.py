@@ -54,9 +54,6 @@ class StudentsTab(QWidget):
         self.one_on_one_fee_spin.setRange(0, 10_000_000)
         self.one_on_one_fee_spin.setSuffix(" TL")
         fee_row.addWidget(self.one_on_one_fee_spin)
-        fee_row.addWidget(QLabel("Not:"))
-        self.note_edit = QLineEdit()
-        fee_row.addWidget(self.note_edit)
         layout.addLayout(fee_row)
 
         button_row = QHBoxLayout()
@@ -70,8 +67,8 @@ class StudentsTab(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
 
-        self.table_widget = QTableWidget(0, 4)
-        self.table_widget.setHorizontalHeaderLabels(["Ad", "Sınıf", "Koç", "Not"])
+        self.table_widget = QTableWidget(0, 3)
+        self.table_widget.setHorizontalHeaderLabels(["Ad", "Sınıf", "Koç"])
         self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -123,7 +120,6 @@ class StudentsTab(QWidget):
             self.table_widget.setItem(r, 0, item_name)
             self.table_widget.setItem(r, 1, QTableWidgetItem(row["class_name"] or ""))
             self.table_widget.setItem(r, 2, QTableWidgetItem(row["coach_name"] or ""))
-            self.table_widget.setItem(r, 3, QTableWidgetItem(row["note"] or ""))
         self.refresh_detail()
 
     def refresh_detail(self) -> None:
@@ -156,7 +152,6 @@ class StudentsTab(QWidget):
         self._select_combo(self.coach_combo, student["coach_teacher_id"])
         self.program_fee_spin.setValue(student["total_program_fee"])
         self.one_on_one_fee_spin.setValue(student["total_one_on_one_fee"])
-        self.note_edit.setText(student["note"] or "")
         self.refresh_detail()
 
     def _select_combo(self, combo: QComboBox, value) -> None:
@@ -170,7 +165,6 @@ class StudentsTab(QWidget):
         self.coach_combo.setCurrentIndex(0)
         self.program_fee_spin.setValue(0)
         self.one_on_one_fee_spin.setValue(0)
-        self.note_edit.clear()
         self.table_widget.clearSelection()
         self.refresh_detail()
 
@@ -185,7 +179,6 @@ class StudentsTab(QWidget):
             self.coach_combo.currentData(),
             self.program_fee_spin.value(),
             self.one_on_one_fee_spin.value(),
-            self.note_edit.text().strip(),
         )
         self.clear_form()
         self.refresh()
@@ -207,7 +200,6 @@ class StudentsTab(QWidget):
             self.coach_combo.currentData(),
             self.program_fee_spin.value(),
             self.one_on_one_fee_spin.value(),
-            self.note_edit.text().strip(),
         )
         self.clear_form()
         self.refresh()

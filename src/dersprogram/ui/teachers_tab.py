@@ -36,9 +36,6 @@ class TeachersTab(QWidget):
         form_row.addWidget(QLabel("Branş/Alan:"))
         self.subject_area_edit = QLineEdit()
         form_row.addWidget(self.subject_area_edit)
-        form_row.addWidget(QLabel("Not:"))
-        self.note_edit = QLineEdit()
-        form_row.addWidget(self.note_edit)
         layout.addLayout(form_row)
 
         button_row = QHBoxLayout()
@@ -52,8 +49,8 @@ class TeachersTab(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
 
-        self.table_widget = QTableWidget(0, 3)
-        self.table_widget.setHorizontalHeaderLabels(["Ad", "Branş/Alan", "Not"])
+        self.table_widget = QTableWidget(0, 2)
+        self.table_widget.setHorizontalHeaderLabels(["Ad", "Branş/Alan"])
         self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -93,7 +90,6 @@ class TeachersTab(QWidget):
             item_name.setData(Qt.UserRole, row["id"])
             self.table_widget.setItem(r, 0, item_name)
             self.table_widget.setItem(r, 1, QTableWidgetItem(row["subject_area"] or ""))
-            self.table_widget.setItem(r, 2, QTableWidgetItem(row["note"] or ""))
         self.refresh_detail()
 
     def refresh_detail(self) -> None:
@@ -122,14 +118,12 @@ class TeachersTab(QWidget):
         self.selected_id = name_item.data(Qt.UserRole)
         self.name_edit.setText(name_item.text())
         self.subject_area_edit.setText(self.table_widget.item(row, 1).text())
-        self.note_edit.setText(self.table_widget.item(row, 2).text())
         self.refresh_detail()
 
     def clear_form(self) -> None:
         self.selected_id = None
         self.name_edit.clear()
         self.subject_area_edit.clear()
-        self.note_edit.clear()
         self.table_widget.clearSelection()
         self.refresh_detail()
 
@@ -138,7 +132,7 @@ class TeachersTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğretmen adı boş olamaz.")
             return
-        self.db.add_teacher(name, self.subject_area_edit.text().strip(), self.note_edit.text().strip())
+        self.db.add_teacher(name, self.subject_area_edit.text().strip())
         self.clear_form()
         self.refresh()
         if self.on_change:
@@ -152,9 +146,7 @@ class TeachersTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğretmen adı boş olamaz.")
             return
-        self.db.update_teacher(
-            self.selected_id, name, self.subject_area_edit.text().strip(), self.note_edit.text().strip()
-        )
+        self.db.update_teacher(self.selected_id, name, self.subject_area_edit.text().strip())
         self.clear_form()
         self.refresh()
         if self.on_change:
