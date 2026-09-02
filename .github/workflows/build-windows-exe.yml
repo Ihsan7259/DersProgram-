@@ -23,7 +23,7 @@ jobs:
 
       - name: exe olustur
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "DersProgrami" --paths src src\dersprogram\main.py
+          pyinstaller --noconfirm --onefile --windowed --name "DersProgrami" --paths src src\run_app.py
 
       - uses: actions/upload-artifact@v4
         with:

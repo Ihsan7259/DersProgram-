@@ -14,7 +14,7 @@ pip install pyinstaller
 pyinstaller --noconfirm --onefile --windowed ^
     --name "DersProgrami" ^
     --paths src ^
-    src\dersprogram\main.py
+    src\run_app.py
 
 echo.
 echo Islem tamamlandi. .exe dosyasi "dist\DersProgrami.exe" icinde.
