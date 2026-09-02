@@ -7,6 +7,7 @@ ne görünmeli" sorusuna cevap verir.
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from dataclasses import dataclass
 
 from .db import (
@@ -33,6 +34,37 @@ def week_key(week_start: _dt.date) -> str:
 def week_label(week_start: _dt.date, day_count: int) -> str:
     end = week_start + _dt.timedelta(days=max(day_count - 1, 0))
     return f"{week_start.strftime('%d %b %Y')} – {end.strftime('%d %b %Y')}"
+
+
+_DAY_ABBREV = {
+    "Pazartesi": "Pzt",
+    "Salı": "Sal",
+    "Çarşamba": "Çar",
+    "Perşembe": "Per",
+    "Cuma": "Cum",
+    "Cumartesi": "Cmt",
+    "Pazar": "Paz",
+}
+
+
+def day_abbrev(day_name: str) -> str:
+    return _DAY_ABBREV.get(day_name, day_name[:3])
+
+
+def natural_sort_key(text: str):
+    """'10-A' sıralamada '9-A'dan sonra gelsin diye (metin sıralamasında
+    '1' < '9' olduğundan '10-A' yanlışlıkla önce gelirdi)."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]
+
+
+def short_teacher_name(name: str | None) -> str:
+    """'Ahmet Yılmaz' -> 'A. Yılmaz' (dar hücrelerde yer kazanmak için)."""
+    if not name:
+        return ""
+    parts = name.split()
+    if len(parts) < 2:
+        return name
+    return f"{parts[0][0]}. {' '.join(parts[1:])}"
 
 
 @dataclass
@@ -90,6 +122,22 @@ class BlockView:
         if self.type == TYPE_DEPARTMENT:
             return "Zümre", self.subject_name or "", self.teacher_name or ""
         return "Soru Çözümü", self.subject_name or "", self.teacher_name or ""
+
+    def dense_lines(self, row_mode: str) -> tuple[str, str]:
+        """Kurum geneli ızgarada (satır=sınıf ya da öğretmen) hücrede
+        gösterilecek iki kısa satır. Satırın kendisi zaten hangi sınıf/
+        öğretmen olduğunu belli ettiği için o bilgi tekrar edilmez."""
+        if row_mode == "class":
+            return self.subject_name or "Ders", short_teacher_name(self.teacher_name)
+        if self.type == TYPE_CLASS:
+            return self.subject_name or "Ders", self.class_name or ""
+        if self.type == TYPE_ONE_ON_ONE:
+            return self.subject_name or "Birebir", self.student_name or ""
+        if self.type == TYPE_COACHING:
+            return "Koçluk", self.student_name or ""
+        if self.type == TYPE_DEPARTMENT:
+            return "Zümre", self.subject_name or ""
+        return "Soru Çöz.", self.subject_name or ""
 
     def group_key(self):
         """Aynı ihtiyaçtan gelen (ör. '9-A Matematik, X öğretmeni, haftada

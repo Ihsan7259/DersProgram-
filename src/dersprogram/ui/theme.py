@@ -182,6 +182,41 @@ def make_lesson_card(block, compact: bool = False) -> QWidget:
     return card
 
 
+def _elide(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def make_dense_chip(line1: str, line2: str, bg: str) -> QWidget:
+    """Kurum geneli ızgara (satır=sınıf/öğretmen) için çok kompakt hücre kartı."""
+    card = QWidget()
+    card.setObjectName("cellFrame")
+    card.setStyleSheet(f"#cellFrame {{ background:{bg}; border-radius:5px; }}")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(4, 2, 4, 2)
+    layout.setSpacing(0)
+    l1 = QLabel(_elide(line1, 7))
+    l1.setToolTip(line1)
+    l1.setStyleSheet(f"font-weight:700; font-size:7.4pt; color:{INK}; background:transparent;")
+    l1.setAlignment(Qt.AlignCenter)
+    layout.addWidget(l1)
+    if line2:
+        l2 = QLabel(_elide(line2, 9))
+        l2.setToolTip(line2)
+        l2.setStyleSheet(f"font-size:6.8pt; color:{INK_MUTED_52}; background:transparent;")
+        l2.setAlignment(Qt.AlignCenter)
+        layout.addWidget(l2)
+    return card
+
+
+def make_dense_empty() -> QWidget:
+    frame = QWidget()
+    frame.setObjectName("cellFrame")
+    frame.setStyleSheet(f"#cellFrame {{ background:{SURFACE}; border-radius:5px; }}")
+    return frame
+
+
 def make_empty_cell(compact: bool = False) -> QWidget:
     frame = QWidget()
     frame.setObjectName("cellFrame")
@@ -264,6 +299,18 @@ def stylesheet() -> str:
     }}
     QPushButton#outlineButton:hover {{
         background: {ACCENT_SOFT_BG};
+    }}
+    QPushButton#modeButton {{
+        background: {SURFACE};
+        border: 1px solid {BORDER_INPUT};
+        color: {INK_MUTED_52};
+        font-weight: 600;
+        padding: 6px 14px;
+    }}
+    QPushButton#modeButton:checked {{
+        background: {SIDEBAR_ACTIVE_BG};
+        border: 1px solid {SIDEBAR_ACTIVE_BG};
+        color: {ACCENT_HOVER};
     }}
     QPushButton#iconButton {{
         padding: 4px;
