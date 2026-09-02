@@ -1,22 +1,37 @@
 # Ders Programı
 
-Bir kurumun haftalık ders programını hazırlamak için masaüstü uygulaması.
+Bir eğitim kurumunun (sınıf dersleri + birebir dersler + koçluk + zümre +
+soru çözümü) haftalık ders programını hazırlamak için masaüstü uygulaması.
 Windows için, tek kullanıcılı, internete ihtiyaç duymadan (offline) çalışır.
 
-## Özellikler (v1)
+## Özellikler (v2)
 
-- Öğretmen, Ders, Sınıf, Derslik tanımlama
-- Sınıf bazında haftalık program ızgarası (gün × ders saati)
-- Hücreye çift tıklayarak ders/öğretmen/derslik atama
-- Aynı öğretmen ya da dersliğin aynı saatte başka bir sınıfa da
-  atanması durumunda otomatik çakışma uyarısı (kırmızı hücre)
-- Gün sayısı ve günlük ders saati sayısı ayarlanabilir
-- Veriler bilgisayarınızda `Belgelerim` benzeri bir klasörde
-  (`%USERPROFILE%\DersProgrami\veri.db`) otomatik saklanır; kaydet/aç
-  derdi yoktur, program her açıldığında kaldığı yerden devam eder.
+- **Tanımlar**: Öğretmen (branş bilgisiyle), Öğrenci (sınıf + koç ataması,
+  ücret bilgisi), Sınıf, Ders/Branş, Derslik
+- **Ders tipleri**: Sınıf Dersi, Birebir Ders, Öğrenci Koçluk (koç
+  atanınca otomatik oluşur), Zümre, Soru Çözümü
+- **Ana Program**: kurum genelinde tek büyük haftalık ızgara.
+  - "Ders Ekle" ile (ör. "9-A sınıfına haftada 4 saat Matematik") N adet
+    1 saatlik ders bloğu **Atanmamış Dersler** havuzuna düşer
+  - Havuzdan bir dersi sürükleyip ızgaraya bırakabilirsiniz; sürüklerken
+    uygun hücreler yeşil, çakışan hücreler kırmızı görünür
+  - Bir dersi yerleştirirken/kaldırırken **sadece bu hafta mı yoksa her
+    hafta (kalıcı) mı** olacağı sorulur — şablon + istisna mantığı
+  - **Oto Ata**: kalan atanmamış dersleri, günlere dengeli dağıtarak ve
+    aynı gruptan art arda en fazla 2 saat gelecek şekilde otomatik yerleştirir
+  - Sağ/sol oklarla haftalar arasında gezinilir
+- **Öğretmenler / Öğrenciler / Sınıflar** sekmelerinde seçilen kişinin/sınıfın
+  o haftaki filtrelenmiş programı ve ders tipine göre saat özeti görünür
+- **Analiz**: seçilen tarih aralığında, öğretmen/öğrenci bazında ders
+  tipine göre toplam saatler
+- **Ödemeler**: öğrenci bazında program/birebir ücreti, yapılan ödemeler,
+  otomatik hesaplanan kalan borç
+- Veriler bilgisayarınızda `%USERPROFILE%\DersProgrami\veri.db` dosyasında
+  otomatik saklanır; ayrı kaydet/aç derdi yoktur.
 
-Henüz yok, ileride eklenecek: otomatik program oluşturma (kısıtlamalara göre
-algoritmanın programı kendisinin kurması), yazdırma/Excel'e aktarma.
+Henüz yok: gerçek sürükle-bırakla program içi taşıma (şu an yerleştirilmiş
+bir dersi taşımak için önce kaldırıp sonra yeniden sürüklemeniz gerekir),
+yazdırma/Excel'e aktarma.
 
 ## Geliştirme ortamında çalıştırma (Linux/Mac/Windows, Python ile)
 
@@ -49,11 +64,20 @@ ayrıca kurulum ya da Python gerekmez.
 
 ```
 src/dersprogram/
-    db.py            veritabanı (SQLite) erişimi
-    main.py           uygulama giriş noktası
+    db.py              veritabanı (SQLite) erişimi - ham CRUD
+    scheduling.py       program motoru: hafta hesaplama, şablon+istisna
+                         birleştirme, çakışma kontrolü, oto-atama, analiz
+    main.py             uygulama giriş noktası
     ui/
-        main_window.py   sekmeleri birleştiren ana pencere
-        list_tab.py       öğretmen/ders/sınıf/derslik liste ekranı
-        schedule_tab.py   program ızgarası
-        settings_tab.py   gün/saat ayarları
+        main_window.py     sekmeleri birleştiren ana pencere
+        schedule_tab.py    Ana Program: büyük ızgara + sürükle-bırak havuzu
+        add_lesson_dialog.py  "Ders Ekle" diyaloğu
+        teachers_tab.py    Öğretmenler
+        students_tab.py    Öğrenciler
+        classes_tab.py     Sınıflar
+        analysis_tab.py    Analiz
+        payments_tab.py    Ödemeler
+        list_tab.py        Ders/Derslik gibi basit liste ekranları
+        settings_tab.py    gün/saat ayarları
+        widgets.py         ortak bileşenler (hafta gezinme, mini ızgara, özet tablosu)
 ```

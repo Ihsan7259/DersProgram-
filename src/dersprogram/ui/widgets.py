@@ -1,0 +1,141 @@
+"""Öğretmen/Öğrenci/Sınıf/Ana Program sekmelerinde ortak kullanılan
+küçük bileşenler: hafta gezinme çubuğu, salt-okunur mini program
+tablosu, özet (saat) tablosu, kapsam seçim diyaloğu."""
+from __future__ import annotations
+
+import datetime as _dt
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QLabel,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QDialog,
+    QDialogButtonBox,
+    QRadioButton,
+)
+
+from ..db import Database, LESSON_TYPE_LABELS
+from .. import scheduling
+
+
+class WeekNavigator(QWidget):
+    week_changed = Signal(object)  # _dt.date (o haftanın pazartesisi)
+
+    def __init__(self, day_count_provider):
+        super().__init__()
+        self._day_count_provider = day_count_provider
+        self.week_start = scheduling.monday_of(_dt.date.today())
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.prev_button = QPushButton("◀ Önceki Hafta")
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignCenter)
+        self.next_button = QPushButton("Sonraki Hafta ▶")
+        self.today_button = QPushButton("Bu Hafta")
+
+        layout.addWidget(self.prev_button)
+        layout.addWidget(self.label, 1)
+        layout.addWidget(self.next_button)
+        layout.addWidget(self.today_button)
+
+        self.prev_button.clicked.connect(self.go_prev)
+        self.next_button.clicked.connect(self.go_next)
+        self.today_button.clicked.connect(self.go_today)
+
+        self._refresh_label()
+
+    def _refresh_label(self) -> None:
+        self.label.setText(scheduling.week_label(self.week_start, self._day_count_provider()))
+
+    def go_prev(self) -> None:
+        self.week_start -= _dt.timedelta(days=7)
+        self._refresh_label()
+        self.week_changed.emit(self.week_start)
+
+    def go_next(self) -> None:
+        self.week_start += _dt.timedelta(days=7)
+        self._refresh_label()
+        self.week_changed.emit(self.week_start)
+
+    def go_today(self) -> None:
+        self.week_start = scheduling.monday_of(_dt.date.today())
+        self._refresh_label()
+        self.week_changed.emit(self.week_start)
+
+
+class MiniScheduleGrid(QTableWidget):
+    """Salt okunur, filtrelenmiş (tek kişi/sınıfa ait) haftalık ızgara."""
+
+    def __init__(self):
+        super().__init__()
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+
+    def render(self, db: Database, blocks_by_cell: dict[tuple[int, int], list]) -> None:
+        day_names = db.day_names
+        period_count = db.period_count
+        self.setRowCount(period_count)
+        self.setColumnCount(len(day_names))
+        self.setHorizontalHeaderLabels(day_names)
+        self.setVerticalHeaderLabels([f"{p}." for p in range(1, period_count + 1)])
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        for period in range(1, period_count + 1):
+            for day in range(len(day_names)):
+                blocks = blocks_by_cell.get((day, period), [])
+                item = QTableWidgetItem("\n".join(b.short_label() for b in blocks))
+                item.setTextAlignment(Qt.AlignCenter)
+                self.setItem(period - 1, day, item)
+        self.resizeRowsToContents()
+
+
+class SummaryTable(QTableWidget):
+    """Ders tipine göre saat sayısı özeti (ör. Sınıf Dersi: 4, Birebir: 2)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setColumnCount(2)
+        self.setHorizontalHeaderLabels(["Ders Tipi", "Saat"])
+        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.verticalHeader().setVisible(False)
+
+    def render(self, totals: dict[str, int]) -> None:
+        rows = [(LESSON_TYPE_LABELS[t], count) for t, count in totals.items() if count]
+        self.setRowCount(len(rows))
+        for r, (label, count) in enumerate(rows):
+            self.setItem(r, 0, QTableWidgetItem(label))
+            count_item = QTableWidgetItem(str(count))
+            count_item.setTextAlignment(Qt.AlignCenter)
+            self.setItem(r, 1, count_item)
+
+
+class ScopeDialog(QDialog):
+    """Bir yerleştirme/temizleme işleminin sadece bu hafta mı yoksa
+    kalıcı (şablon) mı olacağını sorar."""
+
+    def __init__(self, parent=None, action_desc: str = "Bu değişiklik"):
+        super().__init__(parent)
+        self.setWindowTitle("Kapsam Seç")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"{action_desc} hangi haftalar için geçerli olsun?"))
+
+        self.week_only = QRadioButton("Sadece bu hafta")
+        self.always = QRadioButton("Her hafta (kalıcı program)")
+        self.always.setChecked(True)
+        layout.addWidget(self.always)
+        layout.addWidget(self.week_only)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def scope(self) -> str:
+        return scheduling.SCOPE_WEEK_ONLY if self.week_only.isChecked() else scheduling.SCOPE_ALWAYS

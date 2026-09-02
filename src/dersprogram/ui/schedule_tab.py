@@ -1,5 +1,10 @@
-"""Haftalık ders programı ızgarası: bir sınıf seçilir, gün x saat
-tablosunda hücrelere tıklanarak ders/öğretmen/derslik atanır."""
+"""Ana Program: kurum genelindeki büyük, düzenlenebilir haftalık ızgara.
+
+Altta 'Atanmamış Dersler' havuzu vardır; oradan bir dersi sürükleyip
+ızgaraya bırakabilirsiniz. Sürüklerken uygun hücreler yeşil, çakışan
+hücreler kırmızı görünür. Bırakınca değişikliğin sadece bu hafta mı
+yoksa kalıcı mı olacağı sorulur.
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -9,201 +14,259 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QComboBox,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QDialog,
-    QDialogButtonBox,
-    QFormLayout,
-    QPushButton,
+    QListWidget,
+    QListWidgetItem,
+    QAbstractItemView,
     QMessageBox,
+    QInputDialog,
+    QSplitter,
 )
 
 from ..db import Database
+from .. import scheduling
+from .widgets import WeekNavigator, ScopeDialog
+from .add_lesson_dialog import AddLessonDialog
 
-CONFLICT_COLOR = QBrush(QColor("#f8b4b4"))
-NORMAL_COLOR = QBrush(QColor("#ffffff"))
-EMPTY_COLOR = QBrush(QColor("#f5f5f5"))
+COLOR_EMPTY = QBrush(QColor("#f5f5f5"))
+COLOR_FILLED = QBrush(QColor("#ffffff"))
+COLOR_VALID_DROP = QBrush(QColor("#bff2c8"))
+COLOR_INVALID_DROP = QBrush(QColor("#f8b4b4"))
+
+MIME_PREFIX = "lesson-block:"
 
 
-class CellEditDialog(QDialog):
-    def __init__(self, db: Database, current_row, parent=None):
-        super().__init__(parent)
-        self.db = db
-        self.setWindowTitle("Ders Ata")
+class PoolList(QListWidget):
+    """Atanmamış dersler havuzu; buradan ızgaraya sürüklenebilir."""
 
-        layout = QFormLayout(self)
+    def __init__(self):
+        super().__init__()
+        self.setDragEnabled(True)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
 
-        self.subject_combo = QComboBox()
-        self.subject_combo.addItem("(Boş)", None)
-        for s in db.list_rows("subjects"):
-            self.subject_combo.addItem(s["name"], s["id"])
+    def mimeData(self, items):
+        md = super().mimeData(items)
+        if items:
+            block_id = items[0].data(Qt.UserRole)
+            md.setText(f"{MIME_PREFIX}{block_id}")
+        return md
 
-        self.teacher_combo = QComboBox()
-        self.teacher_combo.addItem("(Boş)", None)
-        for t in db.list_rows("teachers"):
-            self.teacher_combo.addItem(t["name"], t["id"])
 
-        self.room_combo = QComboBox()
-        self.room_combo.addItem("(Boş)", None)
-        for r in db.list_rows("rooms"):
-            self.room_combo.addItem(r["name"], r["id"])
+class MainGrid(QTableWidget):
+    def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request):
+        super().__init__()
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
+        self._get_block_by_id = get_block_by_id
+        self._validate_drop = validate_drop
+        self._on_drop = on_drop
+        self._on_remove_request = on_remove_request
+        self._hover_cell = None
+        self.cellDoubleClicked.connect(self._handle_double_click)
 
-        if current_row is not None:
-            self._select(self.subject_combo, current_row["subject_id"])
-            self._select(self.teacher_combo, current_row["teacher_id"])
-            self._select(self.room_combo, current_row["room_id"])
+    def _cell_of(self, pos):
+        item = self.itemAt(pos)
+        if item is None:
+            return None
+        return item.row(), item.column()
 
-        layout.addRow("Ders:", self.subject_combo)
-        layout.addRow("Öğretmen:", self.teacher_combo)
-        layout.addRow("Derslik:", self.room_combo)
+    def dragEnterEvent(self, event):
+        text = event.mimeData().text()
+        if text.startswith(MIME_PREFIX):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-
-        self.clear_button = QPushButton("Hücreyi Temizle")
-        self.clear_button.clicked.connect(self._clear_and_accept)
-        layout.addRow(self.clear_button)
-
-        self._cleared = False
-
-    def _select(self, combo: QComboBox, value) -> None:
-        if value is None:
-            combo.setCurrentIndex(0)
+    def dragMoveEvent(self, event):
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        cell = self._cell_of(pos)
+        if cell is None:
+            event.ignore()
             return
-        idx = combo.findData(value)
-        if idx >= 0:
-            combo.setCurrentIndex(idx)
+        if cell != self._hover_cell:
+            self._restore_hover()
+            self._hover_cell = cell
+            block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
+            block = self._get_block_by_id(block_id)
+            row, col = cell
+            day, period = col, row + 1
+            valid = block is not None and self._validate_drop(block, day, period)
+            item = self.item(row, col)
+            if item is not None:
+                item.setBackground(COLOR_VALID_DROP if valid else COLOR_INVALID_DROP)
+        event.acceptProposedAction()
 
-    def _clear_and_accept(self) -> None:
-        self._cleared = True
-        self.accept()
+    def dragLeaveEvent(self, event):
+        self._restore_hover()
+        super().dragLeaveEvent(event)
 
-    def result_values(self):
-        if self._cleared:
-            return "clear"
-        return (
-            self.subject_combo.currentData(),
-            self.teacher_combo.currentData(),
-            self.room_combo.currentData(),
-        )
+    def _restore_hover(self) -> None:
+        if self._hover_cell is not None:
+            row, col = self._hover_cell
+            item = self.item(row, col)
+            if item is not None:
+                item.setBackground(COLOR_FILLED if item.text() else COLOR_EMPTY)
+        self._hover_cell = None
+
+    def dropEvent(self, event):
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        cell = self._cell_of(pos)
+        self._restore_hover()
+        if cell is None:
+            event.ignore()
+            return
+        block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
+        row, col = cell
+        day, period = col, row + 1
+        event.acceptProposedAction()
+        self._on_drop(block_id, day, period)
+
+    def _handle_double_click(self, row: int, col: int) -> None:
+        self._on_remove_request(col, row + 1)
 
 
 class ScheduleTab(QWidget):
     def __init__(self, db: Database):
         super().__init__()
         self.db = db
+        self._schedule: dict[tuple[int, int], list] = {}
+        self._pool: list = []
+        self._blocks_by_id: dict[int, object] = {}
 
         layout = QVBoxLayout(self)
 
+        self.navigator = WeekNavigator(lambda: len(self.db.day_names))
+        layout.addWidget(self.navigator)
+
         top_row = QHBoxLayout()
-        top_row.addWidget(QLabel("Sınıf:"))
-        self.class_combo = QComboBox()
-        self.class_combo.currentIndexChanged.connect(self.refresh_grid)
-        top_row.addWidget(self.class_combo)
+        self.add_lesson_button = QPushButton("Ders Ekle")
+        self.auto_assign_button = QPushButton("Oto Ata")
+        top_row.addWidget(self.add_lesson_button)
+        top_row.addWidget(self.auto_assign_button)
         top_row.addStretch()
         layout.addLayout(top_row)
 
-        self.table = QTableWidget()
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.cellDoubleClicked.connect(self.edit_cell)
-        layout.addWidget(self.table)
+        splitter = QSplitter(Qt.Vertical)
 
-        hint = QLabel("Bir hücreye çift tıklayarak ders/öğretmen/derslik atayın. "
-                      "Kırmızı hücreler: aynı öğretmen ya da derslik aynı saatte başka bir sınıfa atanmış (çakışma).")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self.grid = MainGrid(
+            get_block_by_id=lambda bid: self._blocks_by_id.get(bid),
+            validate_drop=self._validate_drop,
+            on_drop=self._handle_drop,
+            on_remove_request=self._handle_remove_request,
+        )
+        splitter.addWidget(self.grid)
 
-        self.reload_classes()
+        pool_container = QWidget()
+        pool_layout = QVBoxLayout(pool_container)
+        pool_layout.setContentsMargins(0, 0, 0, 0)
+        pool_layout.addWidget(QLabel(
+            "Atanmamış Dersler (sürükleyip yukarıdaki tabloya bırakın; "
+            "yerleştirilmiş bir dersi kaldırmak için üstündeki hücreye çift tıklayın):"
+        ))
+        self.pool_list = PoolList()
+        pool_layout.addWidget(self.pool_list)
+        splitter.addWidget(pool_container)
+        splitter.setSizes([500, 200])
 
-    def reload_classes(self) -> None:
-        current_id = self.class_combo.currentData()
-        self.class_combo.blockSignals(True)
-        self.class_combo.clear()
-        for c in self.db.list_rows("class_groups"):
-            self.class_combo.addItem(c["name"], c["id"])
-        self.class_combo.blockSignals(False)
-        if current_id is not None:
-            idx = self.class_combo.findData(current_id)
-            if idx >= 0:
-                self.class_combo.setCurrentIndex(idx)
-        self.refresh_grid()
+        layout.addWidget(splitter, 1)
 
-    def refresh_grid(self) -> None:
+        self.add_lesson_button.clicked.connect(self.handle_add_lesson)
+        self.auto_assign_button.clicked.connect(self.handle_auto_assign)
+        self.navigator.week_changed.connect(lambda _w: self.refresh())
+
+        self.refresh()
+
+    # ---------- veri yenileme ----------
+    def refresh(self) -> None:
+        self._schedule, self._pool = scheduling.get_week_view(self.db, self.navigator.week_start)
+        self._blocks_by_id = {b.id: b for b in self._pool}
+        for blocks in self._schedule.values():
+            for b in blocks:
+                self._blocks_by_id[b.id] = b
+        self._render_grid()
+        self._render_pool()
+
+    def _render_grid(self) -> None:
         day_names = self.db.day_names
         period_count = self.db.period_count
-        self.table.setRowCount(period_count)
-        self.table.setColumnCount(len(day_names))
-        self.table.setHorizontalHeaderLabels(day_names)
-        self.table.setVerticalHeaderLabels([f"{p}. Ders" for p in range(1, period_count + 1)])
-
-        class_id = self.class_combo.currentData()
-        if class_id is None:
-            for row in range(period_count):
-                for col in range(len(day_names)):
-                    self.table.setItem(row, col, QTableWidgetItem(""))
-            return
-
-        schedule = self.db.get_class_schedule(class_id)
-        conflicts = self.db.all_conflicting_cells_for_teacher_room()
+        self.grid.setRowCount(period_count)
+        self.grid.setColumnCount(len(day_names))
+        self.grid.setHorizontalHeaderLabels(day_names)
+        self.grid.setVerticalHeaderLabels([f"{p}. Ders" for p in range(1, period_count + 1)])
 
         for period in range(1, period_count + 1):
             for day in range(len(day_names)):
-                entry = schedule.get((day, period))
-                item = QTableWidgetItem()
-                if entry is not None:
-                    lines = [entry["subject_name"] or ""]
-                    if entry["teacher_name"]:
-                        lines.append(entry["teacher_name"])
-                    if entry["room_name"]:
-                        lines.append(entry["room_name"])
-                    item.setText("\n".join(lines))
-                    if (class_id, day, period) in conflicts:
-                        item.setBackground(CONFLICT_COLOR)
-                    else:
-                        item.setBackground(NORMAL_COLOR)
-                else:
-                    item.setBackground(EMPTY_COLOR)
+                blocks = self._schedule.get((day, period), [])
+                text = "\n───\n".join(b.short_label() for b in blocks)
+                item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignCenter)
-                self.table.setItem(period - 1, day, item)
+                item.setBackground(COLOR_FILLED if blocks else COLOR_EMPTY)
+                self.grid.setItem(period - 1, day, item)
+        self.grid.resizeRowsToContents()
 
-        self.table.resizeRowsToContents()
+    def _render_pool(self) -> None:
+        self.pool_list.clear()
+        for block in sorted(self._pool, key=lambda b: b.pool_label()):
+            item = QListWidgetItem(block.pool_label())
+            item.setData(Qt.UserRole, block.id)
+            self.pool_list.addItem(item)
 
-    def edit_cell(self, row: int, col: int) -> None:
-        class_id = self.class_combo.currentData()
-        if class_id is None:
-            QMessageBox.information(self, "Sınıf seçin", "Önce bir sınıf seçmelisiniz.")
+    # ---------- yerleştirme / kaldırma ----------
+    def _validate_drop(self, block, day: int, period: int) -> bool:
+        return not scheduling.find_conflicts(self._schedule, day, period, block)
+
+    def _handle_drop(self, block_id: int, day: int, period: int) -> None:
+        block = self._blocks_by_id.get(block_id)
+        if block is None:
             return
-
-        period = row + 1
-        day = col
-        schedule = self.db.get_class_schedule(class_id)
-        current_row = schedule.get((day, period))
-
-        dialog = CellEditDialog(self.db, current_row, self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        values = dialog.result_values()
-        if values == "clear":
-            self.db.clear_schedule_cell(class_id, day, period)
-            self.refresh_grid()
-            return
-
-        subject_id, teacher_id, room_id = values
-        conflicts = self.db.find_conflicts(class_id, day, period, teacher_id, room_id)
+        conflicts = scheduling.find_conflicts(self._schedule, day, period, block)
         if conflicts:
-            names = ", ".join(sorted({c["class_name"] for c in conflicts}))
             proceed = QMessageBox.question(
                 self,
                 "Çakışma bulundu",
-                f"Bu öğretmen ve/veya derslik aynı saatte şu sınıf(lar)da da kullanılıyor: {names}.\n"
-                "Yine de kaydetmek istiyor musunuz?",
+                "Bu hücreye yerleştirmek şu çakışmalara yol açar:\n- " + "\n- ".join(conflicts) +
+                "\n\nYine de yerleştirmek istiyor musunuz?",
             )
             if proceed != QMessageBox.Yes:
                 return
 
-        self.db.set_schedule_cell(class_id, day, period, subject_id, teacher_id, room_id)
-        self.refresh_grid()
+        dialog = ScopeDialog(self, f"'{block.pool_label()}' dersini yerleştirme")
+        if dialog.exec() != ScopeDialog.Accepted:
+            return
+        scheduling.place_block(self.db, self.navigator.week_start, block_id, day, period, dialog.scope())
+        self.refresh()
+
+    def _handle_remove_request(self, day: int, period: int) -> None:
+        blocks = self._schedule.get((day, period), [])
+        if not blocks:
+            return
+        if len(blocks) == 1:
+            chosen = blocks[0]
+        else:
+            labels = [b.short_label().replace("\n", " - ") for b in blocks]
+            label, ok = QInputDialog.getItem(
+                self, "Hangi ders kaldırılsın?", "Ders:", labels, editable=False
+            )
+            if not ok:
+                return
+            chosen = blocks[labels.index(label)]
+
+        dialog = ScopeDialog(self, f"'{chosen.pool_label()}' dersini kaldırma")
+        if dialog.exec() != ScopeDialog.Accepted:
+            return
+        scheduling.clear_block(self.db, self.navigator.week_start, chosen.id, dialog.scope())
+        self.refresh()
+
+    # ---------- ders ekle / oto ata ----------
+    def handle_add_lesson(self) -> None:
+        dialog = AddLessonDialog(self.db, self)
+        if dialog.exec() == AddLessonDialog.Accepted:
+            self.refresh()
+
+    def handle_auto_assign(self) -> None:
+        count = scheduling.auto_assign(self.db, self.navigator.week_start)
+        self.refresh()
+        QMessageBox.information(self, "Oto Ata", f"{count} ders otomatik olarak yerleştirildi.")
