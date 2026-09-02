@@ -1,0 +1,31 @@
+name: Windows exe olustur
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Bagimliliklari kur
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: exe olustur
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "DersProgrami" --paths src src\dersprogram\main.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DersProgrami-windows
+          path: dist/DersProgrami.exe

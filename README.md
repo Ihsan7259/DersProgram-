@@ -26,15 +26,24 @@ cd src
 python -m dersprogram.main
 ```
 
-## Windows için .exe üretme
+## Windows için hazır .exe indirme (Python kurmadan)
+
+Her güncellemede `.exe` dosyası GitHub üzerinde otomatik olarak üretilir:
+
+1. Repo sayfasında üstteki **"Actions"** sekmesine git.
+2. En üstteki (en yeni) çalışmaya tıkla.
+3. Sayfanın altındaki **"Artifacts"** bölümünden **DersProgrami-windows**
+   dosyasını indir (bir .zip iner).
+4. Zip'i aç, içindeki `DersProgrami.exe` dosyasına çift tıkla.
+
+> Not: GitHub'a giriş yapmış olman gerekir (Artifacts indirmek için).
+
+## Windows için kendi bilgisayarında .exe üretme (alternatif)
 
 `build_windows.bat` dosyasını bir Windows bilgisayarda (Python 3.10+ kurulu
 olmalı) çift tıklayarak veya komut satırından çalıştırın. İşlem bitince
 `dist\DersProgrami.exe` dosyasını kurumdaki bilgisayara kopyalamanız yeterli;
 ayrıca kurulum ya da Python gerekmez.
-
-> Not: .exe dosyası yalnızca Windows üzerinde üretilebilir (bu geliştirme
-> ortamı Linux olduğu için burada üretilemiyor).
 
 ## Proje yapısı
 
