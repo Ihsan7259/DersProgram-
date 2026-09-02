@@ -210,6 +210,21 @@ def make_dense_chip(line1: str, line2: str, bg: str) -> QWidget:
     return card
 
 
+def make_day_banner(day_name: str) -> QWidget:
+    """Ana Program ızgarasında her günü ayıran bant başlığı."""
+    band = QWidget()
+    band.setObjectName("dayBanner")
+    band.setStyleSheet(f"#dayBanner {{ background:{SIDEBAR_ACTIVE_BG}; border-radius:5px; }}")
+    layout = QHBoxLayout(band)
+    layout.setContentsMargins(10, 0, 10, 0)
+    label = QLabel(day_name)
+    label.setStyleSheet(
+        f"font-family:'{FONT_HEADING}'; font-weight:700; font-size:8.6pt; color:{ACCENT_HOVER}; background:transparent;"
+    )
+    layout.addWidget(label)
+    return band
+
+
 def make_dense_empty() -> QWidget:
     frame = QWidget()
     frame.setObjectName("cellFrame")

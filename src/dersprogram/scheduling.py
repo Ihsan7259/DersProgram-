@@ -111,6 +111,27 @@ class BlockView:
             bits.append(f"({self.teacher_name})")
         return " · ".join(bits)
 
+    _TYPE_ABBREV = {
+        TYPE_CLASS: "SD",
+        TYPE_ONE_ON_ONE: "BB",
+        TYPE_COACHING: "Koç",
+        TYPE_DEPARTMENT: "Züm",
+    }
+
+    def pool_label_short(self) -> str:
+        """Havuzda yer kazanmak için kısaltılmış etiket (tam metin tooltip'te)."""
+        type_abbrev = self._TYPE_ABBREV.get(self.type, "SÇ")
+        bits = [type_abbrev]
+        if self.class_name:
+            bits.append(self.class_name)
+        if self.student_name:
+            bits.append(self.student_name.split()[0])
+        if self.subject_name:
+            bits.append(self.subject_name[:4])
+        if self.teacher_name:
+            bits.append(short_teacher_name(self.teacher_name))
+        return " · ".join(bits)
+
     def card_lines(self) -> tuple[str, str, str]:
         """Renkli hücre kartında gösterilecek 3 satır: (başlık, alt, öğretmen)."""
         if self.type == TYPE_CLASS:

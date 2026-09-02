@@ -71,18 +71,22 @@ def _pool_chip(block) -> QWidget:
     dot_label.setFixedSize(7, 7)
     dot_label.setStyleSheet(f"background:{dot}; border-radius:3.5px;")
     layout.addWidget(dot_label)
-    text = QLabel(block.pool_label())
-    text.setStyleSheet(f"font-size:9pt; font-weight:600; color:{theme.INK_MUTED_30}; background:transparent;")
+    text = QLabel(block.pool_label_short())
+    text.setToolTip(block.pool_label())
+    text.setStyleSheet(f"font-size:8.5pt; font-weight:600; color:{theme.INK_MUTED_30}; background:transparent;")
     layout.addWidget(text)
+    chip.setToolTip(block.pool_label())
     chip.setStyleSheet(
-        f"background:{theme.SURFACE}; border:1px solid {theme.BORDER_SUBTLE}; border-radius:14px;"
+        f"background:{theme.SURFACE}; border:1px solid {theme.BORDER_SUBTLE}; border-radius:12px;"
     )
-    chip.setMinimumHeight(32)
+    chip.setMinimumHeight(26)
     return chip
 
 
 class MainGrid(QTableWidget):
-    """Satır = sınıf ya da öğretmen; sütun = gün+saat bileşiği."""
+    """Sütun = ders saati (1..N); satırlar günlere göre bloklara ayrılır,
+    her gün bandının altında sınıf ya da öğretmen satırları gelir. Böylece
+    tüm hafta sadece aşağı kaydırılarak görülür, yana kaydırma gerekmez."""
 
     def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request):
         super().__init__()
@@ -96,17 +100,17 @@ class MainGrid(QTableWidget):
         self._on_remove_request = on_remove_request
         self._hover_cell = None
         self._hover_original = ""
-        self._row_entity_ids: list[int] = []
-        self._period_count = 1
+        # satır index -> (day, entity_id); banner satırları için (None, None)
+        self._row_map: list[tuple[int | None, object]] = []
         self.cellDoubleClicked.connect(self._handle_double_click)
 
-    def col_to_day_period(self, col: int) -> tuple[int, int]:
-        return col // self._period_count, (col % self._period_count) + 1
+    def col_to_period(self, col: int) -> int:
+        return col + 1
 
-    def row_to_entity(self, row: int):
-        if 0 <= row < len(self._row_entity_ids):
-            return self._row_entity_ids[row]
-        return None
+    def row_to_day_entity(self, row: int):
+        if 0 <= row < len(self._row_map):
+            return self._row_map[row]
+        return None, None
 
     def _cell_of(self, pos):
         index = self.indexAt(pos)
@@ -127,17 +131,22 @@ class MainGrid(QTableWidget):
         if cell is None:
             event.ignore()
             return
+        row, _col = cell
+        day, entity_id = self.row_to_day_entity(row)
+        if day is None:
+            self._restore_hover()
+            event.ignore()
+            return
         if cell != self._hover_cell:
             self._restore_hover()
             self._hover_cell = cell
-            row, col = cell
+            _row, col = cell
             widget = self.cellWidget(row, col)
             if widget is not None:
                 self._hover_original = widget.styleSheet()
                 block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
                 block = self._get_block_by_id(block_id)
-                entity_id = self.row_to_entity(row)
-                day, period = self.col_to_day_period(col)
+                period = self.col_to_period(col)
                 valid = block is not None and self._validate_drop(block, entity_id, day, period)
                 widget.setStyleSheet(VALID_STYLE if valid else INVALID_STYLE)
         event.acceptProposedAction()
@@ -161,16 +170,21 @@ class MainGrid(QTableWidget):
         if cell is None:
             event.ignore()
             return
-        block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
         row, col = cell
-        entity_id = self.row_to_entity(row)
-        day, period = self.col_to_day_period(col)
+        day, entity_id = self.row_to_day_entity(row)
+        if day is None:
+            event.ignore()
+            return
+        block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
+        period = self.col_to_period(col)
         event.acceptProposedAction()
         self._on_drop(block_id, entity_id, day, period)
 
     def _handle_double_click(self, row: int, col: int) -> None:
-        entity_id = self.row_to_entity(row)
-        day, period = self.col_to_day_period(col)
+        day, entity_id = self.row_to_day_entity(row)
+        if day is None:
+            return
+        period = self.col_to_period(col)
         self._on_remove_request(entity_id, day, period)
 
 
@@ -316,27 +330,33 @@ class ScheduleTab(QWidget):
     def _render_grid(self) -> None:
         day_names = self.db.day_names
         period_count = self.db.period_count
-        self.grid._period_count = period_count
-        self.grid._row_entity_ids = [entity_id for entity_id, _name in self._row_entities]
 
-        self.grid.setColumnCount(len(day_names) * period_count)
-        headers = []
-        for day_name in day_names:
-            for period in range(1, period_count + 1):
-                headers.append(f"{scheduling.day_abbrev(day_name)}\n{period}")
-        self.grid.setHorizontalHeaderLabels(headers)
-        self.grid.horizontalHeader().setDefaultSectionSize(52)
-        self.grid.horizontalHeader().setMinimumSectionSize(44)
+        self.grid.setColumnCount(period_count)
+        self.grid.setHorizontalHeaderLabels([str(p) for p in range(1, period_count + 1)])
+        self.grid.horizontalHeader().setDefaultSectionSize(78)
+        self.grid.horizontalHeader().setMinimumSectionSize(56)
 
-        self.grid.setRowCount(len(self._row_entities))
-        self.grid.setVerticalHeaderLabels([name for _id, name in self._row_entities])
+        total_rows = len(day_names) * (len(self._row_entities) + 1)
+        self.grid.setRowCount(total_rows)
 
-        for row, (entity_id, _name) in enumerate(self._row_entities):
-            self.grid.setRowHeight(row, 40)
-            for day in range(len(day_names)):
+        row_map: list[tuple[int | None, object]] = []
+        row_labels: list[str] = []
+        row = 0
+        for day_idx, day_name in enumerate(day_names):
+            row_map.append((None, None))
+            row_labels.append("")
+            self.grid.setRowHeight(row, 22)
+            self.grid.setSpan(row, 0, 1, period_count)
+            self.grid.setCellWidget(row, 0, theme.make_day_banner(day_name))
+            row += 1
+
+            for entity_id, _name in self._row_entities:
+                row_map.append((day_idx, entity_id))
+                row_labels.append(_name)
+                self.grid.setRowHeight(row, 34)
                 for period in range(1, period_count + 1):
-                    col = day * period_count + (period - 1)
-                    blocks = self._cell_blocks(entity_id, day, period)
+                    col = period - 1
+                    blocks = self._cell_blocks(entity_id, day_idx, period)
                     if not blocks:
                         widget = theme.make_dense_empty()
                     elif len(blocks) == 1:
@@ -348,6 +368,10 @@ class ScheduleTab(QWidget):
                         bg, _dot = theme.LESSON_TYPE_COLORS.get(blocks[0].type, (theme.SURFACE, theme.INK_MUTED_58))
                         widget = theme.make_dense_chip(f"{line1} (+{len(blocks) - 1})", line2, bg)
                     self.grid.setCellWidget(row, col, widget)
+                row += 1
+
+        self.grid._row_map = row_map
+        self.grid.setVerticalHeaderLabels(row_labels)
 
     def _render_pool(self) -> None:
         self.pool_label.setText(f"Atanmamış Dersler ({len(self._pool)})")
