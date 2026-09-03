@@ -26,11 +26,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSplitter,
     QButtonGroup,
+    QDialog,
 )
 
 from ..db import Database, LESSON_TYPES, TYPE_CLASS
 from .. import scheduling
-from .widgets import WeekNavigator, ScopeDialog
+from .widgets import WeekNavigator, ScopeDialog, MiniScheduleGrid
 from .add_lesson_dialog import AddLessonDialog
 from . import theme
 
@@ -114,6 +115,8 @@ class MainGrid(QTableWidget):
     en üstte yan yana). Sütunlar pencereye sığacak şekilde otomatik
     daralır, yatay kaydırma kapalıdır - sadece aşağı kaydırılır."""
 
+    row_header_double_clicked = Signal(int)  # entity_id
+
     def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request):
         super().__init__()
         self.setObjectName("mainGrid")
@@ -127,6 +130,7 @@ class MainGrid(QTableWidget):
         header.setMinimumSectionSize(8)
         header.setMinimumHeight(36)
         header.setDefaultAlignment(Qt.AlignCenter)
+        self.verticalHeader().sectionDoubleClicked.connect(self._handle_row_header_double_click)
         self._get_block_by_id = get_block_by_id
         self._validate_drop = validate_drop
         self._on_drop = on_drop
@@ -137,33 +141,50 @@ class MainGrid(QTableWidget):
         self._day_names: list[str] = []
         self._day_count = 1
         self._period_count = 1
+        self._zoom = 1.0
         self.cellDoubleClicked.connect(self._handle_double_click)
         self._apply_column_sizing()
 
-    # ---------- sütun sıkıştırma ----------
+    # ---------- yakınlaştırma / sütun sıkıştırma ----------
     def set_grid_shape(self, day_names: list[str], period_count: int) -> None:
         self._day_names = list(day_names)
         self._day_count = max(len(day_names), 1)
         self._period_count = max(period_count, 1)
         self._apply_column_sizing()
 
+    def set_zoom(self, zoom: float) -> None:
+        self._zoom = zoom
+        self._apply_column_sizing()
+
+    def row_height(self) -> int:
+        return max(22, int(38 * self._zoom))
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_column_sizing()
 
     def _apply_column_sizing(self) -> None:
-        """Sütunlar her zaman pencereye TAM sığsın: gün×saat sayısı arttıkça
-        alt sınır ve başlık yazı boyutu otomatik küçülür. Böylece kaç gün /
-        kaç ders saati seçilirse seçilsin yatay kaydırma gerekmez."""
+        """Varsayılan yakınlaştırmada (%100) sütunlar pencereye TAM sığar,
+        yatay kaydırma hiç gerekmez. Kullanıcı yakınlaştırırsa (zoom>1)
+        sütunlar sabit genişlikte büyür ve yatay kaydırma açılır - detay
+        görmek isteyince kaydırma kabul edilebilir, varsayılanda değil."""
         total_columns = self._day_count * self._period_count
         available = self.viewport().width()
-        if available <= 0:
-            per_column = 34
+        fit_per_column = 34 if available <= 0 else max(8, available // total_columns)
+        per_column = max(8, int(fit_per_column * self._zoom))
+        header = self.horizontalHeader()
+
+        if self._zoom <= 1.0:
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            header.setSectionResizeMode(QHeaderView.Stretch)
+            header.setMinimumSectionSize(min(per_column, 34))
         else:
-            per_column = max(8, available // total_columns)
-        # Alt sınırı tam "sığacak" değere çekmek, Stretch'in bu sınırı aşıp
-        # tabloyu viewport dışına taşırmasını engeller.
-        self.horizontalHeader().setMinimumSectionSize(min(per_column, 34))
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            header.setSectionResizeMode(QHeaderView.Fixed)
+            header.setMinimumSectionSize(per_column)
+            for col in range(self.columnCount()):
+                self.setColumnWidth(col, per_column)
+
         if per_column >= 30:
             font_pt, padding = 7.6, 2
         elif per_column >= 22:
@@ -172,10 +193,13 @@ class MainGrid(QTableWidget):
             font_pt, padding = 5.8, 1
         else:
             font_pt, padding = 5.0, 0
+        font_pt *= max(1.0, self._zoom)
         self.setStyleSheet(
-            f"#mainGrid QHeaderView::section {{ font-size: {font_pt}pt; padding: {padding}px 0; }}"
+            f"#mainGrid QHeaderView::section {{ font-size: {font_pt:.1f}pt; padding: {padding}px 0; }}"
         )
         self._apply_header_labels(per_column)
+        for row in range(self.rowCount()):
+            self.setRowHeight(row, self.row_height())
 
     def _apply_header_labels(self, per_column: int) -> None:
         """Sütunlar iyice daraldığında gün kısaltması sadece o günün ilk
@@ -267,6 +291,48 @@ class MainGrid(QTableWidget):
         day, period = self.col_to_day_period(col)
         self._on_remove_request(entity_id, day, period)
 
+    def _handle_row_header_double_click(self, row: int) -> None:
+        entity_id = self.row_to_entity(row)
+        if entity_id is not None:
+            self.row_header_double_clicked.emit(entity_id)
+
+
+class RowPreviewDialog(QDialog):
+    """Ana Program'da bir sınıf/öğretmen adının üstüne çift tıklanınca
+    açılan, sadece o satırın haftalık programını gösteren salt-okunur
+    önizleme penceresi."""
+
+    def __init__(self, db: Database, week_start, mode: str, entity_id: int, entity_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{entity_name} - Haftalık Program (Önizleme)")
+        self.resize(760, 560)
+
+        layout = QVBoxLayout(self)
+        title = QLabel(entity_name)
+        title.setStyleSheet(f"font-family:'{theme.FONT_HEADING}'; font-weight:700; font-size:13pt;")
+        layout.addWidget(title)
+        subtitle = QLabel(scheduling.week_label(week_start, len(db.day_names)))
+        subtitle.setStyleSheet(f"font-size:9pt; color:{theme.INK_MUTED_58};")
+        layout.addWidget(subtitle)
+
+        schedule, _pool = scheduling.get_week_view(db, week_start)
+        filtered: dict[tuple[int, int], list] = {}
+        for cell, blocks in schedule.items():
+            if mode == MODE_CLASS:
+                matched = [b for b in blocks if b.type == TYPE_CLASS and b.class_group_id == entity_id]
+            else:
+                matched = [b for b in blocks if b.teacher_id == entity_id]
+            if matched:
+                filtered[cell] = matched
+
+        grid = MiniScheduleGrid()
+        grid.render(db, filtered, row_mode="class" if mode == MODE_CLASS else None)
+        layout.addWidget(grid, 1)
+
+        close_button = QPushButton("Kapat")
+        close_button.clicked.connect(self.accept)
+        layout.addWidget(close_button)
+
 
 class ScheduleTab(QWidget):
     def __init__(self, db: Database):
@@ -301,6 +367,21 @@ class ScheduleTab(QWidget):
         layout.addLayout(top_row)
 
         toolbar = QHBoxLayout()
+        self.zoom_out_button = QPushButton("−")
+        self.zoom_out_button.setObjectName("iconButton")
+        self.zoom_out_button.setFixedSize(28, 28)
+        self.zoom_out_button.setToolTip("Uzaklaştır")
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setFixedWidth(38)
+        self.zoom_label.setAlignment(Qt.AlignCenter)
+        self.zoom_label.setStyleSheet(f"font-size:9pt; color:{theme.INK_MUTED_42};")
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setObjectName("iconButton")
+        self.zoom_in_button.setFixedSize(28, 28)
+        self.zoom_in_button.setToolTip("Yakınlaştır (detaylı görünüm)")
+        toolbar.addWidget(self.zoom_out_button)
+        toolbar.addWidget(self.zoom_label)
+        toolbar.addWidget(self.zoom_in_button)
         self.add_lesson_button = QPushButton("  Ders Ekle")
         self.add_lesson_button.setObjectName("outlineButton")
         self.add_lesson_button.setIcon(theme.icon(theme.NAV_ICONS["plus"], theme.ACCENT_HOVER))
@@ -369,9 +450,27 @@ class ScheduleTab(QWidget):
         self.pool_list.delete_requested.connect(self.handle_delete_pool_lesson)
         self.navigator.week_changed.connect(lambda _w: self.refresh())
         self.class_mode_button.toggled.connect(self._handle_mode_change)
+        self.zoom_in_button.clicked.connect(lambda: self._change_zoom(0.15))
+        self.zoom_out_button.clicked.connect(lambda: self._change_zoom(-0.15))
+        self.grid.row_header_double_clicked.connect(self._show_row_preview)
 
         self._update_hint()
         self.refresh()
+
+    # ---------- yakınlaştırma ----------
+    def _change_zoom(self, delta: float) -> None:
+        zoom = round(min(2.2, max(0.7, self.grid._zoom + delta)), 2)
+        self.grid.set_zoom(zoom)
+        self.zoom_label.setText(f"{round(zoom * 100)}%")
+        # Hücre kartlarını (sabit boyutlu widget'lar) yeni satır/sütun
+        # ölçüsüne göre baştan oluştur - sadece boyut değiştirmek eski
+        # widget'lardan görsel kalıntı bırakabiliyor.
+        self._render_grid()
+
+    def _show_row_preview(self, entity_id: int) -> None:
+        name = next((n for i, n in self._row_entities if i == entity_id), "")
+        dialog = RowPreviewDialog(self.db, self.navigator.week_start, self.mode, entity_id, name, self)
+        dialog.exec()
 
     def _handle_mode_change(self, checked: bool) -> None:
         self.mode = MODE_CLASS if checked else MODE_TEACHER
@@ -433,7 +532,7 @@ class ScheduleTab(QWidget):
         self.grid.setVerticalHeaderLabels([name for _id, name in self._row_entities])
 
         for row, (entity_id, _name) in enumerate(self._row_entities):
-            self.grid.setRowHeight(row, 38)
+            self.grid.setRowHeight(row, self.grid.row_height())
             for day in range(len(day_names)):
                 for period in range(1, period_count + 1):
                     col = day * period_count + (period - 1)
@@ -496,15 +595,37 @@ class ScheduleTab(QWidget):
         return "Zümre (" + ", ".join(names) + ")"
 
     # ---------- yerleştirme / kaldırma ----------
+    MAX_STACKED_PER_CELL = 2
+
     def _row_matches_block(self, block, entity_id) -> bool:
         if self.mode == MODE_CLASS:
             return block.type == TYPE_CLASS and block.class_group_id == entity_id
         return any(m.teacher_id == entity_id for m in self._block_group(block))
 
+    def _stack_overflow(self, members: list, day: int, period: int) -> str | None:
+        """Bir hücrede (aynı sınıf/öğretmen satırında) hiçbir zaman
+        MAX_STACKED_PER_CELL'den fazla ders üst üste binmesin diye sert bir
+        sınır - çakışma uyarısının aksine, 'yine de yerleştir' ile
+        aşılamaz."""
+        for member in members:
+            row_entity_id = member.class_group_id if self.mode == MODE_CLASS else member.teacher_id
+            if row_entity_id is None:
+                continue
+            existing = [b for b in self._cell_blocks(row_entity_id, day, period) if b.id != member.id]
+            if len(existing) + 1 > self.MAX_STACKED_PER_CELL:
+                who = member.class_name if self.mode == MODE_CLASS else member.teacher_name
+                return (
+                    f"{who} bu saatte zaten {len(existing)} ders içeriyor - bir hücrede en fazla "
+                    f"{self.MAX_STACKED_PER_CELL} ders üst üste olabilir."
+                )
+        return None
+
     def _validate_drop(self, block, entity_id, day: int, period: int) -> bool:
         if not self._row_matches_block(block, entity_id):
             return False
         members = self._block_group(block)
+        if self._stack_overflow(members, day, period):
+            return False
         return not scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable)
 
     def _handle_drop(self, block_id: int, entity_id, day: int, period: int) -> None:
@@ -521,6 +642,10 @@ class ScheduleTab(QWidget):
             return
         members = self._block_group(block)
         label = self._group_label(members)
+        overflow = self._stack_overflow(members, day, period)
+        if overflow:
+            QMessageBox.warning(self, "Hücre dolu", overflow)
+            return
         conflicts = scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable)
         if conflicts:
             proceed = QMessageBox.question(

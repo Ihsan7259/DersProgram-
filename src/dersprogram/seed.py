@@ -27,19 +27,24 @@ def is_empty(db: Database) -> bool:
 def seed_demo_data(db: Database) -> None:
     week = scheduling.monday_of(_dt.date.today())
 
-    t_ahmet = db.add_teacher("Ahmet Yılmaz", "Matematik")
-    t_ayse = db.add_teacher("Ayşe Demir", "Fizik")
-    t_mehmet = db.add_teacher("Mehmet Kaya", "Matematik")
-    t_elif = db.add_teacher("Elif Ak", "Türkçe")
-    t_canan = db.add_teacher("Canan Öz", "Kimya")
-    db.add_teacher("Burak Şen", "Tarih")
-
     s_mat = db.add_row("subjects", "Matematik")
     s_fizik = db.add_row("subjects", "Fizik")
     s_kimya = db.add_row("subjects", "Kimya")
     s_turkce = db.add_row("subjects", "Türkçe")
-    db.add_row("subjects", "Tarih")
+    s_tarih = db.add_row("subjects", "Tarih")
     db.add_row("subjects", "Biyoloji")
+
+    def add_teacher_with_subjects(name: str, subject_ids: list[int]) -> int:
+        teacher_id = db.add_teacher(name, "")
+        db.set_teacher_subjects(teacher_id, subject_ids)
+        return teacher_id
+
+    t_ahmet = add_teacher_with_subjects("Ahmet Yılmaz", [s_mat, s_fizik])  # birden fazla branş örneği
+    t_ayse = add_teacher_with_subjects("Ayşe Demir", [s_fizik])
+    t_mehmet = add_teacher_with_subjects("Mehmet Kaya", [s_mat])
+    t_elif = add_teacher_with_subjects("Elif Ak", [s_turkce])
+    t_canan = add_teacher_with_subjects("Canan Öz", [s_kimya])
+    add_teacher_with_subjects("Burak Şen", [s_tarih])
 
     c_9a = db.add_class_group("9-A")
     c_9b = db.add_class_group("9-B")

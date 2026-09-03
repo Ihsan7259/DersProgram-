@@ -24,7 +24,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(theme.stylesheet())
 
         central = QWidget()
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         self.setCentralWidget(central)
@@ -35,8 +35,8 @@ class MainWindow(QMainWindow):
         content = QWidget()
         content.setObjectName("contentArea")
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(26, 22, 26, 22)
-        content_layout.setSpacing(14)
+        content_layout.setContentsMargins(22, 16, 22, 16)
+        content_layout.setSpacing(10)
 
         header = QVBoxLayout()
         header.setSpacing(0)

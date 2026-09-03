@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QPushButton,
     QLineEdit,
-    QComboBox,
+    QCheckBox,
+    QScrollArea,
     QLabel,
     QMessageBox,
     QHeaderView,
@@ -19,8 +20,6 @@ from PySide6.QtCore import Qt
 from ..db import Database
 from .. import scheduling
 from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog
-
-NO_SUBJECT = "(Seçilmedi)"
 
 
 class TeachersTab(QWidget):
@@ -37,10 +36,23 @@ class TeachersTab(QWidget):
         form_row.addWidget(QLabel("Ad:"))
         self.name_edit = QLineEdit()
         form_row.addWidget(self.name_edit)
-        form_row.addWidget(QLabel("Branş/Alan:"))
-        self.subject_area_combo = QComboBox()
-        form_row.addWidget(self.subject_area_combo)
         layout.addLayout(form_row)
+
+        # Bir öğretmen birden fazla branşa kayıtlı olabilir (ör. hem
+        # Matematik hem Fizik) - checkbox listesiyle hepsi işaretlenebilir.
+        subject_row = QHBoxLayout()
+        subject_row.addWidget(QLabel("Branş/Alan:"))
+        self.subject_checks: dict[int, QCheckBox] = {}
+        self._subject_container = QWidget()
+        self._subject_container_layout = QHBoxLayout(self._subject_container)
+        self._subject_container_layout.setContentsMargins(4, 2, 4, 2)
+        self._subject_container_layout.setSpacing(10)
+        self._subject_scroll = QScrollArea()
+        self._subject_scroll.setWidgetResizable(True)
+        self._subject_scroll.setMaximumHeight(46)
+        self._subject_scroll.setWidget(self._subject_container)
+        subject_row.addWidget(self._subject_scroll, 1)
+        layout.addLayout(subject_row)
 
         button_row = QHBoxLayout()
         self.add_button = QPushButton("Öğretmen Ekle")
@@ -120,23 +132,22 @@ class TeachersTab(QWidget):
                 self.table_widget.scrollToItem(item)
                 break
 
-    def _refresh_subject_choices(self, keep_text: str | None = None) -> None:
-        self.subject_area_combo.blockSignals(True)
-        self.subject_area_combo.clear()
-        self.subject_area_combo.addItem(NO_SUBJECT, "")
+    def _refresh_subject_choices(self, checked_ids: set[int] | None = None) -> None:
+        checked_ids = checked_ids or set()
+        while self._subject_container_layout.count():
+            item = self._subject_container_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.subject_checks = {}
         for row in self.db.list_rows("subjects"):
-            self.subject_area_combo.addItem(row["name"], row["name"])
-        if keep_text:
-            idx = self.subject_area_combo.findData(keep_text)
-            if idx < 0:
-                # Dersler listesinde olmayan eski/serbest metin bir değer:
-                # kaybolmasın diye listeye geçici olarak ekle.
-                self.subject_area_combo.addItem(keep_text, keep_text)
-                idx = self.subject_area_combo.count() - 1
-            self.subject_area_combo.setCurrentIndex(idx)
-        else:
-            self.subject_area_combo.setCurrentIndex(0)
-        self.subject_area_combo.blockSignals(False)
+            cb = QCheckBox(row["name"])
+            cb.setChecked(row["id"] in checked_ids)
+            self.subject_checks[row["id"]] = cb
+            self._subject_container_layout.addWidget(cb)
+        self._subject_container_layout.addStretch()
+
+    def _selected_subject_ids(self) -> list[int]:
+        return [sid for sid, cb in self.subject_checks.items() if cb.isChecked()]
 
     def refresh(self) -> None:
         rows = self.db.list_teachers()
@@ -146,7 +157,8 @@ class TeachersTab(QWidget):
             item_name.setData(Qt.UserRole, row["id"])
             self.table_widget.setItem(r, 0, item_name)
             self.table_widget.setItem(r, 1, QTableWidgetItem(row["subject_area"] or ""))
-        self._refresh_subject_choices(keep_text=self.subject_area_combo.currentData())
+        current = set(self._selected_subject_ids())
+        self._refresh_subject_choices(checked_ids=current)
         self.refresh_detail()
 
     def refresh_detail(self) -> None:
@@ -195,7 +207,7 @@ class TeachersTab(QWidget):
         name_item = self.table_widget.item(row, 0)
         self.selected_id = name_item.data(Qt.UserRole)
         self.name_edit.setText(name_item.text())
-        self._refresh_subject_choices(keep_text=self.table_widget.item(row, 1).text())
+        self._refresh_subject_choices(checked_ids=set(self.db.get_teacher_subject_ids(self.selected_id)))
         self.refresh_detail()
 
     def clear_form(self) -> None:
@@ -210,7 +222,8 @@ class TeachersTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğretmen adı boş olamaz.")
             return
-        new_id = self.db.add_teacher(name, self.subject_area_combo.currentData() or "")
+        new_id = self.db.add_teacher(name, "")
+        self.db.set_teacher_subjects(new_id, self._selected_subject_ids())
         self.clear_form()
         self.refresh()
         self._select_row_by_id(new_id)
@@ -225,7 +238,8 @@ class TeachersTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğretmen adı boş olamaz.")
             return
-        self.db.update_teacher(self.selected_id, name, self.subject_area_combo.currentData() or "")
+        self.db.update_teacher(self.selected_id, name, "")
+        self.db.set_teacher_subjects(self.selected_id, self._selected_subject_ids())
         self.clear_form()
         self.refresh()
         if self.on_change:

@@ -44,11 +44,11 @@ class AddLessonDialog(QDialog):
             self.type_combo.addItem(LESSON_TYPE_LABELS[t], t)
         layout.addRow("Ders Tipi:", self.type_combo)
 
-        self._teacher_subject_area: dict[int, str] = {}
+        self._teacher_subject_ids: dict[int, list[int]] = {}
         self.teacher_combo = QComboBox()
         for t in db.list_teachers():
             self.teacher_combo.addItem(t["name"], t["id"])
-            self._teacher_subject_area[t["id"]] = t["subject_area"] or ""
+            self._teacher_subject_ids[t["id"]] = db.get_teacher_subject_ids(t["id"])
         self.teacher_label = QLabel("Öğretmen:")
         layout.addRow(self.teacher_label, self.teacher_combo)
 
@@ -115,11 +115,14 @@ class AddLessonDialog(QDialog):
 
     def _apply_teacher_subject_area(self) -> None:
         """Öğretmen seçilince 'Ders/Branş' alanını o öğretmenin branşıyla
-        otomatik doldurur (kullanıcı isterse sonradan değiştirebilir)."""
-        subject_area = self._teacher_subject_area.get(self.teacher_combo.currentData())
-        if not subject_area:
+        otomatik doldurur (kullanıcı isterse sonradan değiştirebilir).
+        Öğretmenin tek branşı varsa doğrudan seçilir; birden fazla
+        branşı varsa hangisi kastedildiği belirsiz olduğu için elle
+        seçime bırakılır."""
+        subject_ids = self._teacher_subject_ids.get(self.teacher_combo.currentData()) or []
+        if len(subject_ids) != 1:
             return
-        idx = self.subject_combo.findText(subject_area)
+        idx = self.subject_combo.findData(subject_ids[0])
         if idx >= 0:
             self.subject_combo.setCurrentIndex(idx)
 

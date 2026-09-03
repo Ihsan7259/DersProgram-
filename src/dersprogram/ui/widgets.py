@@ -126,7 +126,7 @@ class MiniScheduleGrid(QTableWidget):
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setShowGrid(False)
 
-    def render(self, db: Database, blocks_by_cell: dict[tuple[int, int], list]) -> None:
+    def render(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], row_mode: str | None = None) -> None:
         day_names = db.day_names
         period_count = db.period_count
         self.setRowCount(period_count)
@@ -139,7 +139,7 @@ class MiniScheduleGrid(QTableWidget):
             self.setRowHeight(period - 1, 40)
             for day in range(len(day_names)):
                 blocks = blocks_by_cell.get((day, period), [])
-                self.setCellWidget(period - 1, day, theme.make_multi_cell(blocks, compact=True))
+                self.setCellWidget(period - 1, day, theme.make_multi_cell(blocks, compact=True, row_mode=row_mode))
 
 
 class AvailabilityGrid(QTableWidget):

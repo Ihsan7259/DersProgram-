@@ -1,8 +1,11 @@
-"""Sol navigasyon menüsü: koyu lacivert şerit, ikon + etiket."""
+"""Üst navigasyon çubuğu: koyu lacivert şerit, ikon + etiket yan yana.
+
+Daha önce solda dikey bir şeritti; Ana Program'a daha fazla yatay yer
+açmak için üste, yatay bir çubuğa taşındı."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QFrame
 
 from . import theme
 
@@ -24,21 +27,21 @@ class Sidebar(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setFixedWidth(230)
+        self.setFixedHeight(56)
         self.setStyleSheet(f"background: {theme.SIDEBAR_BG};")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 20, 14, 16)
-        layout.setSpacing(22)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(18)
 
         brand_row = QHBoxLayout()
-        brand_row.setSpacing(10)
+        brand_row.setSpacing(9)
         badge = QLabel("DP")
-        badge.setFixedSize(34, 34)
+        badge.setFixedSize(32, 32)
         badge.setAlignment(Qt.AlignCenter)
         badge.setStyleSheet(
             f"background:{theme.ACCENT}; color:white; border-radius:9px; "
-            f"font-family:'{theme.FONT_HEADING}'; font-weight:800; font-size:11pt;"
+            f"font-family:'{theme.FONT_HEADING}'; font-weight:800; font-size:10.5pt;"
         )
         brand_row.addWidget(badge)
 
@@ -47,56 +50,53 @@ class Sidebar(QWidget):
         title = QLabel("Ders Programı")
         title.setStyleSheet(
             f"color:{theme.SIDEBAR_TEXT_ACTIVE}; font-family:'{theme.FONT_HEADING}'; "
-            f"font-weight:700; font-size:10.5pt; background: transparent;"
+            f"font-weight:700; font-size:9.7pt; background: transparent;"
         )
         subtitle = QLabel("Yönetim Paneli")
-        subtitle.setStyleSheet(f"color:{theme.SIDEBAR_TEXT_MUTED}; font-size:8pt; background: transparent;")
+        subtitle.setStyleSheet(f"color:{theme.SIDEBAR_TEXT_MUTED}; font-size:7.4pt; background: transparent;")
         brand_text.addWidget(title)
         brand_text.addWidget(subtitle)
         brand_row.addLayout(brand_text)
-        brand_row.addStretch()
         layout.addLayout(brand_row)
 
+        divider = QFrame()
+        divider.setFrameShape(QFrame.VLine)
+        divider.setStyleSheet(f"color:{theme.SIDEBAR_BORDER};")
+        layout.addWidget(divider)
+
         self._buttons: dict[str, QPushButton] = {}
-        nav_col = QVBoxLayout()
-        nav_col.setSpacing(2)
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(2)
         for item_id, label in NAV_ITEMS:
-            button = QPushButton(f"  {label}")
+            button = QPushButton(f" {label}")
             button.setIcon(theme.icon(theme.NAV_ICONS[item_id], theme.SIDEBAR_TEXT_MUTED))
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
-            button.setFixedHeight(36)
+            button.setFixedHeight(38)
             button.clicked.connect(lambda _checked, i=item_id: self._select(i))
             self._buttons[item_id] = button
-            nav_col.addWidget(button)
-        layout.addLayout(nav_col)
+            nav_row.addWidget(button)
+        layout.addLayout(nav_row)
 
         layout.addStretch()
 
-        footer = QFrame()
-        footer.setStyleSheet(f"border-top: 1px solid {theme.SIDEBAR_BORDER};")
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(6, 12, 6, 0)
-        footer_layout.setSpacing(10)
         avatar = QLabel("SY")
-        avatar.setFixedSize(26, 26)
+        avatar.setFixedSize(28, 28)
         avatar.setAlignment(Qt.AlignCenter)
         avatar.setStyleSheet(
             f"background:{theme.SIDEBAR_AVATAR_BG}; color:{theme.SIDEBAR_TEXT_ACTIVE}; "
-            f"border-radius:13px; font-size:8.5pt; font-weight:700;"
+            f"border-radius:14px; font-size:8.5pt; font-weight:700;"
         )
-        footer_layout.addWidget(avatar)
+        layout.addWidget(avatar)
         footer_text = QVBoxLayout()
         footer_text.setSpacing(0)
         name = QLabel("Sekreterlik")
-        name.setStyleSheet(f"color:{theme.SIDEBAR_TEXT_ACTIVE}; font-size:9pt; font-weight:600; background:transparent;")
+        name.setStyleSheet(f"color:{theme.SIDEBAR_TEXT_ACTIVE}; font-size:8.6pt; font-weight:600; background:transparent;")
         role = QLabel("Yönetici")
-        role.setStyleSheet(f"color:{theme.SIDEBAR_TEXT_MUTED}; font-size:8pt; background:transparent;")
+        role.setStyleSheet(f"color:{theme.SIDEBAR_TEXT_MUTED}; font-size:7.4pt; background:transparent;")
         footer_text.addWidget(name)
         footer_text.addWidget(role)
-        footer_layout.addLayout(footer_text)
-        footer_layout.addStretch()
-        layout.addWidget(footer)
+        layout.addLayout(footer_text)
 
         self.set_active("ana-program")
 
@@ -114,6 +114,6 @@ class Sidebar(QWidget):
             button.setIcon(theme.icon(theme.NAV_ICONS[i], color))
             button.setStyleSheet(
                 f"QPushButton {{ text-align:left; border:none; border-radius:9px; "
-                f"background:{bg}; color:{color}; font-size:9.7pt; font-weight:{weight}; padding-left:6px; }}"
+                f"background:{bg}; color:{color}; font-size:8.9pt; font-weight:{weight}; padding:0 10px; }}"
                 f"QPushButton:hover {{ background:{theme.SIDEBAR_ACTIVE_BG if active else '#182231'}; }}"
             )

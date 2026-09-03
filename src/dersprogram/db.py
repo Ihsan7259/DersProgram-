@@ -35,6 +35,17 @@ CREATE TABLE IF NOT EXISTS teachers (
     note TEXT DEFAULT ''
 );
 
+-- Bir öğretmen birden fazla branşa kayıtlı olabilir (ör. hem Matematik
+-- hem Fizik). teachers.subject_area, bu tablodan türetilen ", " ile
+-- ayrılmış bir özet metindir (liste görünümlerinde hızlı göstermek için);
+-- gerçek kaynak burasıdır.
+CREATE TABLE IF NOT EXISTS teacher_subjects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+    subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    UNIQUE(teacher_id, subject_id)
+);
+
 CREATE TABLE IF NOT EXISTS subjects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -378,6 +389,36 @@ class Database:
         self.conn.execute("DELETE FROM teachers WHERE id=?", (teacher_id,))
         self.conn.commit()
 
+    # ---------- öğretmen branşları (çoklu) ----------
+    def get_teacher_subject_ids(self, teacher_id: int) -> list[int]:
+        rows = self.conn.execute(
+            "SELECT subject_id FROM teacher_subjects WHERE teacher_id=?", (teacher_id,)
+        ).fetchall()
+        return [row["subject_id"] for row in rows]
+
+    def set_teacher_subjects(self, teacher_id: int, subject_ids: list[int]) -> None:
+        """Öğretmenin branş listesini tamamen değiştirir (birden fazla
+        branşa kayıtlı olabilir) ve teachers.subject_area özet metnini
+        (', ' ile ayrılmış branş adları) buna göre günceller."""
+        self.conn.execute("DELETE FROM teacher_subjects WHERE teacher_id=?", (teacher_id,))
+        for subject_id in subject_ids:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO teacher_subjects(teacher_id, subject_id) VALUES (?, ?)",
+                (teacher_id, subject_id),
+            )
+        names = self.conn.execute(
+            """
+            SELECT s.name FROM teacher_subjects ts
+            JOIN subjects s ON s.id = ts.subject_id
+            WHERE ts.teacher_id = ?
+            ORDER BY s.name
+            """,
+            (teacher_id,),
+        ).fetchall()
+        summary = ", ".join(row["name"] for row in names)
+        self.conn.execute("UPDATE teachers SET subject_area=? WHERE id=?", (summary, teacher_id))
+        self.conn.commit()
+
     # ---------- öğrenciler ----------
     def list_students(self) -> list[sqlite3.Row]:
         return self.conn.execute(
@@ -601,10 +642,18 @@ class Database:
         return missing
 
     def list_teachers_by_subject_area(self, subject_name: str) -> list[sqlite3.Row]:
-        """Branşı verilen derse eşit olan öğretmenler (Sınıflar sekmesinde
-        ders seçilince öğretmen listesini süzmek için)."""
+        """Branşlarından biri verilen derse eşit olan öğretmenler (Sınıflar
+        sekmesinde ders seçilince öğretmen listesini süzmek için) - bir
+        öğretmen birden fazla branşa kayıtlıysa her ikisinde de görünür."""
         return self.conn.execute(
-            "SELECT * FROM teachers WHERE subject_area = ? ORDER BY name", (subject_name,)
+            """
+            SELECT DISTINCT t.* FROM teachers t
+            JOIN teacher_subjects ts ON ts.teacher_id = t.id
+            JOIN subjects s ON s.id = ts.subject_id
+            WHERE s.name = ?
+            ORDER BY t.name
+            """,
+            (subject_name,),
         ).fetchall()
 
     def delete_lesson_block(self, block_id: int) -> None:
