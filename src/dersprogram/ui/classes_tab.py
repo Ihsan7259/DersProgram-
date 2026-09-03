@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QComboBox,
     QSpinBox,
-    QFrame,
     QLabel,
     QMessageBox,
     QHeaderView,
@@ -21,7 +20,7 @@ from PySide6.QtCore import Qt
 
 from ..db import Database
 from .. import scheduling
-from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog
+from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog, section_title as _section_title, divider as _divider
 from . import theme
 
 
@@ -33,13 +32,24 @@ class ClassesTab(QWidget):
         self.selected_id: int | None = None
         self._pending_availability: dict[tuple[int, int], str | None] = {}
 
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+
+        # İki sütunlu düzen: solda ekleme formu + haftalık program (büyük
+        # alan), sağda sınıf listesi + ders hedefleri + küçük haftalık
+        # özet - bkz. kullanıcının elle çizdiği referans mockup.
+        main_splitter = QSplitter(Qt.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        left_layout.addWidget(_section_title("Sınıf Ekle"))
 
         form_row = QHBoxLayout()
         form_row.addWidget(QLabel("Sınıf Adı:"))
         self.name_edit = QLineEdit()
         form_row.addWidget(self.name_edit)
-        layout.addLayout(form_row)
+        left_layout.addLayout(form_row)
 
         button_row = QHBoxLayout()
         self.add_button = QPushButton("Sınıf Ekle")
@@ -48,10 +58,36 @@ class ClassesTab(QWidget):
         self.clear_button = QPushButton("Temizle")
         for b in (self.add_button, self.update_button, self.delete_button, self.clear_button):
             button_row.addWidget(b)
-        layout.addLayout(button_row)
+        left_layout.addLayout(button_row)
 
-        splitter = QSplitter(Qt.Vertical)
+        left_layout.addWidget(_divider())
 
+        left_layout.addWidget(QLabel("Bu haftaki program:"))
+        self.navigator = WeekNavigator(lambda: len(self.db.day_names))
+        left_layout.addWidget(self.navigator)
+
+        availability_hint = QLabel(
+            "Boş kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), 3. tık kaldırır. "
+            "Gün/saat başlığına tıklarsanız o günün/saatin tamamı topluca değişir. "
+            "Müsait değil işaretlenen saatlere Ana Program'da bu sınıf için ders atanamaz."
+        )
+        availability_hint.setWordWrap(True)
+        left_layout.addWidget(availability_hint)
+
+        self.mini_grid = AvailabilityGrid()
+        self.mini_grid.changed.connect(self._handle_availability_changed)
+        left_layout.addWidget(self.mini_grid, 1)
+        self.save_availability_button = QPushButton("Müsaitliği Kaydet")
+        self.save_availability_button.clicked.connect(self.handle_save_availability)
+        left_layout.addWidget(self.save_availability_button)
+
+        main_splitter.addWidget(left)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        right_layout.addWidget(_section_title("Sınıf Listesi"))
         self.table_widget = QTableWidget(0, 3)
         self.table_widget.setHorizontalHeaderLabels(["Ad", "", ""])
         header = self.table_widget.horizontalHeader()
@@ -62,16 +98,12 @@ class ClassesTab(QWidget):
         self.table_widget.setColumnWidth(2, 30)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
-        splitter.addWidget(self.table_widget)
+        right_layout.addWidget(self.table_widget, 1)
 
-        detail = QWidget()
-        detail_layout = QVBoxLayout(detail)
-        detail_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(_divider())
 
         # ---------- ders hedefleri (müfredat) ----------
-        curriculum_title = QLabel("Ders Hedefleri (haftalık saat)")
-        curriculum_title.setStyleSheet("font-weight:700;")
-        detail_layout.addWidget(curriculum_title)
+        right_layout.addWidget(_section_title("Hedef Ders Saatleri"))
 
         curriculum_form = QHBoxLayout()
         curriculum_form.addWidget(QLabel("Ders:"))
@@ -81,16 +113,16 @@ class ClassesTab(QWidget):
         curriculum_form.addWidget(QLabel("Öğretmen:"))
         self.curriculum_teacher_combo = QComboBox()
         curriculum_form.addWidget(self.curriculum_teacher_combo, 2)
-        curriculum_form.addWidget(QLabel("Haftalık saat:"))
+        curriculum_form.addWidget(QLabel("Saat:"))
         self.curriculum_hours_spin = QSpinBox()
         self.curriculum_hours_spin.setRange(1, 40)
         self.curriculum_hours_spin.setValue(4)
         curriculum_form.addWidget(self.curriculum_hours_spin)
-        self.curriculum_add_button = QPushButton("Dersi Ekle")
+        self.curriculum_add_button = QPushButton("Ekle")
         self.curriculum_add_button.setObjectName("primaryButton")
         self.curriculum_add_button.clicked.connect(self.handle_add_curriculum)
         curriculum_form.addWidget(self.curriculum_add_button)
-        detail_layout.addLayout(curriculum_form)
+        right_layout.addLayout(curriculum_form)
 
         self.curriculum_table = QTableWidget(0, 5)
         self.curriculum_table.setHorizontalHeaderLabels(
@@ -104,63 +136,32 @@ class ClassesTab(QWidget):
         curriculum_header.setSectionResizeMode(4, QHeaderView.Stretch)
         self.curriculum_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.curriculum_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.curriculum_table.setMaximumHeight(118)
-        detail_layout.addWidget(self.curriculum_table)
+        self.curriculum_table.setMaximumHeight(150)
+        right_layout.addWidget(self.curriculum_table)
 
         curriculum_buttons = QHBoxLayout()
-        self.curriculum_restore_button = QPushButton("Eksik Dersleri Geri Ekle")
+        self.curriculum_restore_button = QPushButton("Eksikleri Geri Ekle")
         self.curriculum_restore_button.clicked.connect(self.handle_restore_curriculum)
         curriculum_buttons.addWidget(self.curriculum_restore_button)
         self.curriculum_delete_button = QPushButton("Seçili Hedefi Sil")
         self.curriculum_delete_button.clicked.connect(self.handle_delete_curriculum)
         curriculum_buttons.addWidget(self.curriculum_delete_button)
-        curriculum_buttons.addStretch()
+        right_layout.addLayout(curriculum_buttons)
         self.curriculum_status_label = QLabel()
         self.curriculum_status_label.setStyleSheet("font-weight:700;")
-        curriculum_buttons.addWidget(self.curriculum_status_label)
-        detail_layout.addLayout(curriculum_buttons)
+        self.curriculum_status_label.setWordWrap(True)
+        right_layout.addWidget(self.curriculum_status_label)
 
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setFrameShadow(QFrame.Sunken)
-        detail_layout.addWidget(divider)
-
-        detail_layout.addWidget(QLabel("Bu haftaki program:"))
-        self.navigator = WeekNavigator(lambda: len(self.db.day_names))
-        detail_layout.addWidget(self.navigator)
-
-        availability_hint = QLabel(
-            "Boş kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), 3. tık kaldırır. "
-            "Gün/saat başlığına tıklarsanız o günün/saatin tamamı topluca değişir. "
-            "Müsait değil işaretlenen saatlere Ana Program'da bu sınıf için ders atanamaz."
-        )
-        availability_hint.setWordWrap(True)
-        detail_layout.addWidget(availability_hint)
-
-        bottom_row = QHBoxLayout()
-        grid_col = QVBoxLayout()
-        self.mini_grid = AvailabilityGrid()
-        self.mini_grid.changed.connect(self._handle_availability_changed)
-        grid_col.addWidget(self.mini_grid, 1)
-        self.save_availability_button = QPushButton("Müsaitliği Kaydet")
-        self.save_availability_button.clicked.connect(self.handle_save_availability)
-        grid_col.addWidget(self.save_availability_button)
-        bottom_row.addLayout(grid_col, 3)
-
-        summary_col = QVBoxLayout()
-        summary_col.addWidget(QLabel("Haftalık özet:"))
+        right_layout.addWidget(_divider())
+        right_layout.addWidget(_section_title("Haftalık özet"))
         self.summary_table = SummaryTable()
-        summary_col.addWidget(self.summary_table, 1)
-        bottom_row.addLayout(summary_col, 1)
+        self.summary_table.setMaximumHeight(140)
+        right_layout.addWidget(self.summary_table)
 
-        detail_layout.addLayout(bottom_row, 1)
-        splitter.addWidget(detail)
-        # Sınıf listesi kısa tutulur; ders hedefleri + haftalık program
-        # aşağıda birlikte sığsın diye alan detay bölümüne bırakılır.
-        self.table_widget.setMaximumHeight(150)
-        splitter.setSizes([150, 720])
+        main_splitter.addWidget(right)
+        main_splitter.setSizes([650, 350])
 
-        layout.addWidget(splitter, 1)
+        root_layout.addWidget(main_splitter, 1)
 
         self.add_button.clicked.connect(self.handle_add)
         self.update_button.clicked.connect(self.handle_update)

@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt
 
 from ..db import Database
 from .. import scheduling
-from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog
+from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog, section_title as _section_title, divider as _divider
 
 
 class TeachersTab(QWidget):
@@ -30,13 +30,24 @@ class TeachersTab(QWidget):
         self.selected_id: int | None = None
         self._pending_availability: dict[tuple[int, int], str | None] = {}
 
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+
+        # İki sütunlu düzen: solda ekleme formu + haftalık program (büyük
+        # alan), sağda öğretmen listesi (kaydırılabilir) + küçük haftalık
+        # özet - bkz. kullanıcının elle çizdiği referans mockup.
+        main_splitter = QSplitter(Qt.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        left_layout.addWidget(_section_title("Öğretmen Ekleme"))
 
         form_row = QHBoxLayout()
         form_row.addWidget(QLabel("Ad:"))
         self.name_edit = QLineEdit()
         form_row.addWidget(self.name_edit)
-        layout.addLayout(form_row)
+        left_layout.addLayout(form_row)
 
         # Bir öğretmen birden fazla branşa kayıtlı olabilir (ör. hem
         # Matematik hem Fizik) - checkbox listesiyle hepsi işaretlenebilir.
@@ -52,7 +63,7 @@ class TeachersTab(QWidget):
         self._subject_scroll.setMaximumHeight(46)
         self._subject_scroll.setWidget(self._subject_container)
         subject_row.addWidget(self._subject_scroll, 1)
-        layout.addLayout(subject_row)
+        left_layout.addLayout(subject_row)
 
         button_row = QHBoxLayout()
         self.add_button = QPushButton("Öğretmen Ekle")
@@ -61,24 +72,14 @@ class TeachersTab(QWidget):
         self.clear_button = QPushButton("Temizle")
         for b in (self.add_button, self.update_button, self.delete_button, self.clear_button):
             button_row.addWidget(b)
-        layout.addLayout(button_row)
+        left_layout.addLayout(button_row)
 
-        splitter = QSplitter(Qt.Vertical)
+        left_layout.addWidget(_divider())
 
-        self.table_widget = QTableWidget(0, 2)
-        self.table_widget.setHorizontalHeaderLabels(["Ad", "Branş/Alan"])
-        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
-        splitter.addWidget(self.table_widget)
-
-        detail = QWidget()
-        detail_layout = QVBoxLayout(detail)
-        detail_layout.setContentsMargins(0, 0, 0, 0)
         self.detail_label = QLabel("Bu haftaki program:")
-        detail_layout.addWidget(self.detail_label)
+        left_layout.addWidget(self.detail_label)
         self.navigator = WeekNavigator(lambda: len(self.db.day_names))
-        detail_layout.addWidget(self.navigator)
+        left_layout.addWidget(self.navigator)
 
         availability_hint = QLabel(
             "Boş kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), 3. tık kaldırır. "
@@ -86,30 +87,39 @@ class TeachersTab(QWidget):
             "Müsait değil işaretlenen saatlere Ana Program'da ders atanamaz."
         )
         availability_hint.setWordWrap(True)
-        detail_layout.addWidget(availability_hint)
+        left_layout.addWidget(availability_hint)
 
-        bottom_row = QHBoxLayout()
-
-        grid_col = QVBoxLayout()
         self.mini_grid = AvailabilityGrid()
         self.mini_grid.changed.connect(self._handle_availability_changed)
-        grid_col.addWidget(self.mini_grid, 1)
+        left_layout.addWidget(self.mini_grid, 1)
         self.save_availability_button = QPushButton("Müsaitliği Kaydet")
         self.save_availability_button.clicked.connect(self.handle_save_availability)
-        grid_col.addWidget(self.save_availability_button)
-        bottom_row.addLayout(grid_col, 3)
+        left_layout.addWidget(self.save_availability_button)
 
-        summary_col = QVBoxLayout()
-        summary_col.addWidget(QLabel("Haftalık özet:"))
+        main_splitter.addWidget(left)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        right_layout.addWidget(_section_title("Öğretmen Listesi"))
+        self.table_widget = QTableWidget(0, 2)
+        self.table_widget.setHorizontalHeaderLabels(["İsim", "Branşlar"])
+        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
+        right_layout.addWidget(self.table_widget, 1)
+
+        right_layout.addWidget(_divider())
+        right_layout.addWidget(_section_title("Haftalık özet"))
         self.summary_table = SummaryTable()
-        summary_col.addWidget(self.summary_table, 1)
-        bottom_row.addLayout(summary_col, 1)
+        self.summary_table.setMaximumHeight(160)
+        right_layout.addWidget(self.summary_table)
 
-        detail_layout.addLayout(bottom_row, 1)
-        splitter.addWidget(detail)
-        splitter.setSizes([220, 480])
+        main_splitter.addWidget(right)
+        main_splitter.setSizes([650, 350])
 
-        layout.addWidget(splitter, 1)
+        root_layout.addWidget(main_splitter, 1)
 
         self.add_button.clicked.connect(self.handle_add)
         self.update_button.clicked.connect(self.handle_update)

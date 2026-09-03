@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QRadioButton,
+    QFrame,
 )
 
 from ..db import Database, LESSON_TYPE_LABELS
@@ -37,6 +38,21 @@ def _set_cell_widget(table: QTableWidget, row: int, col: int, widget: QWidget) -
         old_widget.setParent(None)
         old_widget.deleteLater()
     table.setCellWidget(row, col, widget)
+
+
+def section_title(text: str) -> QLabel:
+    """Öğretmen/Öğrenci/Sınıf sekmelerindeki iki-sütunlu düzende bölüm
+    başlıkları (ör. 'Öğretmen Listesi', 'Haftalık özet') için ortak stil."""
+    label = QLabel(text)
+    label.setStyleSheet(f"font-family:'{theme.FONT_HEADING}'; font-weight:700; font-size:10pt; color:{theme.INK_MUTED_30};")
+    return label
+
+
+def divider() -> QFrame:
+    line = QFrame()
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    return line
 
 
 def _period_header_labels(db: Database, period_count: int) -> list[str]:

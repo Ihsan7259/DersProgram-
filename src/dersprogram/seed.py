@@ -55,11 +55,20 @@ def seed_demo_data(db: Database) -> None:
     r2 = db.add_row("rooms", "Derslik 102")
     r3 = db.add_row("rooms", "Laboratuvar")
 
-    st_zeynep = db.add_student("Zeynep Yıldız", c_9a, t_ahmet, total_program_fee=8000, total_one_on_one_fee=3000)
-    db.add_student("Can Demir", c_9a, t_elif, total_program_fee=8000, total_one_on_one_fee=0)
-    db.add_student("Elif Su", c_9b, None, total_program_fee=7500, total_one_on_one_fee=0)
-    st_berk = db.add_student("Berk Aydın", c_10a, t_mehmet, total_program_fee=8500, total_one_on_one_fee=2000)
-    db.add_student("Naz Çelik", c_10b, None, total_program_fee=7500, total_one_on_one_fee=0)
+    title_ids = {row["name"]: row["id"] for row in db.list_rows("titles")}
+
+    def add_student_with_titles(name, class_group, coach, program_fee, one_on_one_fee, titles: list[str]) -> int:
+        student_id = db.add_student(name, class_group, coach, total_program_fee=program_fee, total_one_on_one_fee=one_on_one_fee)
+        db.set_student_titles(student_id, [title_ids[t] for t in titles if t in title_ids])
+        return student_id
+
+    # Ünvan/paket örneği: bazı öğrenciler sadece sınıfa, bazıları hem sınıf
+    # hem birebire, bazıları sadece koçluğa geliyor.
+    st_zeynep = add_student_with_titles("Zeynep Yıldız", c_9a, t_ahmet, 8000, 3000, ["Sınıf", "Birebir", "Koçluk"])
+    add_student_with_titles("Can Demir", c_9a, t_elif, 8000, 0, ["Sınıf"])
+    add_student_with_titles("Elif Su", c_9b, None, 7500, 0, ["Sınıf"])
+    st_berk = add_student_with_titles("Berk Aydın", c_10a, t_mehmet, 8500, 2000, ["Sınıf", "Birebir"])
+    add_student_with_titles("Naz Çelik", c_10b, None, 0, 0, ["Koçluk"])
 
     db.add_payment(st_zeynep, 4000, week.isoformat(), "1. taksit")
 

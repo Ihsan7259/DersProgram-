@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QComboBox,
     QDoubleSpinBox,
+    QCheckBox,
+    QScrollArea,
     QLabel,
     QMessageBox,
     QHeaderView,
@@ -19,7 +21,7 @@ from PySide6.QtCore import Qt
 
 from ..db import Database
 from .. import scheduling
-from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog
+from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog, section_title as _section_title, divider as _divider
 
 
 class StudentsTab(QWidget):
@@ -29,8 +31,20 @@ class StudentsTab(QWidget):
         self.on_change = on_change
         self.selected_id: int | None = None
         self._pending_availability: dict[tuple[int, int], str | None] = {}
+        self._all_rows: list = []
 
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+
+        # İki sütunlu düzen: solda ekleme formu + haftalık program (büyük
+        # alan), sağda arama kutulu öğrenci listesi + küçük haftalık özet
+        # - bkz. kullanıcının elle çizdiği referans mockup.
+        main_splitter = QSplitter(Qt.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        left_layout.addWidget(_section_title("Öğrenci Ekleme"))
 
         form_row = QHBoxLayout()
         form_row.addWidget(QLabel("Ad:"))
@@ -42,7 +56,7 @@ class StudentsTab(QWidget):
         form_row.addWidget(QLabel("Koç:"))
         self.coach_combo = QComboBox()
         form_row.addWidget(self.coach_combo)
-        layout.addLayout(form_row)
+        left_layout.addLayout(form_row)
 
         fee_row = QHBoxLayout()
         fee_row.addWidget(QLabel("Program Ücreti:"))
@@ -55,7 +69,25 @@ class StudentsTab(QWidget):
         self.one_on_one_fee_spin.setRange(0, 10_000_000)
         self.one_on_one_fee_spin.setSuffix(" TL")
         fee_row.addWidget(self.one_on_one_fee_spin)
-        layout.addLayout(fee_row)
+        left_layout.addLayout(fee_row)
+
+        # Öğrenci hangi paketleri alıyor (sadece sınıf, sadece birebir,
+        # sadece koçluk ya da birkaçı birden) - çoklu seçilebilir ünvan/
+        # rozet listesi (Ayarlar'dan değil, öğretmen branşlarındaki gibi
+        # checkbox listesiyle işaretlenir).
+        title_row = QHBoxLayout()
+        title_row.addWidget(QLabel("Ünvan/Paket:"))
+        self.title_checks: dict[int, QCheckBox] = {}
+        self._title_container = QWidget()
+        self._title_container_layout = QHBoxLayout(self._title_container)
+        self._title_container_layout.setContentsMargins(4, 2, 4, 2)
+        self._title_container_layout.setSpacing(10)
+        self._title_scroll = QScrollArea()
+        self._title_scroll.setWidgetResizable(True)
+        self._title_scroll.setMaximumHeight(46)
+        self._title_scroll.setWidget(self._title_container)
+        title_row.addWidget(self._title_scroll, 1)
+        left_layout.addLayout(title_row)
 
         button_row = QHBoxLayout()
         self.add_button = QPushButton("Öğrenci Ekle")
@@ -64,23 +96,13 @@ class StudentsTab(QWidget):
         self.clear_button = QPushButton("Temizle")
         for b in (self.add_button, self.update_button, self.delete_button, self.clear_button):
             button_row.addWidget(b)
-        layout.addLayout(button_row)
+        left_layout.addLayout(button_row)
 
-        splitter = QSplitter(Qt.Vertical)
+        left_layout.addWidget(_divider())
 
-        self.table_widget = QTableWidget(0, 3)
-        self.table_widget.setHorizontalHeaderLabels(["Ad", "Sınıf", "Koç"])
-        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
-        splitter.addWidget(self.table_widget)
-
-        detail = QWidget()
-        detail_layout = QVBoxLayout(detail)
-        detail_layout.setContentsMargins(0, 0, 0, 0)
-        detail_layout.addWidget(QLabel("Bu haftaki program (kendi dersleri + sınıfının dersleri):"))
+        left_layout.addWidget(QLabel("Bu haftaki program (kendi dersleri + sınıfının dersleri):"))
         self.navigator = WeekNavigator(lambda: len(self.db.day_names))
-        detail_layout.addWidget(self.navigator)
+        left_layout.addWidget(self.navigator)
 
         availability_hint = QLabel(
             "Boş kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), 3. tık kaldırır. "
@@ -88,29 +110,48 @@ class StudentsTab(QWidget):
             "Müsait değil işaretlenen saatlere Ana Program'da bu öğrenci için ders atanamaz."
         )
         availability_hint.setWordWrap(True)
-        detail_layout.addWidget(availability_hint)
+        left_layout.addWidget(availability_hint)
 
-        bottom_row = QHBoxLayout()
-        grid_col = QVBoxLayout()
         self.mini_grid = AvailabilityGrid()
         self.mini_grid.changed.connect(self._handle_availability_changed)
-        grid_col.addWidget(self.mini_grid, 1)
+        left_layout.addWidget(self.mini_grid, 1)
         self.save_availability_button = QPushButton("Müsaitliği Kaydet")
         self.save_availability_button.clicked.connect(self.handle_save_availability)
-        grid_col.addWidget(self.save_availability_button)
-        bottom_row.addLayout(grid_col, 3)
+        left_layout.addWidget(self.save_availability_button)
 
-        summary_col = QVBoxLayout()
-        summary_col.addWidget(QLabel("Haftalık özet:"))
+        main_splitter.addWidget(left)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        list_header_row = QHBoxLayout()
+        list_header_row.addWidget(_section_title("Öğrenci Listesi"))
+        list_header_row.addStretch()
+        right_layout.addLayout(list_header_row)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Öğrenci ara...")
+        self.search_edit.textChanged.connect(self._apply_search_filter)
+        right_layout.addWidget(self.search_edit)
+
+        self.table_widget = QTableWidget(0, 4)
+        self.table_widget.setHorizontalHeaderLabels(["Ad", "Sınıf", "Ünvan", "Koç"])
+        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
+        right_layout.addWidget(self.table_widget, 1)
+
+        right_layout.addWidget(_divider())
+        right_layout.addWidget(_section_title("Haftalık özet"))
         self.summary_table = SummaryTable()
-        summary_col.addWidget(self.summary_table, 1)
-        bottom_row.addLayout(summary_col, 1)
+        self.summary_table.setMaximumHeight(160)
+        right_layout.addWidget(self.summary_table)
 
-        detail_layout.addLayout(bottom_row, 1)
-        splitter.addWidget(detail)
-        splitter.setSizes([220, 480])
+        main_splitter.addWidget(right)
+        main_splitter.setSizes([650, 350])
 
-        layout.addWidget(splitter, 1)
+        root_layout.addWidget(main_splitter, 1)
 
         self.add_button.clicked.connect(self.handle_add)
         self.update_button.clicked.connect(self.handle_update)
@@ -144,16 +185,47 @@ class StudentsTab(QWidget):
         for t in self.db.list_teachers():
             self.coach_combo.addItem(t["name"], t["id"])
 
-    def refresh(self) -> None:
-        self._reload_combos()
-        rows = self.db.list_students()
+    def _refresh_title_choices(self, checked_ids: set[int] | None = None) -> None:
+        checked_ids = checked_ids or set()
+        while self._title_container_layout.count():
+            item = self._title_container_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.title_checks = {}
+        for row in self.db.list_rows("titles"):
+            cb = QCheckBox(row["name"])
+            cb.setChecked(row["id"] in checked_ids)
+            self.title_checks[row["id"]] = cb
+            self._title_container_layout.addWidget(cb)
+        self._title_container_layout.addStretch()
+
+    def _selected_title_ids(self) -> list[int]:
+        return [tid for tid, cb in self.title_checks.items() if cb.isChecked()]
+
+    def _populate_table(self, rows: list) -> None:
         self.table_widget.setRowCount(len(rows))
         for r, row in enumerate(rows):
             item_name = QTableWidgetItem(row["name"])
             item_name.setData(Qt.UserRole, row["id"])
             self.table_widget.setItem(r, 0, item_name)
             self.table_widget.setItem(r, 1, QTableWidgetItem(row["class_name"] or ""))
-            self.table_widget.setItem(r, 2, QTableWidgetItem(row["coach_name"] or ""))
+            titles_text = self.db.student_titles_summary(row["id"])
+            titles_item = QTableWidgetItem(titles_text)
+            titles_item.setToolTip(titles_text)
+            self.table_widget.setItem(r, 2, titles_item)
+            self.table_widget.setItem(r, 3, QTableWidgetItem(row["coach_name"] or ""))
+
+    def _apply_search_filter(self, text: str = "") -> None:
+        query = self.search_edit.text().strip().lower()
+        rows = self._all_rows if not query else [r for r in self._all_rows if query in r["name"].lower()]
+        self._populate_table(rows)
+
+    def refresh(self) -> None:
+        self._reload_combos()
+        current = set(self._selected_title_ids())
+        self._refresh_title_choices(checked_ids=current)
+        self._all_rows = self.db.list_students()
+        self._apply_search_filter()
         self.refresh_detail()
 
     def refresh_detail(self) -> None:
@@ -196,6 +268,7 @@ class StudentsTab(QWidget):
         items = self.table_widget.selectedItems()
         if not items:
             self.selected_id = None
+            self._refresh_title_choices()
             self.refresh_detail()
             return
         row = items[0].row()
@@ -207,6 +280,7 @@ class StudentsTab(QWidget):
         self._select_combo(self.coach_combo, student["coach_teacher_id"])
         self.program_fee_spin.setValue(student["total_program_fee"])
         self.one_on_one_fee_spin.setValue(student["total_one_on_one_fee"])
+        self._refresh_title_choices(checked_ids=set(self.db.get_student_title_ids(self.selected_id)))
         self.refresh_detail()
 
     def _select_combo(self, combo: QComboBox, value) -> None:
@@ -220,6 +294,7 @@ class StudentsTab(QWidget):
         self.coach_combo.setCurrentIndex(0)
         self.program_fee_spin.setValue(0)
         self.one_on_one_fee_spin.setValue(0)
+        self._refresh_title_choices()
         self.table_widget.clearSelection()
         self.refresh_detail()
 
@@ -235,6 +310,7 @@ class StudentsTab(QWidget):
             self.program_fee_spin.value(),
             self.one_on_one_fee_spin.value(),
         )
+        self.db.set_student_titles(new_id, self._selected_title_ids())
         self.clear_form()
         self.refresh()
         self._select_row_by_id(new_id)
@@ -257,6 +333,7 @@ class StudentsTab(QWidget):
             self.program_fee_spin.value(),
             self.one_on_one_fee_spin.value(),
         )
+        self.db.set_student_titles(self.selected_id, self._selected_title_ids())
         self.clear_form()
         self.refresh()
         if self.on_change:

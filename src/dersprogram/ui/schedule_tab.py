@@ -240,7 +240,7 @@ class MainGrid(QTableWidget):
         self.setStyleSheet(
             f"#mainGridHHeader::section {{ font-size: {font_pt:.1f}pt; font-weight:700; padding: {padding}px 0; }}"
             f"#mainGridVHeader::section {{ font-size: {row_font_pt:.1f}pt; font-weight:700; padding: 4px 10px; }}"
-            f"#mainGrid {{ gridline-color: {theme.BORDER_SUBTLE}; border:none; }}"
+            f"#mainGrid {{ gridline-color: {theme.INK}; border:none; }}"
         )
         self._apply_header_labels(per_column)
         for row in range(self.rowCount()):

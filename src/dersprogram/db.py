@@ -75,6 +75,24 @@ CREATE TABLE IF NOT EXISTS students (
     note TEXT DEFAULT ''
 );
 
+-- Öğrencinin aldığı paketleri gösteren ünvanlar (ör. "Sınıf", "Birebir",
+-- "Koçluk") - bazı öğrenciler sadece sınıfa, bazıları sadece birebire ya
+-- da koçluğa geliyor; bu etiketler öğrenci listesinde rozet olarak
+-- gösterilir. Kurum kendi ünvanlarını da ekleyip silebilir (subjects
+-- tablosuyla aynı desen).
+CREATE TABLE IF NOT EXISTS titles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    note TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS student_titles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+    UNIQUE(student_id, title_id)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -262,6 +280,7 @@ class Database:
         self.conn.executescript(SCHEMA)
         self._migrate_schema()
         self._init_settings()
+        self._init_titles()
 
     def _migrate_schema(self) -> None:
         for table, columns in MIGRATION_COLUMNS.items():
@@ -281,6 +300,40 @@ class Database:
                     (key, json.dumps(value, ensure_ascii=False)),
                 )
         self.conn.commit()
+
+    # ---------- öğrenci ünvanları (aldığı paketler) ----------
+    DEFAULT_TITLES = ["Sınıf", "Birebir", "Koçluk"]
+
+    def _init_titles(self) -> None:
+        """Kurum kendi ünvanlarını ekleyip silebilir; ilk açılışta üç
+        yaygın paket ("Sınıf", "Birebir", "Koçluk") hazır gelsin diye
+        tablo boşsa varsayılanlar eklenir."""
+        cur = self.conn.execute("SELECT 1 FROM titles LIMIT 1")
+        if cur.fetchone() is None:
+            for name in self.DEFAULT_TITLES:
+                self.conn.execute("INSERT INTO titles(name) VALUES (?)", (name,))
+            self.conn.commit()
+
+    def get_student_title_ids(self, student_id: int) -> list[int]:
+        rows = self.conn.execute("SELECT title_id FROM student_titles WHERE student_id=?", (student_id,)).fetchall()
+        return [row["title_id"] for row in rows]
+
+    def set_student_titles(self, student_id: int, title_ids: list[int]) -> None:
+        self.conn.execute("DELETE FROM student_titles WHERE student_id=?", (student_id,))
+        for title_id in title_ids:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO student_titles(student_id, title_id) VALUES (?, ?)",
+                (student_id, title_id),
+            )
+        self.conn.commit()
+
+    def student_titles_summary(self, student_id: int) -> str:
+        rows = self.conn.execute(
+            """SELECT t.name FROM student_titles st JOIN titles t ON t.id = st.title_id
+               WHERE st.student_id = ? ORDER BY t.name""",
+            (student_id,),
+        ).fetchall()
+        return ", ".join(row["name"] for row in rows)
 
     def get_setting(self, key: str):
         cur = self.conn.execute("SELECT value FROM settings WHERE key=?", (key,))
