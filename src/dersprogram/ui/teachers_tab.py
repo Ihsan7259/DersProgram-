@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QPushButton,
     QLineEdit,
+    QComboBox,
     QLabel,
     QMessageBox,
     QHeaderView,
@@ -17,7 +18,9 @@ from PySide6.QtCore import Qt
 
 from ..db import Database
 from .. import scheduling
-from .widgets import WeekNavigator, MiniScheduleGrid, SummaryTable
+from .widgets import WeekNavigator, TeacherAvailabilityGrid, SummaryTable, ScopeDialog
+
+NO_SUBJECT = "(Seçilmedi)"
 
 
 class TeachersTab(QWidget):
@@ -26,6 +29,7 @@ class TeachersTab(QWidget):
         self.db = db
         self.on_change = on_change
         self.selected_id: int | None = None
+        self._pending_availability: dict[tuple[int, int], str | None] = {}
 
         layout = QVBoxLayout(self)
 
@@ -34,8 +38,8 @@ class TeachersTab(QWidget):
         self.name_edit = QLineEdit()
         form_row.addWidget(self.name_edit)
         form_row.addWidget(QLabel("Branş/Alan:"))
-        self.subject_area_edit = QLineEdit()
-        form_row.addWidget(self.subject_area_edit)
+        self.subject_area_combo = QComboBox()
+        form_row.addWidget(self.subject_area_combo)
         layout.addLayout(form_row)
 
         button_row = QHBoxLayout()
@@ -63,8 +67,22 @@ class TeachersTab(QWidget):
         detail_layout.addWidget(self.detail_label)
         self.navigator = WeekNavigator(lambda: len(self.db.day_names))
         detail_layout.addWidget(self.navigator)
-        self.mini_grid = MiniScheduleGrid()
+
+        availability_hint = QLabel(
+            "Boş bir kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), "
+            "3. tık işareti kaldırır. Müsait değil işaretlenen saatlere Ana Program'da ders atanamaz."
+        )
+        availability_hint.setWordWrap(True)
+        detail_layout.addWidget(availability_hint)
+
+        self.mini_grid = TeacherAvailabilityGrid()
+        self.mini_grid.changed.connect(self._handle_availability_changed)
         detail_layout.addWidget(self.mini_grid, 2)
+
+        self.save_availability_button = QPushButton("Müsaitliği Kaydet")
+        self.save_availability_button.clicked.connect(self.handle_save_availability)
+        detail_layout.addWidget(self.save_availability_button)
+
         detail_layout.addWidget(QLabel("Haftalık özet:"))
         self.summary_table = SummaryTable()
         detail_layout.addWidget(self.summary_table, 1)
@@ -80,7 +98,6 @@ class TeachersTab(QWidget):
         self.table_widget.itemSelectionChanged.connect(self.handle_selection)
         self.navigator.week_changed.connect(lambda _w: self.refresh_detail())
         self.name_edit.returnPressed.connect(self._handle_return_pressed)
-        self.subject_area_edit.returnPressed.connect(self._handle_return_pressed)
 
         self.refresh()
 
@@ -95,6 +112,24 @@ class TeachersTab(QWidget):
                 self.table_widget.scrollToItem(item)
                 break
 
+    def _refresh_subject_choices(self, keep_text: str | None = None) -> None:
+        self.subject_area_combo.blockSignals(True)
+        self.subject_area_combo.clear()
+        self.subject_area_combo.addItem(NO_SUBJECT, "")
+        for row in self.db.list_rows("subjects"):
+            self.subject_area_combo.addItem(row["name"], row["name"])
+        if keep_text:
+            idx = self.subject_area_combo.findData(keep_text)
+            if idx < 0:
+                # Dersler listesinde olmayan eski/serbest metin bir değer:
+                # kaybolmasın diye listeye geçici olarak ekle.
+                self.subject_area_combo.addItem(keep_text, keep_text)
+                idx = self.subject_area_combo.count() - 1
+            self.subject_area_combo.setCurrentIndex(idx)
+        else:
+            self.subject_area_combo.setCurrentIndex(0)
+        self.subject_area_combo.blockSignals(False)
+
     def refresh(self) -> None:
         rows = self.db.list_teachers()
         self.table_widget.setRowCount(len(rows))
@@ -103,11 +138,13 @@ class TeachersTab(QWidget):
             item_name.setData(Qt.UserRole, row["id"])
             self.table_widget.setItem(r, 0, item_name)
             self.table_widget.setItem(r, 1, QTableWidgetItem(row["subject_area"] or ""))
+        self._refresh_subject_choices(keep_text=self.subject_area_combo.currentData())
         self.refresh_detail()
 
     def refresh_detail(self) -> None:
+        self._pending_availability = {}
         if self.selected_id is None:
-            self.mini_grid.render(self.db, {})
+            self.mini_grid.render(self.db, {}, {})
             self.summary_table.render({})
             return
         schedule, _pool = scheduling.get_week_view(self.db, self.navigator.week_start)
@@ -116,27 +153,47 @@ class TeachersTab(QWidget):
             matched = [b for b in blocks if b.teacher_id == self.selected_id]
             if matched:
                 filtered[cell] = matched
-        self.mini_grid.render(self.db, filtered)
+        availability = scheduling.get_teacher_availability(self.db, self.selected_id, self.navigator.week_start)
+        self.mini_grid.render(self.db, filtered, availability)
         totals = scheduling.summarize_hours(self.db, self.navigator.week_start, teacher_id=self.selected_id)
         self.summary_table.render(totals)
+
+    def _handle_availability_changed(self, day: int, period: int, status) -> None:
+        self._pending_availability[(day, period)] = status
+
+    def handle_save_availability(self) -> None:
+        if self.selected_id is None:
+            QMessageBox.information(self, "Seçim yok", "Önce listeden bir öğretmen seçin.")
+            return
+        if not self._pending_availability:
+            QMessageBox.information(self, "Değişiklik yok", "Kaydedilecek bir müsaitlik değişikliği yok.")
+            return
+        dialog = ScopeDialog(self.db, self, "Müsaitlik değişikliklerini kaydetme")
+        if dialog.exec() != ScopeDialog.Accepted:
+            return
+        scope = dialog.scope()
+        for (day, period), status in self._pending_availability.items():
+            scheduling.set_teacher_availability(self.db, self.navigator.week_start, self.selected_id, day, period, status, scope)
+        self.refresh_detail()
 
     def handle_selection(self) -> None:
         items = self.table_widget.selectedItems()
         if not items:
             self.selected_id = None
+            self._refresh_subject_choices()
             self.refresh_detail()
             return
         row = items[0].row()
         name_item = self.table_widget.item(row, 0)
         self.selected_id = name_item.data(Qt.UserRole)
         self.name_edit.setText(name_item.text())
-        self.subject_area_edit.setText(self.table_widget.item(row, 1).text())
+        self._refresh_subject_choices(keep_text=self.table_widget.item(row, 1).text())
         self.refresh_detail()
 
     def clear_form(self) -> None:
         self.selected_id = None
         self.name_edit.clear()
-        self.subject_area_edit.clear()
+        self._refresh_subject_choices()
         self.table_widget.clearSelection()
         self.refresh_detail()
 
@@ -145,7 +202,7 @@ class TeachersTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğretmen adı boş olamaz.")
             return
-        new_id = self.db.add_teacher(name, self.subject_area_edit.text().strip())
+        new_id = self.db.add_teacher(name, self.subject_area_combo.currentData() or "")
         self.clear_form()
         self.refresh()
         self._select_row_by_id(new_id)
@@ -160,7 +217,7 @@ class TeachersTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğretmen adı boş olamaz.")
             return
-        self.db.update_teacher(self.selected_id, name, self.subject_area_edit.text().strip())
+        self.db.update_teacher(self.selected_id, name, self.subject_area_combo.currentData() or "")
         self.clear_form()
         self.refresh()
         if self.on_change:

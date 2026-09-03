@@ -104,6 +104,31 @@ CREATE TABLE IF NOT EXISTS payments (
     payment_date TEXT NOT NULL,
     note TEXT DEFAULT ''
 );
+
+-- Bir öğretmenin kalıcı (dönem boyunca) haftalık müsaitlik durumu.
+-- Sadece işaretlenmiş (müsait/müsait değil) hücreler burada satır olarak
+-- bulunur; hiç işaretlenmemiş hücreler için satır yoktur.
+CREATE TABLE IF NOT EXISTS teacher_availability (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+    day INTEGER NOT NULL,
+    period INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    UNIQUE(teacher_id, day, period)
+);
+
+-- Belirli bir haftaya özel müsaitlik istisnası: o hafta kalıcı durumun
+-- yerine burada belirtilen durum geçerlidir. status='clear' ise o hafta
+-- hiç işaretlenmemiş gibi davranılır (kalıcı durum o hafta için gizlenir).
+CREATE TABLE IF NOT EXISTS teacher_availability_exceptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    week_start TEXT NOT NULL,
+    teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+    day INTEGER NOT NULL,
+    period INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    UNIQUE(week_start, teacher_id, day, period)
+);
 """
 
 DEFAULT_SETTINGS = {
@@ -423,6 +448,56 @@ class Database:
         self.conn.execute(
             "DELETE FROM week_exceptions WHERE week_start=? AND lesson_block_id=?",
             (week_start, block_id),
+        )
+        self.conn.commit()
+
+    # ---------- öğretmen müsaitliği ----------
+    def get_teacher_availability_template(self, teacher_id: int) -> dict[tuple[int, int], str]:
+        rows = self.conn.execute(
+            "SELECT day, period, status FROM teacher_availability WHERE teacher_id=?",
+            (teacher_id,),
+        ).fetchall()
+        return {(row["day"], row["period"]): row["status"] for row in rows}
+
+    def set_teacher_availability_template(self, teacher_id: int, day: int, period: int, status: str | None) -> None:
+        if status is None:
+            self.conn.execute(
+                "DELETE FROM teacher_availability WHERE teacher_id=? AND day=? AND period=?",
+                (teacher_id, day, period),
+            )
+        else:
+            self.conn.execute(
+                """
+                INSERT INTO teacher_availability(teacher_id, day, period, status)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(teacher_id, day, period) DO UPDATE SET status=excluded.status
+                """,
+                (teacher_id, day, period, status),
+            )
+        self.conn.commit()
+
+    def get_teacher_availability_exceptions(self, week_start: str) -> dict[tuple[int, int, int], str]:
+        rows = self.conn.execute(
+            "SELECT teacher_id, day, period, status FROM teacher_availability_exceptions WHERE week_start=?",
+            (week_start,),
+        ).fetchall()
+        return {(row["teacher_id"], row["day"], row["period"]): row["status"] for row in rows}
+
+    def set_teacher_availability_exception(self, week_start: str, teacher_id: int, day: int, period: int, status: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO teacher_availability_exceptions(week_start, teacher_id, day, period, status)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(week_start, teacher_id, day, period) DO UPDATE SET status=excluded.status
+            """,
+            (week_start, teacher_id, day, period, status),
+        )
+        self.conn.commit()
+
+    def clear_teacher_availability_exception(self, week_start: str, teacher_id: int, day: int, period: int) -> None:
+        self.conn.execute(
+            "DELETE FROM teacher_availability_exceptions WHERE week_start=? AND teacher_id=? AND day=? AND period=?",
+            (week_start, teacher_id, day, period),
         )
         self.conn.commit()
 

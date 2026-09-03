@@ -218,10 +218,21 @@ def find_conflicts(
     day: int,
     period: int,
     block: BlockView,
+    unavailable_teacher_slots: set[tuple[int, int, int]] | None = None,
 ) -> list[str]:
     """Bir bloğu (day, period)'a koymanın doğuracağı çakışmaları
-    insan-okunur mesajlar olarak döner. Boş liste = sorun yok."""
+    insan-okunur mesajlar olarak döner. Boş liste = sorun yok.
+
+    unavailable_teacher_slots: {(teacher_id, day, period), ...} - öğretmenin
+    kendisinin 'müsait değil' olarak işaretlediği saatler (bkz.
+    get_teacher_availability)."""
     reasons = []
+    if (
+        unavailable_teacher_slots
+        and block.teacher_id is not None
+        and (block.teacher_id, day, period) in unavailable_teacher_slots
+    ):
+        reasons.append(f"{block.teacher_name} bu saatte müsait değil olarak işaretlenmiş")
     for other in schedule.get((day, period), []):
         if other.id == block.id:
             continue
@@ -268,6 +279,44 @@ def clear_block(db: Database, week_start: _dt.date, block_id: int, scope: str) -
         db.set_week_exception(week_key(week_start), block_id, None, None)
 
 
+def get_teacher_availability(db: Database, teacher_id: int, week_start: _dt.date) -> dict[tuple[int, int], str]:
+    """Bir öğretmenin o haftaki efektif müsaitlik durumunu döner:
+    (day, period) -> 'available' | 'unavailable'. İşaretlenmemiş hücreler
+    sözlükte yer almaz (durum yok = kısıtlama yok)."""
+    result = dict(db.get_teacher_availability_template(teacher_id))
+    exceptions = db.get_teacher_availability_exceptions(week_key(week_start))
+    for (t_id, day, period), status in exceptions.items():
+        if t_id != teacher_id:
+            continue
+        if status == "clear":
+            result.pop((day, period), None)
+        else:
+            result[(day, period)] = status
+    return result
+
+
+def get_all_unavailable_slots(db: Database, week_start: _dt.date) -> set[tuple[int, int, int]]:
+    """Tüm öğretmenler için o hafta 'müsait değil' işaretli
+    (teacher_id, day, period) üçlülerinin kümesi."""
+    slots: set[tuple[int, int, int]] = set()
+    for teacher in db.list_teachers():
+        avail = get_teacher_availability(db, teacher["id"], week_start)
+        for (day, period), status in avail.items():
+            if status == "unavailable":
+                slots.add((teacher["id"], day, period))
+    return slots
+
+
+def set_teacher_availability(
+    db: Database, week_start: _dt.date, teacher_id: int, day: int, period: int, status: str | None, scope: str
+) -> None:
+    if scope == SCOPE_ALWAYS:
+        db.set_teacher_availability_template(teacher_id, day, period, status)
+        db.clear_teacher_availability_exception(week_key(week_start), teacher_id, day, period)
+    else:
+        db.set_teacher_availability_exception(week_key(week_start), teacher_id, day, period, status or "clear")
+
+
 def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) -> int:
     """Atanmamış dersleri, çakışma olmayan ve mümkün olduğunca dengeli
     dağılan (aynı grup art arda en fazla `max_consecutive` saat) uygun
@@ -276,6 +325,7 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
     period_count = db.period_count
 
     schedule, pool = get_week_view(db, week_start)
+    unavailable = get_all_unavailable_slots(db, week_start)
 
     groups: dict[tuple, list[BlockView]] = {}
     for block in pool:
@@ -297,7 +347,7 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
             )
             for d in day_order:
                 for p in range(1, period_count + 1):
-                    if find_conflicts(schedule, d, p, block):
+                    if find_conflicts(schedule, d, p, block, unavailable):
                         continue
                     # aynı gruptan art arda kaç saat oluşacağını kontrol et
                     consecutive = 1

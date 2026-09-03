@@ -131,6 +131,81 @@ class MiniScheduleGrid(QTableWidget):
                 self.setCellWidget(period - 1, day, theme.make_multi_cell(blocks, compact=True))
 
 
+class TeacherAvailabilityGrid(QTableWidget):
+    """Bir öğretmenin haftalık müsaitlik durumunu düzenlemek için
+    tıklanabilir ızgara. Zaten ders atanmış hücreler (ders kartı gösterilir)
+    tıklanamaz. Boş hücrelere tıklamak durumu döngüsel değiştirir:
+    boş -> müsait (yeşil) -> müsait değil (kırmızı) -> boş."""
+
+    changed = Signal(int, int, object)  # day, period, yeni durum (None/'available'/'unavailable')
+
+    def __init__(self):
+        super().__init__()
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setShowGrid(False)
+        self._occupied: set[tuple[int, int]] = set()
+        self._state: dict[tuple[int, int], str] = {}
+        self.cellClicked.connect(self._handle_click)
+
+    def render(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], availability: dict[tuple[int, int], str]) -> None:
+        day_names = db.day_names
+        period_count = db.period_count
+        self.setRowCount(period_count)
+        self.setColumnCount(len(day_names))
+        self.setHorizontalHeaderLabels(day_names)
+        self.setVerticalHeaderLabels([f"{p}." for p in range(1, period_count + 1)])
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        self._occupied = set(blocks_by_cell.keys())
+        self._state = dict(availability)
+
+        for period in range(1, period_count + 1):
+            self.setRowHeight(period - 1, 40)
+            for day in range(len(day_names)):
+                cell = (day, period)
+                blocks = blocks_by_cell.get(cell, [])
+                if blocks:
+                    widget = theme.make_multi_cell(blocks, compact=True)
+                else:
+                    widget = self._availability_cell(self._state.get(cell))
+                self.setCellWidget(period - 1, day, widget)
+
+    @staticmethod
+    def _availability_cell(status: str | None) -> QWidget:
+        if status == "available":
+            style = (
+                f"#cellFrame {{ background:{theme.VALID_BG}; "
+                f"border:1.5px solid {theme.VALID_BORDER}; border-radius:6px; }}"
+            )
+        elif status == "unavailable":
+            style = (
+                f"#cellFrame {{ background:{theme.CONFLICT_BG}; "
+                f"border:1.5px solid {theme.CONFLICT_BORDER}; border-radius:6px; }}"
+            )
+        else:
+            style = (
+                f"#cellFrame {{ background:transparent; "
+                f"border:1.5px dashed {theme.BORDER_INPUT}; border-radius:6px; }}"
+            )
+        frame = QWidget()
+        frame.setObjectName("cellFrame")
+        frame.setStyleSheet(style)
+        return frame
+
+    def _handle_click(self, row: int, col: int) -> None:
+        cell = (col, row + 1)  # (day, period)
+        if cell in self._occupied:
+            return
+        order = {None: "available", "available": "unavailable", "unavailable": None}
+        next_status = order[self._state.get(cell)]
+        if next_status is None:
+            self._state.pop(cell, None)
+        else:
+            self._state[cell] = next_status
+        self.setCellWidget(row, col, self._availability_cell(next_status))
+        self.changed.emit(cell[0], cell[1], next_status)
+
+
 class SummaryTable(QTableWidget):
     """Ders tipine göre saat sayısı özeti (ör. Sınıf Dersi: 4, Birebir: 2)."""
 

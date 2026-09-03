@@ -200,6 +200,7 @@ class ScheduleTab(QWidget):
         self._pool: list = []
         self._blocks_by_id: dict[int, object] = {}
         self._row_entities: list[tuple[int, str]] = []
+        self._unavailable_slots: set[tuple[int, int, int]] = set()
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -308,6 +309,7 @@ class ScheduleTab(QWidget):
     # ---------- veri yenileme ----------
     def refresh(self) -> None:
         self._schedule, self._pool = scheduling.get_week_view(self.db, self.navigator.week_start)
+        self._unavailable_slots = scheduling.get_all_unavailable_slots(self.db, self.navigator.week_start)
         self._blocks_by_id = {b.id: b for b in self._pool}
         for blocks in self._schedule.values():
             for b in blocks:
@@ -384,7 +386,7 @@ class ScheduleTab(QWidget):
     def _validate_drop(self, block, entity_id, day: int, period: int) -> bool:
         if not self._row_matches_block(block, entity_id):
             return False
-        return not scheduling.find_conflicts(self._schedule, day, period, block)
+        return not scheduling.find_conflicts(self._schedule, day, period, block, self._unavailable_slots)
 
     def _handle_drop(self, block_id: int, entity_id, day: int, period: int) -> None:
         block = self._blocks_by_id.get(block_id)
@@ -398,7 +400,7 @@ class ScheduleTab(QWidget):
                 "Lütfen kendi satırına bırakın (ya da uygun görünüme geçin).",
             )
             return
-        conflicts = scheduling.find_conflicts(self._schedule, day, period, block)
+        conflicts = scheduling.find_conflicts(self._schedule, day, period, block, self._unavailable_slots)
         if conflicts:
             proceed = QMessageBox.question(
                 self,
