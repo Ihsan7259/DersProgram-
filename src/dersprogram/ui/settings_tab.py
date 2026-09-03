@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..db import Database
+from .. import seed
 
 ALL_DAYS = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
@@ -111,7 +112,35 @@ class SettingsTab(QWidget):
         save_button.setObjectName("primaryButton")
         save_button.clicked.connect(self.save)
         layout.addWidget(save_button)
+
+        layout.addWidget(_divider())
+
+        # ---------- örnek veri ----------
+        layout.addWidget(_section_label("Örnek Veri"))
+        layout.addWidget(QLabel(
+            "Programı denemek için tüm sekmelere (öğretmen, öğrenci, sınıf, ders, "
+            "derslik) birkaç örnek kayıt ve haftalık programa birkaç örnek ders "
+            "ekler. Mevcut verilerinizi silmez, üzerine ekler."
+        ))
+        seed_button = QPushButton("Örnek Veri Ekle")
+        seed_button.clicked.connect(self.handle_seed_demo_data)
+        layout.addWidget(seed_button)
+
         layout.addStretch()
+
+    def handle_seed_demo_data(self) -> None:
+        confirm = QMessageBox.question(
+            self,
+            "Örnek Veri Ekle",
+            "Tüm sekmelere birkaç örnek kayıt eklenecek (mevcut verileriniz silinmez). "
+            "Devam edilsin mi?",
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        seed.seed_demo_data(self.db)
+        QMessageBox.information(self, "Tamamlandı", "Örnek veriler eklendi.")
+        if self.on_change:
+            self.on_change()
 
     @staticmethod
     def _parse_date(value: str | None) -> QDate | None:

@@ -102,10 +102,13 @@ class MainWindow(QMainWindow):
         self.teachers_tab.refresh()
         self.students_tab.refresh()
         self.classes_tab.refresh()
+        self.subjects_tab.refresh()
+        self.rooms_tab.refresh()
         self.payments_tab.refresh_students()
 
     def _on_settings_change(self) -> None:
-        self.schedule_tab.refresh()
-        self.teachers_tab.refresh_detail()
-        self.students_tab.refresh_detail()
-        self.classes_tab.refresh_detail()
+        # Ayarlar sekmesi hem gün/saat değişikliklerinde hem de örnek veri
+        # eklendiğinde bu geri çağırımı tetikler; ikinci durumda yeni
+        # öğretmen/öğrenci/sınıf/ders/derslik kayıtları da olabileceğinden
+        # kapsamlı tazeleme yapılır.
+        self._on_reference_change()

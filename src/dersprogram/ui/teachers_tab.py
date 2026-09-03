@@ -79,8 +79,21 @@ class TeachersTab(QWidget):
         self.clear_button.clicked.connect(self.clear_form)
         self.table_widget.itemSelectionChanged.connect(self.handle_selection)
         self.navigator.week_changed.connect(lambda _w: self.refresh_detail())
+        self.name_edit.returnPressed.connect(self._handle_return_pressed)
+        self.subject_area_edit.returnPressed.connect(self._handle_return_pressed)
 
         self.refresh()
+
+    def _handle_return_pressed(self) -> None:
+        self.handle_update() if self.selected_id is not None else self.handle_add()
+
+    def _select_row_by_id(self, row_id: int) -> None:
+        for r in range(self.table_widget.rowCount()):
+            item = self.table_widget.item(r, 0)
+            if item is not None and item.data(Qt.UserRole) == row_id:
+                self.table_widget.selectRow(r)
+                self.table_widget.scrollToItem(item)
+                break
 
     def refresh(self) -> None:
         rows = self.db.list_teachers()
@@ -132,9 +145,10 @@ class TeachersTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğretmen adı boş olamaz.")
             return
-        self.db.add_teacher(name, self.subject_area_edit.text().strip())
+        new_id = self.db.add_teacher(name, self.subject_area_edit.text().strip())
         self.clear_form()
         self.refresh()
+        self._select_row_by_id(new_id)
         if self.on_change:
             self.on_change()
 

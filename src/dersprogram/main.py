@@ -6,6 +6,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 from .db import Database
+from . import seed
 from .ui import theme
 from .ui.main_window import MainWindow
 
@@ -17,6 +18,8 @@ def main() -> int:
     app.setFont(QFont(theme.FONT_BODY))
 
     db = Database()
+    if seed.is_empty(db):
+        seed.seed_demo_data(db)
 
     # Fusion stili + kendi paletimiz: Windows'un açık/koyu sistem temasından
     # bağımsız, her zaman tutarlı ve okunaklı bir görünüm sağlar (aksi halde
