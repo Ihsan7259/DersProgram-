@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QRadioButton,
     QFrame,
+    QStyle,
 )
 
 from ..db import Database, LESSON_TYPE_LABELS
@@ -255,31 +256,31 @@ class AvailabilityGrid(QTableWidget):
         self._apply_grid_sizing()
 
     def _apply_grid_sizing(self) -> None:
-        """Altta boşluk bırakmadan mevcut tüm dikey alanı kullanır ve her
-        hücreyi ince-uzun bir şerit yerine ~3:2 (genişlik:yükseklik) oranına
-        yakın bir blok yapmaya çalışır: önce satır yüksekliğini dikey alanı
-        dolduracak şekilde hesaplar, sonra sütun genişliğini bu orana göre
-        belirler - hedef genişlik mevcut alana sığıyorsa sütunlar o
-        genişlikte sabitlenir (kutular kare/dikdörtgene yakın kalır),
-        sığmıyorsa (çok az satır varsa) alanı doldurmak için gerildiği
-        gibi kalır."""
-        viewport_h = self.viewport().height()
+        """Yatay alan hep dolu kalsın diye sütun genişliği önce tüm
+        genişliği kullanacak şekilde hesaplanır, satır yüksekliği de bu
+        genişliğe göre ~3:2 (genişlik:yükseklik) oranında türetilir.
+        Saat sayısı çoksa (hücreler yükseklikte sığmıyorsa) oranı bozup
+        sıkıştırmak yerine ızgara dikey kaydırılabilir bırakılır - kalan
+        saatler aşağıda, kaydırarak görülür."""
         viewport_w = self.viewport().width()
-        if viewport_h <= 0 or viewport_w <= 0 or self.rowCount() == 0 or self.columnCount() == 0:
+        if viewport_w <= 0 or self.rowCount() == 0 or self.columnCount() == 0:
             return
-        row_height = max(28, viewport_h // self._period_count)
-        for row in range(self.rowCount()):
-            self.setRowHeight(row, row_height)
+        # Bir dikey kaydırma çubuğu çıkarsa viewport genişliği azalır, bu da
+        # sütunları yeniden hesaplatıp çubuğun görünüp kaybolmasını
+        # tetikleyebilir (salınım) - bunu önlemek için çubuk payını en
+        # baştan ayırıyoruz.
+        scrollbar_w = self.style().pixelMetric(QStyle.PM_ScrollBarExtent)
+        usable_w = max(viewport_w - scrollbar_w, viewport_w // 2)
+        col_width = max(46, usable_w // self._day_count)
 
         header = self.horizontalHeader()
-        target_col_width = int(row_height * 1.5)
-        full_stretch_width = viewport_w // self._day_count
-        if target_col_width < full_stretch_width:
-            header.setSectionResizeMode(QHeaderView.Fixed)
-            for col in range(self.columnCount()):
-                self.setColumnWidth(col, target_col_width)
-        else:
-            header.setSectionResizeMode(QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.Fixed)
+        for col in range(self.columnCount()):
+            self.setColumnWidth(col, col_width)
+
+        row_height = max(28, int(col_width / 1.5))
+        for row in range(self.rowCount()):
+            self.setRowHeight(row, row_height)
 
     @staticmethod
     def _availability_cell(status: str | None) -> QWidget:
