@@ -207,6 +207,8 @@ class AvailabilityGrid(QTableWidget):
         self._row_mode: str | None = None
         self._day_header_state: dict[int, str | None] = {}
         self._period_header_state: dict[int, str | None] = {}
+        self._day_count = 1
+        self._period_count = 1
         self.cellClicked.connect(self._handle_click)
         self.horizontalHeader().setSectionsClickable(True)
         self.verticalHeader().setSectionsClickable(True)
@@ -223,11 +225,12 @@ class AvailabilityGrid(QTableWidget):
         self._row_mode = row_mode
         day_names = db.day_names
         period_count = db.period_count
+        self._day_count = max(len(day_names), 1)
+        self._period_count = max(period_count, 1)
         self.setRowCount(period_count)
         self.setColumnCount(len(day_names))
         self.setHorizontalHeaderLabels(day_names)
         self.setVerticalHeaderLabels(_period_header_labels(db, period_count))
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.horizontalHeader().setMinimumSectionSize(46)
         self.verticalHeader().setMaximumWidth(44)
 
@@ -236,9 +239,7 @@ class AvailabilityGrid(QTableWidget):
         self._day_header_state = {}
         self._period_header_state = {}
 
-        row_height = max(28, min(52, 340 // max(period_count, 1)))
         for period in range(1, period_count + 1):
-            self.setRowHeight(period - 1, row_height)
             for day in range(len(day_names)):
                 cell = (day, period)
                 blocks = blocks_by_cell.get(cell, [])
@@ -247,6 +248,38 @@ class AvailabilityGrid(QTableWidget):
                 else:
                     widget = self._availability_cell(self._state.get(cell))
                 _set_cell_widget(self, period - 1, day, widget)
+        self._apply_grid_sizing()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_grid_sizing()
+
+    def _apply_grid_sizing(self) -> None:
+        """Altta boşluk bırakmadan mevcut tüm dikey alanı kullanır ve her
+        hücreyi ince-uzun bir şerit yerine ~3:2 (genişlik:yükseklik) oranına
+        yakın bir blok yapmaya çalışır: önce satır yüksekliğini dikey alanı
+        dolduracak şekilde hesaplar, sonra sütun genişliğini bu orana göre
+        belirler - hedef genişlik mevcut alana sığıyorsa sütunlar o
+        genişlikte sabitlenir (kutular kare/dikdörtgene yakın kalır),
+        sığmıyorsa (çok az satır varsa) alanı doldurmak için gerildiği
+        gibi kalır."""
+        viewport_h = self.viewport().height()
+        viewport_w = self.viewport().width()
+        if viewport_h <= 0 or viewport_w <= 0 or self.rowCount() == 0 or self.columnCount() == 0:
+            return
+        row_height = max(28, viewport_h // self._period_count)
+        for row in range(self.rowCount()):
+            self.setRowHeight(row, row_height)
+
+        header = self.horizontalHeader()
+        target_col_width = int(row_height * 1.5)
+        full_stretch_width = viewport_w // self._day_count
+        if target_col_width < full_stretch_width:
+            header.setSectionResizeMode(QHeaderView.Fixed)
+            for col in range(self.columnCount()):
+                self.setColumnWidth(col, target_col_width)
+        else:
+            header.setSectionResizeMode(QHeaderView.Stretch)
 
     @staticmethod
     def _availability_cell(status: str | None) -> QWidget:
