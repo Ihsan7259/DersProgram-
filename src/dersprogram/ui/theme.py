@@ -3,6 +3,11 @@
 Renk paleti, tasarım taslağındaki (Claude Design ile hazırlanan mockup)
 oklch değerlerinden hex'e çevrilerek buraya taşındı; tek doğru kaynak
 burasıdır - başka yerde renk kodu hardcode edilmemeli.
+
+Açık/Koyu tema: nötr tonlar (arkaplan/yüzey/kenarlık/metin) `apply_theme()`
+ile değişir; vurgu renkleri (accent, amber, ders tipi renkleri, çakışma/
+uygun renkleri, kenar çubuğu) her iki temada da sabit kalır - bunlar zaten
+kendi arkaplanlarını taşıyor, uygulama temasından etkilenmeleri gerekmiyor.
 """
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QFontDatabase, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFontDatabase, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 
@@ -26,7 +31,60 @@ from ..db import (
 FONT_HEADING = "Manrope"
 FONT_BODY = "Work Sans"
 
-# ---------- renkler ----------
+MODE = "light"
+
+# ---------- temaya göre değişen nötr tonlar ----------
+_LIGHT = {
+    "APP_BG": "#f7f5f1",
+    "SURFACE": "#fcfcfa",
+    "BORDER_SUBTLE": "#dee1e7",
+    "BORDER_INPUT": "#d4d8dd",
+    "DIVIDER": "#e9e8e3",
+    "INK": "#10161f",
+    "INK_MUTED_30": "#282e38",
+    "INK_MUTED_38": "#3c434d",
+    "INK_MUTED_42": "#434e5e",
+    "INK_MUTED_52": "#626a75",
+    "INK_MUTED_58": "#737b86",
+    "INK_MUTED_72": "#a1a5aa",
+    "ACCENT_SOFT_BG": "#d2eef0",
+    "ACCENT_SOFT_TEXT": "#005157",
+}
+
+_DARK = {
+    "APP_BG": "#141b24",
+    "SURFACE": "#1c2530",
+    "BORDER_SUBTLE": "#2c3541",
+    "BORDER_INPUT": "#3a4552",
+    "DIVIDER": "#26303a",
+    "INK": "#eef1f4",
+    "INK_MUTED_30": "#e4e7ea",
+    "INK_MUTED_38": "#cdd2d8",
+    "INK_MUTED_42": "#c0c6cc",
+    "INK_MUTED_52": "#9aa1a9",
+    "INK_MUTED_58": "#868e97",
+    "INK_MUTED_72": "#5b636c",
+    "ACCENT_SOFT_BG": "#0d3a3d",
+    "ACCENT_SOFT_TEXT": "#7fd8de",
+}
+
+# başlangıç değerleri (açık tema) - apply_theme() bunları değiştirir
+APP_BG = _LIGHT["APP_BG"]
+SURFACE = _LIGHT["SURFACE"]
+BORDER_SUBTLE = _LIGHT["BORDER_SUBTLE"]
+BORDER_INPUT = _LIGHT["BORDER_INPUT"]
+DIVIDER = _LIGHT["DIVIDER"]
+INK = _LIGHT["INK"]
+INK_MUTED_30 = _LIGHT["INK_MUTED_30"]
+INK_MUTED_38 = _LIGHT["INK_MUTED_38"]
+INK_MUTED_42 = _LIGHT["INK_MUTED_42"]
+INK_MUTED_52 = _LIGHT["INK_MUTED_52"]
+INK_MUTED_58 = _LIGHT["INK_MUTED_58"]
+INK_MUTED_72 = _LIGHT["INK_MUTED_72"]
+ACCENT_SOFT_BG = _LIGHT["ACCENT_SOFT_BG"]
+ACCENT_SOFT_TEXT = _LIGHT["ACCENT_SOFT_TEXT"]
+
+# ---------- her iki temada da sabit kalan renkler ----------
 SIDEBAR_BG = "#101925"
 SIDEBAR_ACTIVE_BG = "#003639"
 SIDEBAR_TEXT_MUTED = "#9199a5"
@@ -34,24 +92,8 @@ SIDEBAR_TEXT_ACTIVE = "#f8f5ee"
 SIDEBAR_BORDER = "#282e38"
 SIDEBAR_AVATAR_BG = "#394353"
 
-APP_BG = "#f7f5f1"
-SURFACE = "#fcfcfa"
-BORDER_SUBTLE = "#dee1e7"
-BORDER_INPUT = "#d4d8dd"
-DIVIDER = "#e9e8e3"
-
-INK = "#10161f"
-INK_MUTED_30 = "#282e38"
-INK_MUTED_38 = "#3c434d"
-INK_MUTED_42 = "#434e5e"
-INK_MUTED_52 = "#626a75"
-INK_MUTED_58 = "#737b86"
-INK_MUTED_72 = "#a1a5aa"
-
 ACCENT = "#00848b"
 ACCENT_HOVER = "#00666d"
-ACCENT_SOFT_BG = "#d2eef0"
-ACCENT_SOFT_TEXT = "#005157"
 
 AMBER = "#e1901f"
 AMBER_HOVER = "#c97e14"
@@ -65,7 +107,8 @@ VALID_BORDER = "#0e9254"
 VALID_BG = "#d8f8e2"
 VALID_TEXT = "#006933"
 
-# tip -> (arkaplan, nokta rengi)
+# tip -> (arkaplan, nokta rengi) - pastel kartlar her iki temada da aynı
+# (koyu arkaplan üzerinde açık renkli rozet olarak kalması okunurluğu korur)
 LESSON_TYPE_COLORS: dict[str, tuple[str, str]] = {
     TYPE_CLASS: ("#d7eaff", "#1f74bf"),
     TYPE_ONE_ON_ONE: ("#ede2fb", "#865eb1"),
@@ -73,6 +116,8 @@ LESSON_TYPE_COLORS: dict[str, tuple[str, str]] = {
     TYPE_DEPARTMENT: ("#d0f1e1", "#008b61"),
     TYPE_PROBLEM_SOLVING: ("#ffdedb", "#bf534e"),
 }
+LESSON_TYPE_TEXT = "#10161f"  # pastel kart üzerindeki metin - temadan bağımsız koyu
+LESSON_TYPE_TEXT_MUTED = "#4b5768"  # pastel kart üzerindeki ikincil metin
 
 NAV_ICONS: dict[str, str] = {
     "ana-program": "M4 5h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M8 3v4 M16 3v4 M3 10h18",
@@ -92,6 +137,60 @@ NAV_ICONS: dict[str, str] = {
 }
 
 
+def apply_theme(mode: str) -> None:
+    """Nötr renk tonlarını açık/koyu temaya göre değiştirir. Zaten
+    oluşturulmuş özel renkli widget'lar (ders kartları, ızgara hücreleri)
+    otomatik güncellenmez - bunları çağıran taraf yeniden çizmeli
+    (bkz. MainWindow.apply_theme_change)."""
+    global MODE
+    global APP_BG, SURFACE, BORDER_SUBTLE, BORDER_INPUT, DIVIDER
+    global INK, INK_MUTED_30, INK_MUTED_38, INK_MUTED_42, INK_MUTED_52, INK_MUTED_58, INK_MUTED_72
+    global ACCENT_SOFT_BG, ACCENT_SOFT_TEXT
+
+    MODE = "dark" if mode == "dark" else "light"
+    palette = _DARK if MODE == "dark" else _LIGHT
+
+    APP_BG = palette["APP_BG"]
+    SURFACE = palette["SURFACE"]
+    BORDER_SUBTLE = palette["BORDER_SUBTLE"]
+    BORDER_INPUT = palette["BORDER_INPUT"]
+    DIVIDER = palette["DIVIDER"]
+    INK = palette["INK"]
+    INK_MUTED_30 = palette["INK_MUTED_30"]
+    INK_MUTED_38 = palette["INK_MUTED_38"]
+    INK_MUTED_42 = palette["INK_MUTED_42"]
+    INK_MUTED_52 = palette["INK_MUTED_52"]
+    INK_MUTED_58 = palette["INK_MUTED_58"]
+    INK_MUTED_72 = palette["INK_MUTED_72"]
+    ACCENT_SOFT_BG = palette["ACCENT_SOFT_BG"]
+    ACCENT_SOFT_TEXT = palette["ACCENT_SOFT_TEXT"]
+
+
+def build_palette(mode: str) -> QPalette:
+    """Qt'nin kendi (stillenmemiş) bileşenleri için de - onay kutusu,
+    açılır liste menüsü, mesaj kutusu gibi - tutarlı bir renk seti.
+    Fusion stiliyle birlikte kullanılır; Windows'un koyu/açık temasından
+    bağımsız, her zaman öngörülebilir bir görünüm sağlar."""
+    colors = _DARK if mode == "dark" else _LIGHT
+    pal = QPalette()
+    pal.setColor(QPalette.Window, QColor(colors["APP_BG"]))
+    pal.setColor(QPalette.WindowText, QColor(colors["INK"]))
+    pal.setColor(QPalette.Base, QColor(colors["SURFACE"]))
+    pal.setColor(QPalette.AlternateBase, QColor(colors["APP_BG"]))
+    pal.setColor(QPalette.Text, QColor(colors["INK"]))
+    pal.setColor(QPalette.Button, QColor(colors["SURFACE"]))
+    pal.setColor(QPalette.ButtonText, QColor(colors["INK"]))
+    pal.setColor(QPalette.ToolTipBase, QColor(colors["SURFACE"]))
+    pal.setColor(QPalette.ToolTipText, QColor(colors["INK"]))
+    pal.setColor(QPalette.Highlight, QColor(ACCENT))
+    pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    pal.setColor(QPalette.PlaceholderText, QColor(colors["INK_MUTED_58"]))
+    pal.setColor(QPalette.Disabled, QPalette.Text, QColor(colors["INK_MUTED_72"]))
+    pal.setColor(QPalette.Disabled, QPalette.WindowText, QColor(colors["INK_MUTED_72"]))
+    pal.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(colors["INK_MUTED_72"]))
+    return pal
+
+
 def _assets_dir() -> Path:
     """PyInstaller ile tek dosya .exe haline getirildiğinde varlıklar
     sys._MEIPASS altına açılır; geliştirme ortamında ise dosya sisteminde
@@ -108,7 +207,8 @@ def load_fonts() -> None:
     QFontDatabase.addApplicationFont(str(fonts_dir / "WorkSans.ttf"))
 
 
-def icon(path_d: str, color: str = INK_MUTED_58, size: int = 18) -> QIcon:
+def icon(path_d: str, color: str | None = None, size: int = 18) -> QIcon:
+    color = color or INK_MUTED_58
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
         f'stroke="{color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
@@ -152,7 +252,7 @@ def make_lesson_card(block, compact: bool = False) -> QWidget:
         head.addWidget(dot_label)
         type_label = QLabel(lesson_type_label(block.type).upper())
         type_label.setStyleSheet(
-            f"font-size: 7.3pt; font-weight: 700; color: {INK_MUTED_42}; letter-spacing: 0.4px; background: transparent;"
+            f"font-size: 7.3pt; font-weight: 700; color: {LESSON_TYPE_TEXT_MUTED}; letter-spacing: 0.4px; background: transparent;"
         )
         head.addWidget(type_label)
         head.addStretch()
@@ -162,20 +262,20 @@ def make_lesson_card(block, compact: bool = False) -> QWidget:
     primary_label.setWordWrap(True)
     primary_label.setStyleSheet(
         f"font-family: '{FONT_HEADING}'; font-weight: 700; "
-        f"font-size: {'7.8pt' if compact else '9.3pt'}; color: {INK}; background: transparent;"
+        f"font-size: {'7.8pt' if compact else '9.3pt'}; color: {LESSON_TYPE_TEXT}; background: transparent;"
     )
     layout.addWidget(primary_label)
 
     if secondary and not compact:
         secondary_label = QLabel(secondary)
         secondary_label.setWordWrap(True)
-        secondary_label.setStyleSheet(f"font-size: 8.2pt; color: {INK_MUTED_38}; background: transparent;")
+        secondary_label.setStyleSheet(f"font-size: 8.2pt; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;")
         layout.addWidget(secondary_label)
 
     if tertiary and not compact:
         tertiary_label = QLabel(tertiary)
         tertiary_label.setWordWrap(True)
-        tertiary_label.setStyleSheet(f"font-size: 7.8pt; color: {INK_MUTED_52}; background: transparent;")
+        tertiary_label.setStyleSheet(f"font-size: 7.8pt; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;")
         layout.addWidget(tertiary_label)
 
     layout.addStretch()
@@ -192,19 +292,19 @@ def make_dense_chip(line1: str, line2: str, bg: str) -> QWidget:
     """Kurum geneli ızgara (satır=sınıf/öğretmen) için çok kompakt hücre kartı."""
     card = QWidget()
     card.setObjectName("cellFrame")
-    card.setStyleSheet(f"#cellFrame {{ background:{bg}; border-radius:5px; }}")
+    card.setStyleSheet(f"#cellFrame {{ background:{bg}; border-radius:5px; border: 1px solid {BORDER_SUBTLE}; }}")
     layout = QVBoxLayout(card)
     layout.setContentsMargins(2, 1, 2, 1)
     layout.setSpacing(0)
     l1 = QLabel(_elide(line1, 5))
     l1.setToolTip(f"{line1}\n{line2}" if line2 else line1)
-    l1.setStyleSheet(f"font-weight:700; font-size:6.9pt; color:{INK}; background:transparent;")
+    l1.setStyleSheet(f"font-weight:700; font-size:6.9pt; color:{LESSON_TYPE_TEXT}; background:transparent;")
     l1.setAlignment(Qt.AlignCenter)
     layout.addWidget(l1)
     if line2:
         l2 = QLabel(_elide(line2, 6))
         l2.setToolTip(f"{line1}\n{line2}")
-        l2.setStyleSheet(f"font-size:6.3pt; color:{INK_MUTED_52}; background:transparent;")
+        l2.setStyleSheet(f"font-size:6.3pt; color:{LESSON_TYPE_TEXT_MUTED}; background:transparent;")
         l2.setAlignment(Qt.AlignCenter)
         layout.addWidget(l2)
     return card
@@ -219,7 +319,7 @@ def make_day_banner(day_name: str) -> QWidget:
     layout.setContentsMargins(10, 0, 10, 0)
     label = QLabel(day_name)
     label.setStyleSheet(
-        f"font-family:'{FONT_HEADING}'; font-weight:700; font-size:8.6pt; color:{ACCENT_HOVER}; background:transparent;"
+        "font-family:'" + FONT_HEADING + "'; font-weight:700; font-size:8.6pt; color:#7fd8de; background:transparent;"
     )
     layout.addWidget(label)
     return band
@@ -228,7 +328,7 @@ def make_day_banner(day_name: str) -> QWidget:
 def make_dense_empty() -> QWidget:
     frame = QWidget()
     frame.setObjectName("cellFrame")
-    frame.setStyleSheet(f"#cellFrame {{ background:{SURFACE}; border-radius:5px; }}")
+    frame.setStyleSheet(f"#cellFrame {{ background:{APP_BG}; border-radius:5px; border: 1px solid {BORDER_SUBTLE}; }}")
     return frame
 
 
@@ -279,11 +379,17 @@ def stylesheet() -> str:
         font-family: '{FONT_HEADING}';
         font-weight: 800;
         font-size: 15.5pt;
-        color: #18202b;
+        color: {INK};
     }}
     QLabel#pageSubtitle {{
         color: {INK_MUTED_52};
         font-size: 9.5pt;
+    }}
+    QToolTip {{
+        background: {SURFACE};
+        color: {INK};
+        border: 1px solid {BORDER_SUBTLE};
+        padding: 3px 6px;
     }}
     QPushButton {{
         background: {SURFACE};
@@ -291,6 +397,7 @@ def stylesheet() -> str:
         border-radius: 8px;
         padding: 6px 14px;
         font-weight: 600;
+        color: {INK};
     }}
     QPushButton:hover {{
         background: {APP_BG};
@@ -325,7 +432,7 @@ def stylesheet() -> str:
     QPushButton#modeButton:checked {{
         background: {SIDEBAR_ACTIVE_BG};
         border: 1px solid {SIDEBAR_ACTIVE_BG};
-        color: {ACCENT_HOVER};
+        color: #7fd8de;
     }}
     QPushButton#iconButton {{
         padding: 4px;
@@ -336,10 +443,24 @@ def stylesheet() -> str:
         border: 1px solid {BORDER_INPUT};
         border-radius: 8px;
         padding: 5px 9px;
+        color: {INK};
         selection-background-color: {ACCENT_SOFT_BG};
+        selection-color: {INK};
     }}
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus {{
         border: 1.5px solid {ACCENT};
+    }}
+    QComboBox QAbstractItemView {{
+        background: {SURFACE};
+        color: {INK};
+        border: 1px solid {BORDER_SUBTLE};
+        selection-background-color: {ACCENT_SOFT_BG};
+        selection-color: {INK};
+        outline: none;
+    }}
+    QCheckBox, QRadioButton {{
+        color: {INK};
+        spacing: 7px;
     }}
     QTableWidget, QListWidget {{
         background: {SURFACE};
@@ -347,6 +468,7 @@ def stylesheet() -> str:
         border-radius: 12px;
         gridline-color: {DIVIDER};
         outline: none;
+        color: {INK};
     }}
     QTableWidget::item, QListWidget::item {{
         padding: 3px;
@@ -386,5 +508,11 @@ def stylesheet() -> str:
     }}
     QScrollBar::handle:vertical {{
         background: {BORDER_INPUT}; border-radius: 5px; min-height: 24px;
+    }}
+    QMessageBox {{
+        background: {SURFACE};
+    }}
+    QDialog {{
+        background: {APP_BG};
     }}
     """

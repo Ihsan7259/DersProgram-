@@ -17,6 +17,16 @@ def main() -> int:
     app.setFont(QFont(theme.FONT_BODY))
 
     db = Database()
+
+    # Fusion stili + kendi paletimiz: Windows'un açık/koyu sistem temasından
+    # bağımsız, her zaman tutarlı ve okunaklı bir görünüm sağlar (aksi halde
+    # onay kutusu/menü gibi bazı bileşenler sistem temasını miras alıp
+    # metinlerin okunmaz hale gelmesine yol açabiliyordu).
+    mode = db.theme
+    theme.apply_theme(mode)
+    app.setStyle("Fusion")
+    app.setPalette(theme.build_palette(mode))
+
     window = MainWindow(db)
     window.show()
 

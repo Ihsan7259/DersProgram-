@@ -33,9 +33,6 @@ class ClassesTab(QWidget):
         form_row.addWidget(QLabel("Sınıf Adı:"))
         self.name_edit = QLineEdit()
         form_row.addWidget(self.name_edit)
-        form_row.addWidget(QLabel("Not:"))
-        self.note_edit = QLineEdit()
-        form_row.addWidget(self.note_edit)
         layout.addLayout(form_row)
 
         button_row = QHBoxLayout()
@@ -49,8 +46,8 @@ class ClassesTab(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
 
-        self.table_widget = QTableWidget(0, 2)
-        self.table_widget.setHorizontalHeaderLabels(["Ad", "Not"])
+        self.table_widget = QTableWidget(0, 1)
+        self.table_widget.setHorizontalHeaderLabels(["Ad"])
         self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -88,7 +85,6 @@ class ClassesTab(QWidget):
             item_name = QTableWidgetItem(row["name"])
             item_name.setData(Qt.UserRole, row["id"])
             self.table_widget.setItem(r, 0, item_name)
-            self.table_widget.setItem(r, 1, QTableWidgetItem(row["note"] or ""))
         self.refresh_detail()
 
     def refresh_detail(self) -> None:
@@ -116,13 +112,11 @@ class ClassesTab(QWidget):
         name_item = self.table_widget.item(row, 0)
         self.selected_id = name_item.data(Qt.UserRole)
         self.name_edit.setText(name_item.text())
-        self.note_edit.setText(self.table_widget.item(row, 1).text())
         self.refresh_detail()
 
     def clear_form(self) -> None:
         self.selected_id = None
         self.name_edit.clear()
-        self.note_edit.clear()
         self.table_widget.clearSelection()
         self.refresh_detail()
 
@@ -131,7 +125,7 @@ class ClassesTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Sınıf adı boş olamaz.")
             return
-        self.db.add_row("class_groups", name, self.note_edit.text().strip())
+        self.db.add_row("class_groups", name)
         self.clear_form()
         self.refresh()
         if self.on_change:
@@ -145,7 +139,7 @@ class ClassesTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Sınıf adı boş olamaz.")
             return
-        self.db.update_row("class_groups", self.selected_id, name, self.note_edit.text().strip())
+        self.db.update_row("class_groups", self.selected_id, name)
         self.clear_form()
         self.refresh()
         if self.on_change:

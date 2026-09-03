@@ -154,16 +154,24 @@ class SummaryTable(QTableWidget):
 
 class ScopeDialog(QDialog):
     """Bir yerleştirme/temizleme işleminin sadece bu hafta mı yoksa
-    kalıcı (şablon) mı olacağını sorar."""
+    kalıcı (şablon - dönem boyunca) mı olacağını sorar."""
 
-    def __init__(self, parent=None, action_desc: str = "Bu değişiklik"):
+    def __init__(self, db: Database, parent=None, action_desc: str = "Bu değişiklik"):
         super().__init__(parent)
         self.setWindowTitle("Kapsam Seç")
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"{action_desc} hangi haftalar için geçerli olsun?"))
 
+        always_label = "Her hafta (kalıcı program)"
+        term_start = db.term_start
+        term_end = db.term_end
+        if term_start and term_end:
+            start_txt = _dt.date.fromisoformat(term_start).strftime("%d.%m.%Y")
+            end_txt = _dt.date.fromisoformat(term_end).strftime("%d.%m.%Y")
+            always_label = f"Bu dönem boyunca ({start_txt} – {end_txt})"
+
         self.week_only = QRadioButton("Sadece bu hafta")
-        self.always = QRadioButton("Her hafta (kalıcı program)")
+        self.always = QRadioButton(always_label)
         self.always.setChecked(True)
         layout.addWidget(self.always)
         layout.addWidget(self.week_only)

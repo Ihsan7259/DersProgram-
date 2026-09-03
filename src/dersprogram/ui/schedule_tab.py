@@ -93,13 +93,20 @@ class MainGrid(QTableWidget):
 
     def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request):
         super().__init__()
+        self.setObjectName("mainGrid")
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DropOnly)
         self.setShowGrid(False)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.horizontalHeader().setMinimumSectionSize(30)
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        header.setMinimumSectionSize(34)
+        header.setMinimumHeight(36)
+        header.setDefaultAlignment(Qt.AlignCenter)
+        self.setStyleSheet(
+            "#mainGrid QHeaderView::section { font-size: 7.6pt; padding: 2px 0; }"
+        )
         self._get_block_by_id = get_block_by_id
         self._validate_drop = validate_drop
         self._on_drop = on_drop
@@ -402,7 +409,7 @@ class ScheduleTab(QWidget):
             if proceed != QMessageBox.Yes:
                 return
 
-        dialog = ScopeDialog(self, f"'{block.pool_label()}' dersini yerleştirme")
+        dialog = ScopeDialog(self.db, self, f"'{block.pool_label()}' dersini yerleştirme")
         if dialog.exec() != ScopeDialog.Accepted:
             return
         scheduling.place_block(self.db, self.navigator.week_start, block_id, day, period, dialog.scope())
@@ -413,7 +420,7 @@ class ScheduleTab(QWidget):
         if not blocks:
             return
         chosen = blocks[0]
-        dialog = ScopeDialog(self, f"'{chosen.pool_label()}' dersini kaldırma")
+        dialog = ScopeDialog(self.db, self, f"'{chosen.pool_label()}' dersini kaldırma")
         if dialog.exec() != ScopeDialog.Accepted:
             return
         scheduling.clear_block(self.db, self.navigator.week_start, chosen.id, dialog.scope())

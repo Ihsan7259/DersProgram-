@@ -109,6 +109,9 @@ CREATE TABLE IF NOT EXISTS payments (
 DEFAULT_SETTINGS = {
     "day_names": ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma"],
     "period_count": 8,
+    "theme": "light",
+    "term_start": None,
+    "term_end": None,
 }
 
 
@@ -160,6 +163,18 @@ class Database:
     @property
     def period_count(self) -> int:
         return self.get_setting("period_count")
+
+    @property
+    def theme(self) -> str:
+        return self.get_setting("theme") or "light"
+
+    @property
+    def term_start(self) -> str | None:
+        return self.get_setting("term_start")
+
+    @property
+    def term_end(self) -> str | None:
+        return self.get_setting("term_end")
 
     # ---------- basit tablolar (ders, sınıf, derslik) ----------
     def list_rows(self, table: str) -> list[sqlite3.Row]:
