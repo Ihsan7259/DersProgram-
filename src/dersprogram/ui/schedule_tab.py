@@ -12,7 +12,7 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QDrag
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -59,6 +59,12 @@ class PoolList(QListWidget):
         self.setResizeMode(QListWidget.Adjust)
         self.setSpacing(6)
         self.setStyleSheet(f"QListWidget {{ background:{theme.APP_BG}; border:none; }}")
+        # Sürüklerken imleçle birlikte gösterilecek küçük önizleme
+        # görüntüsünü üreten fonksiyon - ScheduleTab tarafından verilir
+        # (Ana Program'daki hücre kartıyla aynı boyut/görünümde olsun diye,
+        # bkz. ScheduleTab._render_drag_pixmap). Yoksa Qt'nin varsayılanı
+        # olan, liste öğesinin tam boyutundaki kocaman kutuyu sürükler.
+        self.drag_pixmap_provider = None
 
     def mimeData(self, items):
         md = super().mimeData(items)
@@ -66,6 +72,22 @@ class PoolList(QListWidget):
             block_id = items[0].data(Qt.UserRole)
             md.setText(f"{MIME_PREFIX}{block_id}")
         return md
+
+    def startDrag(self, supportedActions):
+        item = self.currentItem()
+        if item is None or self.drag_pixmap_provider is None:
+            super().startDrag(supportedActions)
+            return
+        block_id = item.data(Qt.UserRole)
+        pixmap = self.drag_pixmap_provider(block_id)
+        if pixmap is None or pixmap.isNull():
+            super().startDrag(supportedActions)
+            return
+        drag = QDrag(self)
+        drag.setMimeData(self.mimeData([item]))
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(pixmap.rect().center())
+        drag.exec(supportedActions)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
@@ -125,7 +147,10 @@ class MainGrid(QTableWidget):
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DropOnly)
-        self.setShowGrid(False)
+        # Hücreler arasındaki çizgi artık her hücrenin kendi kenarlığı
+        # yerine ızgaranın tek gridline'ı ile çiziliyor - çift kenarlıktan
+        # doğan görünür boşluk kalmıyor, hücreler tam bitişik görünüyor.
+        self.setShowGrid(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         header = self.horizontalHeader()
         header.setObjectName("mainGridHHeader")
@@ -215,6 +240,7 @@ class MainGrid(QTableWidget):
         self.setStyleSheet(
             f"#mainGridHHeader::section {{ font-size: {font_pt:.1f}pt; font-weight:700; padding: {padding}px 0; }}"
             f"#mainGridVHeader::section {{ font-size: {row_font_pt:.1f}pt; font-weight:700; padding: 4px 10px; }}"
+            f"#mainGrid {{ gridline-color: {theme.BORDER_SUBTLE}; border:none; }}"
         )
         self._apply_header_labels(per_column)
         for row in range(self.rowCount()):
@@ -483,6 +509,7 @@ class ScheduleTab(QWidget):
         self.hint_label.setStyleSheet(f"font-size:8.3pt; color:{theme.INK_MUTED_58};")
         pool_layout.addWidget(self.hint_label)
         self.pool_list = PoolList()
+        self.pool_list.drag_pixmap_provider = self._render_drag_pixmap
         pool_layout.addWidget(self.pool_list)
         splitter.addWidget(pool_container)
         splitter.setSizes([520, 190])
@@ -513,6 +540,26 @@ class ScheduleTab(QWidget):
         # widget'lardan görsel kalıntı bırakabiliyor.
         self._render_grid()
         self._handle_pool_selection_changed()  # aktif önizleme varsa yeniden uygula
+
+    def _render_drag_pixmap(self, block_id: int):
+        """Havuzdan bir ders sürüklenirken imleçle birlikte gösterilecek
+        küçük önizleme görüntüsünü üretir - Ana Program'daki hücre kartıyla
+        aynı boyut ve görünümde olsun diye (Qt varsayılanı, havuzdaki
+        listedeki öğenin tam boyutunda kocaman bir kutu sürüklüyordu)."""
+        block = self._blocks_by_id.get(block_id)
+        if block is None:
+            return None
+        members = self._block_group(block)
+        rep = min(members, key=lambda b: b.id)
+        line1, line2 = rep.dense_lines(self.mode)
+        if len(members) > 1:
+            line1 = f"{line1} (+{len(members) - 1})"
+        bg, _dot = theme.lesson_colors_for(rep, tinted=self.mode == MODE_TEACHER)
+        width = self.grid.columnWidth(0) if self.grid.columnCount() else 40
+        height = self.grid.row_height()
+        chip = theme.make_dense_chip(line1, line2, bg)
+        chip.setFixedSize(max(28, width), max(20, height))
+        return chip.grab()
 
     def _show_row_preview(self, entity_id: int) -> None:
         name = next((n for i, n in self._row_entities if i == entity_id), "")

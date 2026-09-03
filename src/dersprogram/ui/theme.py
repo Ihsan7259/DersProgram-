@@ -348,7 +348,11 @@ def make_dense_chip(line1: str, line2: str, bg: str) -> QWidget:
     label.setText(text)
     label.setAlignment(Qt.AlignCenter)
     label.setToolTip(f"{line1}\n{line2}" if line2 else line1)
-    label.setStyleSheet(f"#cellFrame {{ background:{bg}; border-radius:0; border:1px solid {BORDER_SUBTLE}; }}")
+    # Kenarlık widget'ın kendi stilinde değil, ızgaranın gridline'ında
+    # çiziliyor (bkz. MainGrid.setShowGrid(True)) - böylece bitişik iki
+    # hücre arasında tek ince çizgi kalır, çift kenarlıktan doğan görünür
+    # boşluk oluşmaz.
+    label.setStyleSheet(f"#cellFrame {{ background:{bg}; border-radius:0; border:none; }}")
     return label
 
 
@@ -370,7 +374,7 @@ def make_day_banner(day_name: str) -> QWidget:
 def make_dense_empty() -> QWidget:
     frame = QWidget()
     frame.setObjectName("cellFrame")
-    frame.setStyleSheet(f"#cellFrame {{ background:{APP_BG}; border-radius:0; border:1px solid {BORDER_SUBTLE}; }}")
+    frame.setStyleSheet(f"#cellFrame {{ background:{APP_BG}; border-radius:0; border:none; }}")
     return frame
 
 
@@ -381,7 +385,7 @@ def make_dense_unavailable() -> QWidget:
     label.setObjectName("cellFrame")
     label.setAlignment(Qt.AlignCenter)
     label.setStyleSheet(
-        f"#cellFrame {{ background:{CONFLICT_BG}; border-radius:0; border:1px solid {CONFLICT_BORDER}; "
+        f"#cellFrame {{ background:{CONFLICT_BG}; border-radius:0; border:none; "
         f"color:{CONFLICT_BORDER}; font-weight:700; font-size:10pt; }}"
     )
     label.setToolTip("Öğretmen bu saatte müsait değil olarak işaretlenmiş")
