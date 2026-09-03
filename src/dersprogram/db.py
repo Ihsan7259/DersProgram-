@@ -381,7 +381,8 @@ class Database:
     def list_lesson_blocks_detailed(self, where: str = "", params: tuple = ()) -> list[sqlite3.Row]:
         query = f"""
             SELECT lb.*, t.name AS teacher_name, s.name AS subject_name,
-                   cg.name AS class_name, st.name AS student_name, r.name AS room_name
+                   cg.name AS class_name, st.name AS student_name, r.name AS room_name,
+                   st.class_group_id AS student_class_group_id
             FROM lesson_blocks lb
             LEFT JOIN teachers t ON t.id = lb.teacher_id
             LEFT JOIN subjects s ON s.id = lb.subject_id

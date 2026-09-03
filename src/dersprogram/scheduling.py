@@ -84,6 +84,7 @@ class BlockView:
     note: str
     day: int | None = None
     period: int | None = None
+    student_class_group_id: int | None = None
 
     def short_label(self) -> str:
         type_label = LESSON_TYPE_LABELS.get(self.type, self.type)
@@ -182,6 +183,7 @@ def _row_to_blockview(row) -> BlockView:
         room_id=row["room_id"],
         room_name=row["room_name"],
         note=row["note"] or "",
+        student_class_group_id=row["student_class_group_id"],
     )
 
 
@@ -231,6 +233,22 @@ def find_conflicts(
             reasons.append(f"{other.student_name} bu saatte başka bir derste")
         if block.room_id is not None and other.room_id is not None and other.room_id == block.room_id:
             reasons.append(f"{other.room_name} bu saatte dolu")
+        # Bir öğrencinin birebir/koçluk dersi, kendi sınıfının o saatteki
+        # sınıf dersiyle çakışmamalı (öğrenci fiziksel olarak iki yerde
+        # birden olamaz).
+        if (
+            block.student_id is not None
+            and block.student_class_group_id is not None
+            and other.type == TYPE_CLASS
+            and other.class_group_id == block.student_class_group_id
+        ):
+            reasons.append(f"{block.student_name}'in sınıfı ({other.class_name}) bu saatte ders var")
+        if (
+            block.type == TYPE_CLASS
+            and other.student_id is not None
+            and other.student_class_group_id == block.class_group_id
+        ):
+            reasons.append(f"{other.student_name} bu saatte kendi sınıfının ({block.class_name}) dersinde olmalı")
     return reasons
 
 
