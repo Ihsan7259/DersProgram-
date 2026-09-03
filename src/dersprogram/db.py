@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS lesson_blocks (
     student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
     room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
     zumre_group_id INTEGER,
+    curriculum_id INTEGER REFERENCES class_curriculum(id) ON DELETE SET NULL,
     template_day INTEGER,
     template_period INTEGER,
     note TEXT DEFAULT ''
@@ -130,6 +131,19 @@ CREATE TABLE IF NOT EXISTS teacher_availability_exceptions (
     period INTEGER NOT NULL,
     status TEXT NOT NULL,
     UNIQUE(week_start, teacher_id, day, period)
+);
+
+-- Sınıfın haftalık ders hedefi: "9-A'da Matematik, Ahmet Yılmaz ile
+-- haftada 5 saat". Kaydedilince weekly_hours kadar ders bloğu üretilir ve
+-- bunlar curriculum_id ile bu hedefe bağlanır; böylece havuzdan bir ders
+-- silinirse "hedef 5, programda 4" farkı Sınıflar sekmesinde görünür.
+CREATE TABLE IF NOT EXISTS class_curriculum (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_group_id INTEGER NOT NULL REFERENCES class_groups(id) ON DELETE CASCADE,
+    subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+    teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
+    room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+    weekly_hours INTEGER NOT NULL DEFAULT 1
 );
 
 -- Öğrenci ve sınıf müsaitliği: teacher_availability(_exceptions) ile
@@ -215,6 +229,7 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("student_id", "INTEGER REFERENCES students(id) ON DELETE CASCADE"),
         ("room_id", "INTEGER REFERENCES rooms(id) ON DELETE SET NULL"),
         ("zumre_group_id", "INTEGER"),
+        ("curriculum_id", "INTEGER"),
         ("template_day", "INTEGER"),
         ("template_period", "INTEGER"),
         ("note", "TEXT DEFAULT ''"),
@@ -504,6 +519,93 @@ class Database:
         )
         self.conn.commit()
         return ids
+
+    # ---------- sınıf ders hedefleri (müfredat) ----------
+    def list_class_curriculum(self, class_group_id: int) -> list[sqlite3.Row]:
+        """Sınıfın ders hedefleri + her hedef için gerçekte kaç blok var
+        (planned) ve kaçı programa yerleşmiş (placed)."""
+        return self.conn.execute(
+            """
+            SELECT cc.*, s.name AS subject_name, t.name AS teacher_name, r.name AS room_name,
+                   (SELECT COUNT(*) FROM lesson_blocks lb WHERE lb.curriculum_id = cc.id) AS planned_hours,
+                   (SELECT COUNT(*) FROM lesson_blocks lb WHERE lb.curriculum_id = cc.id
+                        AND lb.template_day IS NOT NULL) AS placed_hours
+            FROM class_curriculum cc
+            LEFT JOIN subjects s ON s.id = cc.subject_id
+            LEFT JOIN teachers t ON t.id = cc.teacher_id
+            LEFT JOIN rooms r ON r.id = cc.room_id
+            WHERE cc.class_group_id = ?
+            ORDER BY s.name, t.name
+            """,
+            (class_group_id,),
+        ).fetchall()
+
+    def add_class_curriculum(
+        self,
+        class_group_id: int,
+        subject_id: int | None,
+        teacher_id: int | None,
+        weekly_hours: int,
+        room_id: int | None = None,
+    ) -> int:
+        """Hedefi kaydeder ve weekly_hours kadar ders bloğu üretip havuza
+        (atanmamış dersler) düşürür."""
+        cur = self.conn.execute(
+            """
+            INSERT INTO class_curriculum(class_group_id, subject_id, teacher_id, room_id, weekly_hours)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (class_group_id, subject_id, teacher_id, room_id, weekly_hours),
+        )
+        curriculum_id = cur.lastrowid
+        for _ in range(weekly_hours):
+            self.conn.execute(
+                """
+                INSERT INTO lesson_blocks(type, teacher_id, subject_id, class_group_id, room_id, curriculum_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (TYPE_CLASS, teacher_id, subject_id, class_group_id, room_id, curriculum_id),
+            )
+        self.conn.commit()
+        return curriculum_id
+
+    def delete_class_curriculum(self, curriculum_id: int) -> None:
+        """Hedefi ve ona bağlı tüm ders bloklarını siler."""
+        self.conn.execute("DELETE FROM lesson_blocks WHERE curriculum_id=?", (curriculum_id,))
+        self.conn.execute("DELETE FROM class_curriculum WHERE id=?", (curriculum_id,))
+        self.conn.commit()
+
+    def restore_curriculum_blocks(self, curriculum_id: int) -> int:
+        """Hedefteki saat sayısına göre eksik kalan blokları yeniden
+        oluşturur (havuzdan silinenleri geri getirmek için). Kaç blok
+        eklendiğini döner."""
+        row = self.conn.execute(
+            "SELECT * FROM class_curriculum WHERE id=?", (curriculum_id,)
+        ).fetchone()
+        if row is None:
+            return 0
+        existing = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM lesson_blocks WHERE curriculum_id=?", (curriculum_id,)
+        ).fetchone()["c"]
+        missing = max(0, row["weekly_hours"] - existing)
+        for _ in range(missing):
+            self.conn.execute(
+                """
+                INSERT INTO lesson_blocks(type, teacher_id, subject_id, class_group_id, room_id, curriculum_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (TYPE_CLASS, row["teacher_id"], row["subject_id"], row["class_group_id"],
+                 row["room_id"], curriculum_id),
+            )
+        self.conn.commit()
+        return missing
+
+    def list_teachers_by_subject_area(self, subject_name: str) -> list[sqlite3.Row]:
+        """Branşı verilen derse eşit olan öğretmenler (Sınıflar sekmesinde
+        ders seçilince öğretmen listesini süzmek için)."""
+        return self.conn.execute(
+            "SELECT * FROM teachers WHERE subject_area = ? ORDER BY name", (subject_name,)
+        ).fetchall()
 
     def delete_lesson_block(self, block_id: int) -> None:
         self.conn.execute("DELETE FROM lesson_blocks WHERE id=?", (block_id,))

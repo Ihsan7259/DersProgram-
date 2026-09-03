@@ -44,9 +44,11 @@ class AddLessonDialog(QDialog):
             self.type_combo.addItem(LESSON_TYPE_LABELS[t], t)
         layout.addRow("Ders Tipi:", self.type_combo)
 
+        self._teacher_subject_area: dict[int, str] = {}
         self.teacher_combo = QComboBox()
         for t in db.list_teachers():
             self.teacher_combo.addItem(t["name"], t["id"])
+            self._teacher_subject_area[t["id"]] = t["subject_area"] or ""
         self.teacher_label = QLabel("Öğretmen:")
         layout.addRow(self.teacher_label, self.teacher_combo)
 
@@ -107,7 +109,19 @@ class AddLessonDialog(QDialog):
         layout.addRow(buttons)
 
         self.type_combo.currentIndexChanged.connect(self._update_visible_fields)
+        self.teacher_combo.currentIndexChanged.connect(self._apply_teacher_subject_area)
         self._update_visible_fields()
+        self._apply_teacher_subject_area()
+
+    def _apply_teacher_subject_area(self) -> None:
+        """Öğretmen seçilince 'Ders/Branş' alanını o öğretmenin branşıyla
+        otomatik doldurur (kullanıcı isterse sonradan değiştirebilir)."""
+        subject_area = self._teacher_subject_area.get(self.teacher_combo.currentData())
+        if not subject_area:
+            return
+        idx = self.subject_combo.findText(subject_area)
+        if idx >= 0:
+            self.subject_combo.setCurrentIndex(idx)
 
     def _update_visible_fields(self) -> None:
         t = self.type_combo.currentData()

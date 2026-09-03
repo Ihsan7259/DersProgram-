@@ -232,11 +232,19 @@ def lesson_type_label(type_: str) -> str:
     return LESSON_TYPE_LABELS.get(type_, type_)
 
 
-def make_lesson_card(block, compact: bool = False) -> QWidget:
+def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) -> QWidget:
     """Bir ders bloğunu (block: scheduling.BlockView) küçük renkli bir
-    kart olarak gösterir - tipe göre pastel arkaplan + nokta işareti."""
+    kart olarak gösterir - tipe göre pastel arkaplan + nokta işareti.
+
+    row_mode='class' ise (sınıfın kendi haftalık programı) kart 'ders adı /
+    öğretmen adı' şeklinde gösterilir; sınıf adı zaten belli olduğu için
+    tekrar edilmez."""
     bg, dot = LESSON_TYPE_COLORS.get(block.type, (SURFACE, INK_MUTED_58))
-    primary, secondary, tertiary = block.card_lines()
+    if row_mode == "class":
+        primary, secondary = block.class_row_lines()
+        tertiary = ""
+    else:
+        primary, secondary, tertiary = block.card_lines()
 
     card = QWidget()
     card.setObjectName("lessonCard")
@@ -268,10 +276,12 @@ def make_lesson_card(block, compact: bool = False) -> QWidget:
     )
     layout.addWidget(primary_label)
 
-    if secondary and not compact:
+    if secondary and (not compact or row_mode == "class"):
         secondary_label = QLabel(secondary)
         secondary_label.setWordWrap(True)
-        secondary_label.setStyleSheet(f"font-size: 8.2pt; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;")
+        secondary_label.setStyleSheet(
+            f"font-size: {'7.2pt' if compact else '8.2pt'}; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;"
+        )
         layout.addWidget(secondary_label)
 
     if tertiary and not compact:
@@ -368,7 +378,7 @@ def make_empty_cell(compact: bool = False) -> QWidget:
     return frame
 
 
-def make_multi_cell(blocks: list, compact: bool = False) -> QWidget:
+def make_multi_cell(blocks: list, compact: bool = False, row_mode: str | None = None) -> QWidget:
     """Bir (gün, saat) hücresindeki tüm ders bloklarını üst üste dizer.
     Ana Program hücresinde birden fazla ders (farklı sınıflar) aynı
     saatte olabilir; filtrelenmiş mini programlarda genelde tek olur."""
@@ -381,7 +391,7 @@ def make_multi_cell(blocks: list, compact: bool = False) -> QWidget:
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(3)
     for block in blocks:
-        layout.addWidget(make_lesson_card(block, compact=compact))
+        layout.addWidget(make_lesson_card(block, compact=compact, row_mode=row_mode))
     return frame
 
 

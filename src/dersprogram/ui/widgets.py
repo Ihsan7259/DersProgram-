@@ -163,6 +163,7 @@ class AvailabilityGrid(QTableWidget):
         )
         self._occupied: set[tuple[int, int]] = set()
         self._state: dict[tuple[int, int], str] = {}
+        self._row_mode: str | None = None
         self._day_header_state: dict[int, str | None] = {}
         self._period_header_state: dict[int, str | None] = {}
         self.cellClicked.connect(self._handle_click)
@@ -171,7 +172,14 @@ class AvailabilityGrid(QTableWidget):
         self.horizontalHeader().sectionClicked.connect(self._handle_day_header_click)
         self.verticalHeader().sectionClicked.connect(self._handle_period_header_click)
 
-    def render(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], availability: dict[tuple[int, int], str]) -> None:
+    def render(
+        self,
+        db: Database,
+        blocks_by_cell: dict[tuple[int, int], list],
+        availability: dict[tuple[int, int], str],
+        row_mode: str | None = None,
+    ) -> None:
+        self._row_mode = row_mode
         day_names = db.day_names
         period_count = db.period_count
         self.setRowCount(period_count)
@@ -194,7 +202,7 @@ class AvailabilityGrid(QTableWidget):
                 cell = (day, period)
                 blocks = blocks_by_cell.get(cell, [])
                 if blocks:
-                    widget = theme.make_multi_cell(blocks, compact=True)
+                    widget = theme.make_multi_cell(blocks, compact=True, row_mode=row_mode)
                 else:
                     widget = self._availability_cell(self._state.get(cell))
                 self.setCellWidget(period - 1, day, widget)

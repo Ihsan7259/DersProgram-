@@ -11,7 +11,7 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -46,6 +46,8 @@ MODE_TEACHER = "teacher"
 class PoolList(QListWidget):
     """Atanmamış dersler havuzu; buradan ızgaraya sürüklenebilir."""
 
+    delete_requested = Signal()
+
     def __init__(self):
         super().__init__()
         self.setDragEnabled(True)
@@ -62,6 +64,12 @@ class PoolList(QListWidget):
             block_id = items[0].data(Qt.UserRole)
             md.setText(f"{MIME_PREFIX}{block_id}")
         return md
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            self.delete_requested.emit()
+            return
+        super().keyPressEvent(event)
 
 
 def _group_pool_labels(rep_block, members: list) -> tuple[str, str]:
@@ -116,12 +124,9 @@ class MainGrid(QTableWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
-        header.setMinimumSectionSize(34)
+        header.setMinimumSectionSize(8)
         header.setMinimumHeight(36)
         header.setDefaultAlignment(Qt.AlignCenter)
-        self.setStyleSheet(
-            "#mainGrid QHeaderView::section { font-size: 7.6pt; padding: 2px 0; }"
-        )
         self._get_block_by_id = get_block_by_id
         self._validate_drop = validate_drop
         self._on_drop = on_drop
@@ -129,8 +134,65 @@ class MainGrid(QTableWidget):
         self._hover_cell = None
         self._hover_original = ""
         self._row_entity_ids: list[int] = []
+        self._day_names: list[str] = []
+        self._day_count = 1
         self._period_count = 1
         self.cellDoubleClicked.connect(self._handle_double_click)
+        self._apply_column_sizing()
+
+    # ---------- sütun sıkıştırma ----------
+    def set_grid_shape(self, day_names: list[str], period_count: int) -> None:
+        self._day_names = list(day_names)
+        self._day_count = max(len(day_names), 1)
+        self._period_count = max(period_count, 1)
+        self._apply_column_sizing()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_column_sizing()
+
+    def _apply_column_sizing(self) -> None:
+        """Sütunlar her zaman pencereye TAM sığsın: gün×saat sayısı arttıkça
+        alt sınır ve başlık yazı boyutu otomatik küçülür. Böylece kaç gün /
+        kaç ders saati seçilirse seçilsin yatay kaydırma gerekmez."""
+        total_columns = self._day_count * self._period_count
+        available = self.viewport().width()
+        if available <= 0:
+            per_column = 34
+        else:
+            per_column = max(8, available // total_columns)
+        # Alt sınırı tam "sığacak" değere çekmek, Stretch'in bu sınırı aşıp
+        # tabloyu viewport dışına taşırmasını engeller.
+        self.horizontalHeader().setMinimumSectionSize(min(per_column, 34))
+        if per_column >= 30:
+            font_pt, padding = 7.6, 2
+        elif per_column >= 22:
+            font_pt, padding = 6.6, 1
+        elif per_column >= 16:
+            font_pt, padding = 5.8, 1
+        else:
+            font_pt, padding = 5.0, 0
+        self.setStyleSheet(
+            f"#mainGrid QHeaderView::section {{ font-size: {font_pt}pt; padding: {padding}px 0; }}"
+        )
+        self._apply_header_labels(per_column)
+
+    def _apply_header_labels(self, per_column: int) -> None:
+        """Sütunlar iyice daraldığında gün kısaltması sadece o günün ilk
+        saatinde yazılır, kalan sütunlarda yalnızca saat numarası kalır -
+        böylece dar sütunlarda da yazılar kırpılmaz."""
+        if not self._day_names or self.columnCount() != self._day_count * self._period_count:
+            return
+        compact = per_column < 26
+        headers = []
+        for day_name in self._day_names:
+            abbrev = scheduling.day_abbrev(day_name)
+            for period in range(1, self._period_count + 1):
+                if compact and period != 1:
+                    headers.append(str(period))
+                else:
+                    headers.append(f"{abbrev}\n{period}")
+        self.setHorizontalHeaderLabels(headers)
 
     def col_to_day_period(self, col: int) -> tuple[int, int]:
         return col // self._period_count, (col % self._period_count) + 1
@@ -280,11 +342,18 @@ class ScheduleTab(QWidget):
         pool_container = QWidget()
         pool_layout = QVBoxLayout(pool_container)
         pool_layout.setContentsMargins(0, 0, 0, 0)
+        pool_header = QHBoxLayout()
         self.pool_label = QLabel("Atanmamış Dersler")
         self.pool_label.setStyleSheet(
             f"font-family:'{theme.FONT_HEADING}'; font-weight:700; font-size:10pt; color:{theme.INK_MUTED_30};"
         )
-        pool_layout.addWidget(self.pool_label)
+        pool_header.addWidget(self.pool_label)
+        pool_header.addStretch()
+        self.pool_delete_button = QPushButton("Seçili Dersi Sil")
+        self.pool_delete_button.setObjectName("outlineButton")
+        self.pool_delete_button.clicked.connect(self.handle_delete_pool_lesson)
+        pool_header.addWidget(self.pool_delete_button)
+        pool_layout.addLayout(pool_header)
         self.hint_label = QLabel()
         self.hint_label.setStyleSheet(f"font-size:8.3pt; color:{theme.INK_MUTED_58};")
         pool_layout.addWidget(self.hint_label)
@@ -297,6 +366,7 @@ class ScheduleTab(QWidget):
 
         self.add_lesson_button.clicked.connect(self.handle_add_lesson)
         self.auto_assign_button.clicked.connect(self.handle_auto_assign)
+        self.pool_list.delete_requested.connect(self.handle_delete_pool_lesson)
         self.navigator.week_changed.connect(lambda _w: self.refresh())
         self.class_mode_button.toggled.connect(self._handle_mode_change)
 
@@ -352,15 +422,12 @@ class ScheduleTab(QWidget):
     def _render_grid(self) -> None:
         day_names = self.db.day_names
         period_count = self.db.period_count
-        self.grid._period_count = period_count
         self.grid._row_entity_ids = [entity_id for entity_id, _name in self._row_entities]
 
         self.grid.setColumnCount(len(day_names) * period_count)
-        headers = []
-        for day_name in day_names:
-            for period in range(1, period_count + 1):
-                headers.append(f"{scheduling.day_abbrev(day_name)}\n{period}")
-        self.grid.setHorizontalHeaderLabels(headers)
+        # Sütun sayısı belli olduktan sonra: başlıklar + gün/saat sayısına
+        # göre otomatik sıkıştırma (yatay kaydırma hiçbir zaman gerekmez).
+        self.grid.set_grid_shape(day_names, period_count)
 
         self.grid.setRowCount(len(self._row_entities))
         self.grid.setVerticalHeaderLabels([name for _id, name in self._row_entities])
@@ -486,6 +553,33 @@ class ScheduleTab(QWidget):
         scope = dialog.scope()
         for member in members:
             scheduling.clear_block(self.db, self.navigator.week_start, member.id, scope)
+        self.refresh()
+
+    def handle_delete_pool_lesson(self) -> None:
+        """Havuzdaki seçili dersi tamamen siler (zümre ise tüm grubu).
+        Silinen ders bir sınıf hedefine bağlıysa, Sınıflar sekmesindeki
+        'Ders Hedefleri' tablosunda 'eksik' uyarısı olarak görünür."""
+        items = self.pool_list.selectedItems()
+        if not items:
+            QMessageBox.information(
+                self, "Seçim yok",
+                "Önce aşağıdaki 'Atanmamış Dersler' listesinden silmek istediğiniz derse tıklayın.",
+            )
+            return
+        block = self._blocks_by_id.get(items[0].data(Qt.UserRole))
+        if block is None:
+            return
+        members = self._block_group(block)
+        label = self._group_label(members)
+        hours_note = f"\n\n({len(members)} ders saati silinecek.)" if len(members) > 1 else ""
+        confirm = QMessageBox.question(
+            self, "Silme Onayı",
+            f"'{label}' dersi tamamen silinsin mi?{hours_note}",
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        for member in members:
+            self.db.delete_lesson_block(member.id)
         self.refresh()
 
     # ---------- ders ekle / oto ata ----------

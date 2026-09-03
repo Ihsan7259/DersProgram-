@@ -146,6 +146,16 @@ class BlockView:
             return "Zümre", self.subject_name or "", self.teacher_name or ""
         return "Soru Çözümü", self.subject_name or "", self.teacher_name or ""
 
+    def class_row_lines(self) -> tuple[str, str]:
+        """Sınıfın kendi haftalık programında gösterilecek iki satır:
+        ders adı ve öğretmen adı (sınıf adı zaten belli, tekrar edilmez)."""
+        if self.type == TYPE_CLASS:
+            return self.subject_name or "Sınıf Dersi", self.teacher_name or ""
+        label = LESSON_TYPE_LABELS.get(self.type, self.type)
+        if self.subject_name:
+            label = f"{label} · {self.subject_name}"
+        return label, self.teacher_name or ""
+
     def dense_lines(self, row_mode: str) -> tuple[str, str]:
         """Kurum geneli ızgarada (satır=sınıf ya da öğretmen) hücrede
         gösterilecek iki kısa satır. Satırın kendisi zaten hangi sınıf/
@@ -504,46 +514,64 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
     for block in normal_pool:
         groups.setdefault(block.group_key(), []).append(block)
 
-    for group_key, blocks in groups.items():
-        group_days_used: dict[int, int] = {}
-        for block in blocks:
-            best = None
-            day_order = sorted(
-                range(day_count),
-                key=lambda d: (group_days_used.get(d, 0), day_load[d]),
-            )
-            for d in day_order:
-                for p in range(1, period_count + 1):
-                    if find_conflicts(schedule, d, p, block, unavailable):
-                        continue
-                    # aynı gruptan art arda kaç saat oluşacağını kontrol et
-                    consecutive = 1
-                    pp = p - 1
-                    while pp >= 1 and any(b.group_key() == group_key for b in schedule.get((d, pp), [])):
-                        consecutive += 1
-                        pp -= 1
-                    pp = p + 1
-                    while pp <= period_count and any(b.group_key() == group_key for b in schedule.get((d, pp), [])):
-                        consecutive += 1
-                        pp += 1
-                    if consecutive > max_consecutive:
-                        continue
-                    best = (d, p)
+    # Haftalık saati çok olan gruplar önce yerleşsin: ardışık ikili bir
+    # aralık bulmak onlar için daha zordur, program dolmadan yerleşmeliler.
+    for _group_key, blocks in sorted(groups.items(), key=lambda item: -len(item[1])):
+        pending = list(blocks)
+        group_days: set[int] = set()
+        while pending:
+            # Her seferinde mümkün olduğunca `max_consecutive` (varsayılan 2)
+            # saatlik ardışık bir blok yerleştir: 5 saat -> 2 + 2 + 1.
+            chunk_size = min(max_consecutive, len(pending))
+            slot = None
+            while chunk_size >= 1:
+                slot = _find_consecutive_slot(
+                    schedule, pending[:chunk_size], day_count, period_count,
+                    unavailable, day_load, group_days,
+                )
+                if slot is not None:
                     break
-                if best:
-                    break
-            if best is None:
-                continue
-            d, p = best
-            place_block(db, week_start, block.id, d, p, SCOPE_ALWAYS)
-            schedule.setdefault((d, p), []).append(block)
-            block.day, block.period = d, p
-            day_load[d] += 1
-            group_days_used[d] = group_days_used.get(d, 0) + 1
-            placed += 1
-            cross_week_warning(block, d, p)
+                chunk_size -= 1  # ardışık yer yoksa daha kısa blok dene
+            if slot is None:
+                break  # bu grup için uygun hiçbir saat kalmadı
+            day, start_period = slot
+            for offset in range(chunk_size):
+                block = pending[offset]
+                period = start_period + offset
+                place_block(db, week_start, block.id, day, period, SCOPE_ALWAYS)
+                schedule.setdefault((day, period), []).append(block)
+                block.day, block.period = day, period
+                day_load[day] += 1
+                placed += 1
+                cross_week_warning(block, day, period)
+            group_days.add(day)
+            pending = pending[chunk_size:]
 
     return AutoAssignResult(placed=placed, warnings=warnings)
+
+
+def _find_consecutive_slot(
+    schedule: dict[tuple[int, int], list[BlockView]],
+    chunk: list[BlockView],
+    day_count: int,
+    period_count: int,
+    unavailable: "UnavailableSlots | None",
+    day_load: list[int],
+    group_days: set[int],
+) -> tuple[int, int] | None:
+    """`chunk` kadar ardışık saatin tamamı çakışmasız olan bir
+    (gün, başlangıç saati) döner. Önce bu grubun HİÇ dersi olmayan günler
+    denenir (dersler haftaya yayılsın), sonra günlük yükü az olanlar."""
+    size = len(chunk)
+    day_order = sorted(range(day_count), key=lambda d: (d in group_days, day_load[d], d))
+    for day in day_order:
+        for start in range(1, period_count - size + 2):
+            if all(
+                not find_conflicts(schedule, day, start + offset, chunk[offset], unavailable)
+                for offset in range(size)
+            ):
+                return day, start
+    return None
 
 
 # ---------- özet / analiz ----------
