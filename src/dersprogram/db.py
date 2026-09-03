@@ -121,6 +121,40 @@ def default_db_path() -> Path:
     return data_dir / "veri.db"
 
 
+# Geliştirme sürecinde SCHEMA'ya sonradan eklenen sütunlar burada listelenir.
+# "CREATE TABLE IF NOT EXISTS" var olan bir tabloyu asla değiştirmediği için,
+# programın önceki bir sürümüyle oluşturulmuş bir veritabanı dosyasında bu
+# sütunlar eksik kalabilir (ör. "table teachers has no column named
+# subject_area" hatası). Her açılışta eksik sütunlar burada tamamlanır.
+MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "teachers": [
+        ("subject_area", "TEXT DEFAULT ''"),
+        ("note", "TEXT DEFAULT ''"),
+    ],
+    "subjects": [("note", "TEXT DEFAULT ''")],
+    "class_groups": [("note", "TEXT DEFAULT ''")],
+    "rooms": [("note", "TEXT DEFAULT ''")],
+    "students": [
+        ("class_group_id", "INTEGER REFERENCES class_groups(id) ON DELETE SET NULL"),
+        ("coach_teacher_id", "INTEGER REFERENCES teachers(id) ON DELETE SET NULL"),
+        ("total_program_fee", "REAL NOT NULL DEFAULT 0"),
+        ("total_one_on_one_fee", "REAL NOT NULL DEFAULT 0"),
+        ("note", "TEXT DEFAULT ''"),
+    ],
+    "lesson_blocks": [
+        ("teacher_id", "INTEGER REFERENCES teachers(id) ON DELETE CASCADE"),
+        ("subject_id", "INTEGER REFERENCES subjects(id) ON DELETE SET NULL"),
+        ("class_group_id", "INTEGER REFERENCES class_groups(id) ON DELETE CASCADE"),
+        ("student_id", "INTEGER REFERENCES students(id) ON DELETE CASCADE"),
+        ("room_id", "INTEGER REFERENCES rooms(id) ON DELETE SET NULL"),
+        ("template_day", "INTEGER"),
+        ("template_period", "INTEGER"),
+        ("note", "TEXT DEFAULT ''"),
+    ],
+    "payments": [("note", "TEXT DEFAULT ''")],
+}
+
+
 class Database:
     def __init__(self, path: Path | str | None = None):
         self.path = Path(path) if path else default_db_path()
@@ -128,7 +162,16 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        self._migrate_schema()
         self._init_settings()
+
+    def _migrate_schema(self) -> None:
+        for table, columns in MIGRATION_COLUMNS.items():
+            existing = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+            for column_name, column_def in columns:
+                if column_name not in existing:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_def}")
+        self.conn.commit()
 
     # ---------- ayarlar ----------
     def _init_settings(self) -> None:
