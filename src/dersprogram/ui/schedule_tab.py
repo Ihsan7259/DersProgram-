@@ -355,7 +355,10 @@ class ScheduleTab(QWidget):
                     col = day * period_count + (period - 1)
                     blocks = self._cell_blocks(entity_id, day, period)
                     if not blocks:
-                        widget = theme.make_dense_empty()
+                        if self.mode == MODE_TEACHER and (entity_id, day, period) in self._unavailable_slots:
+                            widget = theme.make_dense_unavailable()
+                        else:
+                            widget = theme.make_dense_empty()
                     elif len(blocks) == 1:
                         line1, line2 = blocks[0].dense_lines(self.mode)
                         bg, _dot = theme.LESSON_TYPE_COLORS.get(blocks[0].type, (theme.SURFACE, theme.INK_MUTED_58))

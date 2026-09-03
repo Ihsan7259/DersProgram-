@@ -76,8 +76,30 @@ class MainWindow(QMainWindow):
         for widget, _title, _subtitle in self.pages.values():
             self.stack.addWidget(widget)
 
+        # Ana Program, Öğretmenler, Öğrenciler ve Sınıflar sekmelerindeki
+        # hafta gezinme çubukları birbirinden bağımsızdı; birinde "sonraki
+        # hafta"ya geçip başka bir sekmede o haftaya özel bir değişiklik
+        # yapmak, o sekme sessizce "bu hafta"da kalmaya devam ettiği için
+        # kafa karıştırıyordu. Artık hepsi aynı haftayı gösterir.
+        self._week_navigators = [
+            self.schedule_tab.navigator,
+            self.teachers_tab.navigator,
+            self.students_tab.navigator,
+            self.classes_tab.navigator,
+        ]
+        for nav in self._week_navigators:
+            nav.week_changed.connect(self._sync_week)
+
         self.sidebar.page_selected.connect(self.show_page)
         self.show_page("ana-program")
+
+    def _sync_week(self, week_start) -> None:
+        for nav in self._week_navigators:
+            nav.set_week(week_start, emit=False)
+        self.schedule_tab.refresh()
+        self.teachers_tab.refresh_detail()
+        self.students_tab.refresh_detail()
+        self.classes_tab.refresh_detail()
 
     def show_page(self, page_id: str) -> None:
         widget, title, subtitle = self.pages[page_id]

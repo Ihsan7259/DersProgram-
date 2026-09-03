@@ -332,6 +332,24 @@ def make_dense_empty() -> QWidget:
     return frame
 
 
+def make_dense_unavailable() -> QWidget:
+    """Ana Program'ın kurum geneli ızgarasında, öğretmenin kendisinin
+    'müsait değil' işaretlediği boş bir hücre için küçük bir x işareti."""
+    frame = QWidget()
+    frame.setObjectName("cellFrame")
+    frame.setStyleSheet(
+        f"#cellFrame {{ background:{CONFLICT_BG}; border-radius:5px; border: 1px solid {CONFLICT_BORDER}; }}"
+    )
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(0, 0, 0, 0)
+    label = QLabel("×")
+    label.setAlignment(Qt.AlignCenter)
+    label.setStyleSheet(f"color:{CONFLICT_BORDER}; font-weight:700; font-size:10pt; background:transparent;")
+    label.setToolTip("Öğretmen bu saatte müsait değil olarak işaretlenmiş")
+    layout.addWidget(label)
+    return frame
+
+
 def make_empty_cell(compact: bool = False) -> QWidget:
     frame = QWidget()
     frame.setObjectName("cellFrame")

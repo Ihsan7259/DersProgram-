@@ -106,6 +106,17 @@ class WeekNavigator(QWidget):
         self._refresh_label()
         self.week_changed.emit(self.week_start)
 
+    def set_week(self, week_start: _dt.date, emit: bool = True) -> None:
+        """Haftayı programatik olarak (kullanıcı tıklamadan) değiştirir -
+        sekmeler arasında tek bir 'şu an bakılan hafta' durumunu
+        senkronize tutmak için kullanılır (bkz. MainWindow)."""
+        if week_start == self.week_start:
+            return
+        self.week_start = week_start
+        self._refresh_label()
+        if emit:
+            self.week_changed.emit(self.week_start)
+
 
 class MiniScheduleGrid(QTableWidget):
     """Salt okunur, filtrelenmiş (tek kişi/sınıfa ait) haftalık ızgara."""

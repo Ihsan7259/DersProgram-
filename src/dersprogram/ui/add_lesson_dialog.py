@@ -9,12 +9,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QSpinBox,
     QDialogButtonBox,
-    QListWidget,
-    QListWidgetItem,
+    QScrollArea,
+    QCheckBox,
+    QWidget,
+    QVBoxLayout,
     QLabel,
     QMessageBox,
 )
-from PySide6.QtCore import Qt
 
 from ..db import (
     Database,
@@ -49,14 +50,25 @@ class AddLessonDialog(QDialog):
         self.teacher_label = QLabel("Öğretmen:")
         layout.addRow(self.teacher_label, self.teacher_combo)
 
-        self.teachers_list = QListWidget()
-        self.teachers_list.setSelectionMode(QListWidget.MultiSelection)
+        # Zümre: aynı saatte bir araya gelen öğretmenlerin toplantısı -
+        # her öğretmen ayrı bir kutucukla işaretlenir, hangilerinin
+        # eklendiği tek bakışta görülür (liste seçiminden farklı olarak).
+        self.teacher_checks: dict[int, QCheckBox] = {}
+        teachers_container = QWidget()
+        teachers_container_layout = QVBoxLayout(teachers_container)
+        teachers_container_layout.setContentsMargins(4, 4, 4, 4)
+        teachers_container_layout.setSpacing(2)
         for t in db.list_teachers():
-            item = QListWidgetItem(f"{t['name']} ({t['subject_area'] or '-'})")
-            item.setData(Qt.UserRole, t["id"])
-            self.teachers_list.addItem(item)
+            cb = QCheckBox(f"{t['name']} ({t['subject_area'] or '-'})")
+            self.teacher_checks[t["id"]] = cb
+            teachers_container_layout.addWidget(cb)
+        teachers_container_layout.addStretch()
+        self.teachers_scroll = QScrollArea()
+        self.teachers_scroll.setWidgetResizable(True)
+        self.teachers_scroll.setMaximumHeight(160)
+        self.teachers_scroll.setWidget(teachers_container)
         self.teachers_list_label = QLabel("Katılacak Öğretmenler:")
-        layout.addRow(self.teachers_list_label, self.teachers_list)
+        layout.addRow(self.teachers_list_label, self.teachers_scroll)
 
         self.subject_combo = QComboBox()
         self.subject_combo.addItem("(Yok)", None)
@@ -109,7 +121,7 @@ class AddLessonDialog(QDialog):
         self.teacher_label.setVisible(single_teacher)
         self.teacher_combo.setVisible(single_teacher)
         self.teachers_list_label.setVisible(is_department)
-        self.teachers_list.setVisible(is_department)
+        self.teachers_scroll.setVisible(is_department)
 
         show_subject = is_class or is_one_on_one or is_problem
         self.subject_label.setVisible(show_subject)
@@ -133,7 +145,7 @@ class AddLessonDialog(QDialog):
         room_id = self.room_combo.currentData() if self.room_combo.isVisible() else None
 
         if t == TYPE_DEPARTMENT:
-            teacher_ids = [item.data(Qt.UserRole) for item in self.teachers_list.selectedItems()]
+            teacher_ids = [tid for tid, cb in self.teacher_checks.items() if cb.isChecked()]
             if not teacher_ids:
                 QMessageBox.warning(self, "Eksik bilgi", "En az bir öğretmen seçmelisiniz.")
                 return
