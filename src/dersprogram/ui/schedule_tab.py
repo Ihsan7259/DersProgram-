@@ -435,6 +435,14 @@ class ScheduleTab(QWidget):
             self.refresh()
 
     def handle_auto_assign(self) -> None:
-        count = scheduling.auto_assign(self.db, self.navigator.week_start)
+        result = scheduling.auto_assign(self.db, self.navigator.week_start)
         self.refresh()
-        QMessageBox.information(self, "Oto Ata", f"{count} ders otomatik olarak yerleştirildi.")
+        message = f"{result.placed} ders otomatik olarak yerleştirildi."
+        if result.warnings:
+            message += (
+                "\n\nUyarı: Bazı dersler kalıcı olarak yerleştirildi ama başka haftalarda "
+                "öğretmenin müsait değil işaretiyle çelişiyor:\n- " + "\n- ".join(result.warnings)
+            )
+            QMessageBox.warning(self, "Oto Ata", message)
+        else:
+            QMessageBox.information(self, "Oto Ata", message)

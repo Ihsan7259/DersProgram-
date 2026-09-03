@@ -317,15 +317,32 @@ def set_teacher_availability(
         db.set_teacher_availability_exception(week_key(week_start), teacher_id, day, period, status or "clear")
 
 
-def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) -> int:
+@dataclass
+class AutoAssignResult:
+    placed: int
+    warnings: list[str]
+
+
+def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) -> AutoAssignResult:
     """Atanmamış dersleri, çakışma olmayan ve mümkün olduğunca dengeli
     dağılan (aynı grup art arda en fazla `max_consecutive` saat) uygun
-    slotlara otomatik yerleştirir. Kaç ders yerleştirildiğini döner."""
+    slotlara otomatik yerleştirir. Kaç ders yerleştirildiğini ve varsa
+    uyarıları (bkz. aşağıda) döner.
+
+    Yerleştirme HER HAFTA için kalıcıdır (SCOPE_ALWAYS), ama uygunluk
+    kontrolü sadece bu haftanın müsaitlik durumuna bakar. Bu yüzden bir
+    öğretmen bu haftaki (day, period) için müsaitse ama BAŞKA bir hafta
+    için o saati özellikle 'müsait değil' işaretlemişse, kalıcı
+    yerleştirme o haftayla çelişebilir; bu durumlar uyarı olarak
+    döndürülür ki kullanıcı isterse o haftaları elle kontrol etsin."""
     day_count = len(db.day_names)
+    day_names = db.day_names
     period_count = db.period_count
+    this_week_key = week_key(week_start)
 
     schedule, pool = get_week_view(db, week_start)
     unavailable = get_all_unavailable_slots(db, week_start)
+    warnings: list[str] = []
 
     groups: dict[tuple, list[BlockView]] = {}
     for block in pool:
@@ -375,7 +392,19 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
             group_days_used[d] = group_days_used.get(d, 0) + 1
             placed += 1
 
-    return placed
+            if block.teacher_id is not None:
+                other_weeks = [
+                    w for w in db.get_teacher_unavailable_exception_weeks(block.teacher_id, d, p)
+                    if w != this_week_key
+                ]
+                if other_weeks:
+                    dates = ", ".join(_dt.date.fromisoformat(w).strftime("%d.%m.%Y") for w in other_weeks)
+                    warnings.append(
+                        f"{block.teacher_name}: {day_abbrev(day_names[d])} {p}. saat kalıcı olarak "
+                        f"yerleştirildi, ama bu saat şu hafta(lar) için 'müsait değil' işaretli: {dates}"
+                    )
+
+    return AutoAssignResult(placed=placed, warnings=warnings)
 
 
 # ---------- özet / analiz ----------

@@ -501,6 +501,21 @@ class Database:
         )
         self.conn.commit()
 
+    def get_teacher_unavailable_exception_weeks(self, teacher_id: int, day: int, period: int) -> list[str]:
+        """Bu öğretmenin bu (gün, saat) için 'müsait değil' olarak
+        işaretlediği tüm haftaların (week_start) listesi - kalıcı bir
+        yerleştirmenin başka bir haftadaki istisnayla çelişip
+        çelişmediğini kontrol etmek için kullanılır."""
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT week_start FROM teacher_availability_exceptions
+            WHERE teacher_id=? AND day=? AND period=? AND status='unavailable'
+            ORDER BY week_start
+            """,
+            (teacher_id, day, period),
+        ).fetchall()
+        return [row["week_start"] for row in rows]
+
     # ---------- ödemeler ----------
     def list_payments(self, student_id: int) -> list[sqlite3.Row]:
         return self.conn.execute(
