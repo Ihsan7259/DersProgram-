@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS subjects (
 CREATE TABLE IF NOT EXISTS class_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    note TEXT DEFAULT ''
+    note TEXT DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS rooms (
@@ -130,6 +131,46 @@ CREATE TABLE IF NOT EXISTS teacher_availability_exceptions (
     status TEXT NOT NULL,
     UNIQUE(week_start, teacher_id, day, period)
 );
+
+-- Öğrenci ve sınıf müsaitliği: teacher_availability(_exceptions) ile
+-- birebir aynı şablon+istisna deseni, sadece ilgili kişi/sınıfa bağlı.
+CREATE TABLE IF NOT EXISTS student_availability (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    day INTEGER NOT NULL,
+    period INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    UNIQUE(student_id, day, period)
+);
+
+CREATE TABLE IF NOT EXISTS student_availability_exceptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    week_start TEXT NOT NULL,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    day INTEGER NOT NULL,
+    period INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    UNIQUE(week_start, student_id, day, period)
+);
+
+CREATE TABLE IF NOT EXISTS class_availability (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_group_id INTEGER NOT NULL REFERENCES class_groups(id) ON DELETE CASCADE,
+    day INTEGER NOT NULL,
+    period INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    UNIQUE(class_group_id, day, period)
+);
+
+CREATE TABLE IF NOT EXISTS class_availability_exceptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    week_start TEXT NOT NULL,
+    class_group_id INTEGER NOT NULL REFERENCES class_groups(id) ON DELETE CASCADE,
+    day INTEGER NOT NULL,
+    period INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    UNIQUE(week_start, class_group_id, day, period)
+);
 """
 
 DEFAULT_SETTINGS = {
@@ -158,7 +199,7 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("note", "TEXT DEFAULT ''"),
     ],
     "subjects": [("note", "TEXT DEFAULT ''")],
-    "class_groups": [("note", "TEXT DEFAULT ''")],
+    "class_groups": [("note", "TEXT DEFAULT ''"), ("sort_order", "INTEGER NOT NULL DEFAULT 0")],
     "rooms": [("note", "TEXT DEFAULT ''")],
     "students": [
         ("class_group_id", "INTEGER REFERENCES class_groups(id) ON DELETE SET NULL"),
@@ -265,6 +306,38 @@ class Database:
 
     def delete_row(self, table: str, row_id: int) -> None:
         self.conn.execute(f"DELETE FROM {table} WHERE id=?", (row_id,))
+        self.conn.commit()
+
+    # ---------- sınıflar (elle sıralanabilir) ----------
+    def list_class_groups(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM class_groups ORDER BY sort_order, name").fetchall()
+
+    def add_class_group(self, name: str, note: str = "") -> int:
+        row = self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS m FROM class_groups").fetchone()
+        next_order = row["m"] + 1
+        cur = self.conn.execute(
+            "INSERT INTO class_groups(name, note, sort_order) VALUES (?, ?, ?)", (name, note, next_order)
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def move_class_group(self, class_id: int, direction: int) -> None:
+        """direction: -1 (yukarı) ya da +1 (aşağı). Görüntülenen sıradaki
+        komşusuyla yer değiştirir; sıralamayı her seferinde 0..N-1 olarak
+        yeniden numaralandırır (eski/eksik sort_order değerlerinde de
+        güvenli çalışır)."""
+        ids = [row["id"] for row in self.list_class_groups()]
+        if class_id not in ids:
+            return
+        idx = ids.index(class_id)
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(ids):
+            return
+        ids[idx], ids[new_idx] = ids[new_idx], ids[idx]
+        self.conn.executemany(
+            "UPDATE class_groups SET sort_order=? WHERE id=?",
+            [(position, cid) for position, cid in enumerate(ids)],
+        )
         self.conn.commit()
 
     # ---------- öğretmenler ----------
@@ -484,55 +557,74 @@ class Database:
         )
         self.conn.commit()
 
-    # ---------- öğretmen müsaitliği ----------
-    def get_teacher_availability_template(self, teacher_id: int) -> dict[tuple[int, int], str]:
+    # ---------- müsaitlik (öğretmen/öğrenci/sınıf ortak deseni) ----------
+    # Üç varlık türü de aynı "şablon (kalıcı) + haftalık istisna" desenini
+    # kullanır; SQL burada tek yerde yazılır, aşağıdaki teacher_*/student_*/
+    # class_* metodları sadece ilgili tabloyu/sütunu seçen ince sarmalayıcılardır.
+    def _get_availability_template(self, table: str, id_column: str, entity_id: int) -> dict[tuple[int, int], str]:
         rows = self.conn.execute(
-            "SELECT day, period, status FROM teacher_availability WHERE teacher_id=?",
-            (teacher_id,),
+            f"SELECT day, period, status FROM {table} WHERE {id_column}=?",
+            (entity_id,),
         ).fetchall()
         return {(row["day"], row["period"]): row["status"] for row in rows}
 
-    def set_teacher_availability_template(self, teacher_id: int, day: int, period: int, status: str | None) -> None:
+    def _set_availability_template(self, table: str, id_column: str, entity_id: int, day: int, period: int, status: str | None) -> None:
         if status is None:
             self.conn.execute(
-                "DELETE FROM teacher_availability WHERE teacher_id=? AND day=? AND period=?",
-                (teacher_id, day, period),
+                f"DELETE FROM {table} WHERE {id_column}=? AND day=? AND period=?",
+                (entity_id, day, period),
             )
         else:
             self.conn.execute(
-                """
-                INSERT INTO teacher_availability(teacher_id, day, period, status)
+                f"""
+                INSERT INTO {table}({id_column}, day, period, status)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(teacher_id, day, period) DO UPDATE SET status=excluded.status
+                ON CONFLICT({id_column}, day, period) DO UPDATE SET status=excluded.status
                 """,
-                (teacher_id, day, period, status),
+                (entity_id, day, period, status),
             )
         self.conn.commit()
 
-    def get_teacher_availability_exceptions(self, week_start: str) -> dict[tuple[int, int, int], str]:
+    def _get_availability_exceptions(self, table: str, id_column: str, week_start: str) -> dict[tuple[int, int, int], str]:
         rows = self.conn.execute(
-            "SELECT teacher_id, day, period, status FROM teacher_availability_exceptions WHERE week_start=?",
+            f"SELECT {id_column} AS eid, day, period, status FROM {table} WHERE week_start=?",
             (week_start,),
         ).fetchall()
-        return {(row["teacher_id"], row["day"], row["period"]): row["status"] for row in rows}
+        return {(row["eid"], row["day"], row["period"]): row["status"] for row in rows}
+
+    def _set_availability_exception(self, table: str, id_column: str, week_start: str, entity_id: int, day: int, period: int, status: str) -> None:
+        self.conn.execute(
+            f"""
+            INSERT INTO {table}(week_start, {id_column}, day, period, status)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(week_start, {id_column}, day, period) DO UPDATE SET status=excluded.status
+            """,
+            (week_start, entity_id, day, period, status),
+        )
+        self.conn.commit()
+
+    def _clear_availability_exception(self, table: str, id_column: str, week_start: str, entity_id: int, day: int, period: int) -> None:
+        self.conn.execute(
+            f"DELETE FROM {table} WHERE week_start=? AND {id_column}=? AND day=? AND period=?",
+            (week_start, entity_id, day, period),
+        )
+        self.conn.commit()
+
+    # ---------- öğretmen müsaitliği ----------
+    def get_teacher_availability_template(self, teacher_id: int) -> dict[tuple[int, int], str]:
+        return self._get_availability_template("teacher_availability", "teacher_id", teacher_id)
+
+    def set_teacher_availability_template(self, teacher_id: int, day: int, period: int, status: str | None) -> None:
+        self._set_availability_template("teacher_availability", "teacher_id", teacher_id, day, period, status)
+
+    def get_teacher_availability_exceptions(self, week_start: str) -> dict[tuple[int, int, int], str]:
+        return self._get_availability_exceptions("teacher_availability_exceptions", "teacher_id", week_start)
 
     def set_teacher_availability_exception(self, week_start: str, teacher_id: int, day: int, period: int, status: str) -> None:
-        self.conn.execute(
-            """
-            INSERT INTO teacher_availability_exceptions(week_start, teacher_id, day, period, status)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(week_start, teacher_id, day, period) DO UPDATE SET status=excluded.status
-            """,
-            (week_start, teacher_id, day, period, status),
-        )
-        self.conn.commit()
+        self._set_availability_exception("teacher_availability_exceptions", "teacher_id", week_start, teacher_id, day, period, status)
 
     def clear_teacher_availability_exception(self, week_start: str, teacher_id: int, day: int, period: int) -> None:
-        self.conn.execute(
-            "DELETE FROM teacher_availability_exceptions WHERE week_start=? AND teacher_id=? AND day=? AND period=?",
-            (week_start, teacher_id, day, period),
-        )
-        self.conn.commit()
+        self._clear_availability_exception("teacher_availability_exceptions", "teacher_id", week_start, teacher_id, day, period)
 
     def get_teacher_unavailable_exception_weeks(self, teacher_id: int, day: int, period: int) -> list[str]:
         """Bu öğretmenin bu (gün, saat) için 'müsait değil' olarak
@@ -548,6 +640,38 @@ class Database:
             (teacher_id, day, period),
         ).fetchall()
         return [row["week_start"] for row in rows]
+
+    # ---------- öğrenci müsaitliği ----------
+    def get_student_availability_template(self, student_id: int) -> dict[tuple[int, int], str]:
+        return self._get_availability_template("student_availability", "student_id", student_id)
+
+    def set_student_availability_template(self, student_id: int, day: int, period: int, status: str | None) -> None:
+        self._set_availability_template("student_availability", "student_id", student_id, day, period, status)
+
+    def get_student_availability_exceptions(self, week_start: str) -> dict[tuple[int, int, int], str]:
+        return self._get_availability_exceptions("student_availability_exceptions", "student_id", week_start)
+
+    def set_student_availability_exception(self, week_start: str, student_id: int, day: int, period: int, status: str) -> None:
+        self._set_availability_exception("student_availability_exceptions", "student_id", week_start, student_id, day, period, status)
+
+    def clear_student_availability_exception(self, week_start: str, student_id: int, day: int, period: int) -> None:
+        self._clear_availability_exception("student_availability_exceptions", "student_id", week_start, student_id, day, period)
+
+    # ---------- sınıf müsaitliği ----------
+    def get_class_availability_template(self, class_group_id: int) -> dict[tuple[int, int], str]:
+        return self._get_availability_template("class_availability", "class_group_id", class_group_id)
+
+    def set_class_availability_template(self, class_group_id: int, day: int, period: int, status: str | None) -> None:
+        self._set_availability_template("class_availability", "class_group_id", class_group_id, day, period, status)
+
+    def get_class_availability_exceptions(self, week_start: str) -> dict[tuple[int, int, int], str]:
+        return self._get_availability_exceptions("class_availability_exceptions", "class_group_id", week_start)
+
+    def set_class_availability_exception(self, week_start: str, class_group_id: int, day: int, period: int, status: str) -> None:
+        self._set_availability_exception("class_availability_exceptions", "class_group_id", week_start, class_group_id, day, period, status)
+
+    def clear_class_availability_exception(self, week_start: str, class_group_id: int, day: int, period: int) -> None:
+        self._clear_availability_exception("class_availability_exceptions", "class_group_id", week_start, class_group_id, day, period)
 
     # ---------- ödemeler ----------
     def list_payments(self, student_id: int) -> list[sqlite3.Row]:

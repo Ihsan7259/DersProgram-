@@ -41,10 +41,10 @@ def seed_demo_data(db: Database) -> None:
     db.add_row("subjects", "Tarih")
     db.add_row("subjects", "Biyoloji")
 
-    c_9a = db.add_row("class_groups", "9-A")
-    c_9b = db.add_row("class_groups", "9-B")
-    c_10a = db.add_row("class_groups", "10-A")
-    c_10b = db.add_row("class_groups", "10-B")
+    c_9a = db.add_class_group("9-A")
+    c_9b = db.add_class_group("9-B")
+    c_10a = db.add_class_group("10-A")
+    c_10b = db.add_class_group("10-B")
 
     r1 = db.add_row("rooms", "Derslik 101")
     r2 = db.add_row("rooms", "Derslik 102")

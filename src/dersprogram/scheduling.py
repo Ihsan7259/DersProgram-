@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .db import (
     Database,
@@ -215,26 +215,42 @@ def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, i
     return schedule, pool
 
 
+@dataclass
+class UnavailableSlots:
+    """Öğretmen/öğrenci/sınıfların kendi işaretledikleri 'müsait değil'
+    saatlerin (o hafta için efektif) kümeleri; find_conflicts bunlara
+    bakarak yerleştirmeyi engeller (bkz. get_teacher_availability vb.)."""
+
+    teacher: set[tuple[int, int, int]] = field(default_factory=set)
+    student: set[tuple[int, int, int]] = field(default_factory=set)
+    class_: set[tuple[int, int, int]] = field(default_factory=set)
+
+    @classmethod
+    def compute(cls, db: Database, week_start: _dt.date) -> "UnavailableSlots":
+        return cls(
+            teacher=get_all_unavailable_slots(db, week_start),
+            student=get_all_unavailable_student_slots(db, week_start),
+            class_=get_all_unavailable_class_slots(db, week_start),
+        )
+
+
 def find_conflicts(
     schedule: dict[tuple[int, int], list[BlockView]],
     day: int,
     period: int,
     block: BlockView,
-    unavailable_teacher_slots: set[tuple[int, int, int]] | None = None,
+    unavailable: "UnavailableSlots | None" = None,
 ) -> list[str]:
     """Bir bloğu (day, period)'a koymanın doğuracağı çakışmaları
-    insan-okunur mesajlar olarak döner. Boş liste = sorun yok.
-
-    unavailable_teacher_slots: {(teacher_id, day, period), ...} - öğretmenin
-    kendisinin 'müsait değil' olarak işaretlediği saatler (bkz.
-    get_teacher_availability)."""
+    insan-okunur mesajlar olarak döner. Boş liste = sorun yok."""
     reasons = []
-    if (
-        unavailable_teacher_slots
-        and block.teacher_id is not None
-        and (block.teacher_id, day, period) in unavailable_teacher_slots
-    ):
-        reasons.append(f"{block.teacher_name} bu saatte müsait değil olarak işaretlenmiş")
+    if unavailable:
+        if block.teacher_id is not None and (block.teacher_id, day, period) in unavailable.teacher:
+            reasons.append(f"{block.teacher_name} bu saatte müsait değil olarak işaretlenmiş")
+        if block.student_id is not None and (block.student_id, day, period) in unavailable.student:
+            reasons.append(f"{block.student_name} bu saatte müsait değil olarak işaretlenmiş")
+        if block.class_group_id is not None and (block.class_group_id, day, period) in unavailable.class_:
+            reasons.append(f"{block.class_name} bu saatte müsait değil olarak işaretlenmiş")
     for other in schedule.get((day, period), []):
         if other.id == block.id:
             continue
@@ -270,7 +286,7 @@ def find_group_conflicts(
     day: int,
     period: int,
     blocks: list[BlockView],
-    unavailable_teacher_slots: set[tuple[int, int, int]] | None = None,
+    unavailable: "UnavailableSlots | None" = None,
 ) -> list[str]:
     """find_conflicts'ın bir grup (ör. bir zümre buluşmasındaki tüm
     öğretmen blokları) için toplu hali: gruptaki herhangi bir üyenin bu
@@ -279,7 +295,7 @@ def find_group_conflicts(
     yerleştirilebilir."""
     reasons: list[str] = []
     for block in blocks:
-        reasons.extend(find_conflicts(schedule, day, period, block, unavailable_teacher_slots))
+        reasons.extend(find_conflicts(schedule, day, period, block, unavailable))
     return reasons
 
 
@@ -337,6 +353,72 @@ def set_teacher_availability(
         db.set_teacher_availability_exception(week_key(week_start), teacher_id, day, period, status or "clear")
 
 
+def get_student_availability(db: Database, student_id: int, week_start: _dt.date) -> dict[tuple[int, int], str]:
+    result = dict(db.get_student_availability_template(student_id))
+    exceptions = db.get_student_availability_exceptions(week_key(week_start))
+    for (s_id, day, period), status in exceptions.items():
+        if s_id != student_id:
+            continue
+        if status == "clear":
+            result.pop((day, period), None)
+        else:
+            result[(day, period)] = status
+    return result
+
+
+def get_all_unavailable_student_slots(db: Database, week_start: _dt.date) -> set[tuple[int, int, int]]:
+    slots: set[tuple[int, int, int]] = set()
+    for student in db.list_students():
+        avail = get_student_availability(db, student["id"], week_start)
+        for (day, period), status in avail.items():
+            if status == "unavailable":
+                slots.add((student["id"], day, period))
+    return slots
+
+
+def set_student_availability(
+    db: Database, week_start: _dt.date, student_id: int, day: int, period: int, status: str | None, scope: str
+) -> None:
+    if scope == SCOPE_ALWAYS:
+        db.set_student_availability_template(student_id, day, period, status)
+        db.clear_student_availability_exception(week_key(week_start), student_id, day, period)
+    else:
+        db.set_student_availability_exception(week_key(week_start), student_id, day, period, status or "clear")
+
+
+def get_class_availability(db: Database, class_group_id: int, week_start: _dt.date) -> dict[tuple[int, int], str]:
+    result = dict(db.get_class_availability_template(class_group_id))
+    exceptions = db.get_class_availability_exceptions(week_key(week_start))
+    for (c_id, day, period), status in exceptions.items():
+        if c_id != class_group_id:
+            continue
+        if status == "clear":
+            result.pop((day, period), None)
+        else:
+            result[(day, period)] = status
+    return result
+
+
+def get_all_unavailable_class_slots(db: Database, week_start: _dt.date) -> set[tuple[int, int, int]]:
+    slots: set[tuple[int, int, int]] = set()
+    for class_group in db.list_class_groups():
+        avail = get_class_availability(db, class_group["id"], week_start)
+        for (day, period), status in avail.items():
+            if status == "unavailable":
+                slots.add((class_group["id"], day, period))
+    return slots
+
+
+def set_class_availability(
+    db: Database, week_start: _dt.date, class_group_id: int, day: int, period: int, status: str | None, scope: str
+) -> None:
+    if scope == SCOPE_ALWAYS:
+        db.set_class_availability_template(class_group_id, day, period, status)
+        db.clear_class_availability_exception(week_key(week_start), class_group_id, day, period)
+    else:
+        db.set_class_availability_exception(week_key(week_start), class_group_id, day, period, status or "clear")
+
+
 @dataclass
 class AutoAssignResult:
     placed: int
@@ -361,7 +443,7 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
     this_week_key = week_key(week_start)
 
     schedule, pool = get_week_view(db, week_start)
-    unavailable = get_all_unavailable_slots(db, week_start)
+    unavailable = UnavailableSlots.compute(db, week_start)
     warnings: list[str] = []
 
     def cross_week_warning(block: BlockView, d: int, p: int) -> None:

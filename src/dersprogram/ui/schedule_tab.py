@@ -215,7 +215,7 @@ class ScheduleTab(QWidget):
         self._pool: list = []
         self._blocks_by_id: dict[int, object] = {}
         self._row_entities: list[tuple[int, str]] = []
-        self._unavailable_slots: set[tuple[int, int, int]] = set()
+        self._unavailable = scheduling.UnavailableSlots()
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -324,19 +324,21 @@ class ScheduleTab(QWidget):
     # ---------- veri yenileme ----------
     def refresh(self) -> None:
         self._schedule, self._pool = scheduling.get_week_view(self.db, self.navigator.week_start)
-        self._unavailable_slots = scheduling.get_all_unavailable_slots(self.db, self.navigator.week_start)
+        self._unavailable = scheduling.UnavailableSlots.compute(self.db, self.navigator.week_start)
         self._blocks_by_id = {b.id: b for b in self._pool}
         for blocks in self._schedule.values():
             for b in blocks:
                 self._blocks_by_id[b.id] = b
 
         if self.mode == MODE_CLASS:
-            rows = self.db.list_rows("class_groups")
+            # Sınıflar elle sıralanabilir (bkz. ClassesTab yukarı/aşağı
+            # okları); Ana Program satırları da bu sırayı yansıtır.
+            self._row_entities = [(r["id"], r["name"]) for r in self.db.list_class_groups()]
         else:
             rows = self.db.list_teachers()
-        self._row_entities = sorted(
-            ((r["id"], r["name"]) for r in rows), key=lambda pair: scheduling.natural_sort_key(pair[1])
-        )
+            self._row_entities = sorted(
+                ((r["id"], r["name"]) for r in rows), key=lambda pair: scheduling.natural_sort_key(pair[1])
+            )
 
         self._render_grid()
         self._render_pool()
@@ -370,7 +372,9 @@ class ScheduleTab(QWidget):
                     col = day * period_count + (period - 1)
                     blocks = self._cell_blocks(entity_id, day, period)
                     if not blocks:
-                        if self.mode == MODE_TEACHER and (entity_id, day, period) in self._unavailable_slots:
+                        if self.mode == MODE_TEACHER and (entity_id, day, period) in self._unavailable.teacher:
+                            widget = theme.make_dense_unavailable()
+                        elif self.mode == MODE_CLASS and (entity_id, day, period) in self._unavailable.class_:
                             widget = theme.make_dense_unavailable()
                         else:
                             widget = theme.make_dense_empty()
@@ -434,7 +438,7 @@ class ScheduleTab(QWidget):
         if not self._row_matches_block(block, entity_id):
             return False
         members = self._block_group(block)
-        return not scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable_slots)
+        return not scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable)
 
     def _handle_drop(self, block_id: int, entity_id, day: int, period: int) -> None:
         block = self._blocks_by_id.get(block_id)
@@ -450,7 +454,7 @@ class ScheduleTab(QWidget):
             return
         members = self._block_group(block)
         label = self._group_label(members)
-        conflicts = scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable_slots)
+        conflicts = scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable)
         if conflicts:
             proceed = QMessageBox.question(
                 self,

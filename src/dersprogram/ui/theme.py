@@ -131,6 +131,8 @@ NAV_ICONS: dict[str, str] = {
     "ayarlar": "M4 7h9 M17 7h3 M4 17h3 M11 17h9 M14 4.5v5 M8 14.5v5",
     "prev": "M15 18l-6-6 6-6",
     "next": "M9 18l6-6-6-6",
+    "up": "M18 15l-6-6-6 6",
+    "down": "M6 9l6 6 6-6",
     "plus": "M12 5v14M5 12h14",
     "bolt": "M13 3 4 14h6l-1 7 9-11h-6l1-7z",
     "search": "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M21 21l-4.3-4.3",

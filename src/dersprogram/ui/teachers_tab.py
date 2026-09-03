@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt
 
 from ..db import Database
 from .. import scheduling
-from .widgets import WeekNavigator, TeacherAvailabilityGrid, SummaryTable, ScopeDialog
+from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog
 
 NO_SUBJECT = "(Seçilmedi)"
 
@@ -79,7 +79,7 @@ class TeachersTab(QWidget):
         bottom_row = QHBoxLayout()
 
         grid_col = QVBoxLayout()
-        self.mini_grid = TeacherAvailabilityGrid()
+        self.mini_grid = AvailabilityGrid()
         self.mini_grid.changed.connect(self._handle_availability_changed)
         grid_col.addWidget(self.mini_grid, 1)
         self.save_availability_button = QPushButton("Müsaitliği Kaydet")

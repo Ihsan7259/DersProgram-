@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt
 
 from ..db import Database
 from .. import scheduling
-from .widgets import WeekNavigator, MiniScheduleGrid, SummaryTable
+from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog
 
 
 class StudentsTab(QWidget):
@@ -28,6 +28,7 @@ class StudentsTab(QWidget):
         self.db = db
         self.on_change = on_change
         self.selected_id: int | None = None
+        self._pending_availability: dict[tuple[int, int], str | None] = {}
 
         layout = QVBoxLayout(self)
 
@@ -81,10 +82,22 @@ class StudentsTab(QWidget):
         self.navigator = WeekNavigator(lambda: len(self.db.day_names))
         detail_layout.addWidget(self.navigator)
 
+        availability_hint = QLabel(
+            "Boş kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), 3. tık kaldırır. "
+            "Gün/saat başlığına tıklarsanız o günün/saatin tamamı topluca değişir. "
+            "Müsait değil işaretlenen saatlere Ana Program'da bu öğrenci için ders atanamaz."
+        )
+        availability_hint.setWordWrap(True)
+        detail_layout.addWidget(availability_hint)
+
         bottom_row = QHBoxLayout()
         grid_col = QVBoxLayout()
-        self.mini_grid = MiniScheduleGrid()
+        self.mini_grid = AvailabilityGrid()
+        self.mini_grid.changed.connect(self._handle_availability_changed)
         grid_col.addWidget(self.mini_grid, 1)
+        self.save_availability_button = QPushButton("Müsaitliği Kaydet")
+        self.save_availability_button.clicked.connect(self.handle_save_availability)
+        grid_col.addWidget(self.save_availability_button)
         bottom_row.addLayout(grid_col, 3)
 
         summary_col = QVBoxLayout()
@@ -123,7 +136,7 @@ class StudentsTab(QWidget):
     def _reload_combos(self) -> None:
         self.class_combo.clear()
         self.class_combo.addItem("(Yok)", None)
-        for c in self.db.list_rows("class_groups"):
+        for c in self.db.list_class_groups():
             self.class_combo.addItem(c["name"], c["id"])
 
         self.coach_combo.clear()
@@ -144,8 +157,9 @@ class StudentsTab(QWidget):
         self.refresh_detail()
 
     def refresh_detail(self) -> None:
+        self._pending_availability = {}
         if self.selected_id is None:
-            self.mini_grid.render(self.db, {})
+            self.mini_grid.render(self.db, {}, {})
             self.summary_table.render({})
             return
         student = self.db.get_student(self.selected_id)
@@ -153,11 +167,30 @@ class StudentsTab(QWidget):
         filtered = scheduling.student_effective_blocks(
             self.db, self.navigator.week_start, self.selected_id, class_group_id
         )
-        self.mini_grid.render(self.db, filtered)
+        availability = scheduling.get_student_availability(self.db, self.selected_id, self.navigator.week_start)
+        self.mini_grid.render(self.db, filtered, availability)
         totals = scheduling.summarize_student_hours(
             self.db, self.navigator.week_start, self.selected_id, class_group_id
         )
         self.summary_table.render(totals)
+
+    def _handle_availability_changed(self, day: int, period: int, status) -> None:
+        self._pending_availability[(day, period)] = status
+
+    def handle_save_availability(self) -> None:
+        if self.selected_id is None:
+            QMessageBox.information(self, "Seçim yok", "Önce listeden bir öğrenci seçin.")
+            return
+        if not self._pending_availability:
+            QMessageBox.information(self, "Değişiklik yok", "Kaydedilecek bir müsaitlik değişikliği yok.")
+            return
+        dialog = ScopeDialog(self.db, self, "Müsaitlik değişikliklerini kaydetme")
+        if dialog.exec() != ScopeDialog.Accepted:
+            return
+        scope = dialog.scope()
+        for (day, period), status in self._pending_availability.items():
+            scheduling.set_student_availability(self.db, self.navigator.week_start, self.selected_id, day, period, status, scope)
+        self.refresh_detail()
 
     def handle_selection(self) -> None:
         items = self.table_widget.selectedItems()

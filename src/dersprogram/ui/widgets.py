@@ -142,7 +142,7 @@ class MiniScheduleGrid(QTableWidget):
                 self.setCellWidget(period - 1, day, theme.make_multi_cell(blocks, compact=True))
 
 
-class TeacherAvailabilityGrid(QTableWidget):
+class AvailabilityGrid(QTableWidget):
     """Bir öğretmenin haftalık müsaitlik durumunu düzenlemek için
     tıklanabilir ızgara. Zaten ders atanmış hücreler (ders kartı gösterilir)
     tıklanamaz. Boş hücrelere tıklamak durumu döngüsel değiştirir:

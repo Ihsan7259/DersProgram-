@@ -78,7 +78,7 @@ class AddLessonDialog(QDialog):
         layout.addRow(self.subject_label, self.subject_combo)
 
         self.class_combo = QComboBox()
-        for c in db.list_rows("class_groups"):
+        for c in db.list_class_groups():
             self.class_combo.addItem(c["name"], c["id"])
         self.class_label = QLabel("Sınıf:")
         layout.addRow(self.class_label, self.class_combo)

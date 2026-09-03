@@ -17,7 +17,8 @@ from PySide6.QtCore import Qt
 
 from ..db import Database
 from .. import scheduling
-from .widgets import WeekNavigator, MiniScheduleGrid, SummaryTable
+from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog
+from . import theme
 
 
 class ClassesTab(QWidget):
@@ -26,6 +27,7 @@ class ClassesTab(QWidget):
         self.db = db
         self.on_change = on_change
         self.selected_id: int | None = None
+        self._pending_availability: dict[tuple[int, int], str | None] = {}
 
         layout = QVBoxLayout(self)
 
@@ -46,9 +48,14 @@ class ClassesTab(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
 
-        self.table_widget = QTableWidget(0, 1)
-        self.table_widget.setHorizontalHeaderLabels(["Ad"])
-        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_widget = QTableWidget(0, 3)
+        self.table_widget.setHorizontalHeaderLabels(["Ad", "", ""])
+        header = self.table_widget.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.table_widget.setColumnWidth(1, 30)
+        self.table_widget.setColumnWidth(2, 30)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
         splitter.addWidget(self.table_widget)
@@ -59,13 +66,34 @@ class ClassesTab(QWidget):
         detail_layout.addWidget(QLabel("Bu haftaki program:"))
         self.navigator = WeekNavigator(lambda: len(self.db.day_names))
         detail_layout.addWidget(self.navigator)
-        self.mini_grid = MiniScheduleGrid()
-        detail_layout.addWidget(self.mini_grid, 2)
-        detail_layout.addWidget(QLabel("Haftalık özet:"))
+
+        availability_hint = QLabel(
+            "Boş kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), 3. tık kaldırır. "
+            "Gün/saat başlığına tıklarsanız o günün/saatin tamamı topluca değişir. "
+            "Müsait değil işaretlenen saatlere Ana Program'da bu sınıf için ders atanamaz."
+        )
+        availability_hint.setWordWrap(True)
+        detail_layout.addWidget(availability_hint)
+
+        bottom_row = QHBoxLayout()
+        grid_col = QVBoxLayout()
+        self.mini_grid = AvailabilityGrid()
+        self.mini_grid.changed.connect(self._handle_availability_changed)
+        grid_col.addWidget(self.mini_grid, 1)
+        self.save_availability_button = QPushButton("Müsaitliği Kaydet")
+        self.save_availability_button.clicked.connect(self.handle_save_availability)
+        grid_col.addWidget(self.save_availability_button)
+        bottom_row.addLayout(grid_col, 3)
+
+        summary_col = QVBoxLayout()
+        summary_col.addWidget(QLabel("Haftalık özet:"))
         self.summary_table = SummaryTable()
-        detail_layout.addWidget(self.summary_table, 1)
+        summary_col.addWidget(self.summary_table, 1)
+        bottom_row.addLayout(summary_col, 1)
+
+        detail_layout.addLayout(bottom_row, 1)
         splitter.addWidget(detail)
-        splitter.setSizes([250, 400])
+        splitter.setSizes([220, 480])
 
         layout.addWidget(splitter, 1)
 
@@ -90,18 +118,47 @@ class ClassesTab(QWidget):
                 self.table_widget.scrollToItem(item)
                 break
 
+    @staticmethod
+    def _move_button(icon_name: str, enabled: bool) -> QPushButton:
+        btn = QPushButton()
+        btn.setIcon(theme.icon(theme.NAV_ICONS[icon_name], theme.INK_MUTED_38, 11))
+        btn.setFixedSize(24, 24)
+        btn.setEnabled(enabled)
+        btn.setStyleSheet(
+            f"QPushButton {{ border:1px solid {theme.BORDER_INPUT}; border-radius:6px; background:{theme.SURFACE}; }}"
+            f"QPushButton:hover {{ background:{theme.APP_BG}; }}"
+            f"QPushButton:disabled {{ border-color:transparent; background:transparent; }}"
+        )
+        return btn
+
     def refresh(self) -> None:
-        rows = self.db.list_rows("class_groups")
+        rows = self.db.list_class_groups()
         self.table_widget.setRowCount(len(rows))
         for r, row in enumerate(rows):
             item_name = QTableWidgetItem(row["name"])
             item_name.setData(Qt.UserRole, row["id"])
             self.table_widget.setItem(r, 0, item_name)
+
+            up_btn = self._move_button("up", enabled=r > 0)
+            up_btn.clicked.connect(lambda _checked=False, cid=row["id"]: self.handle_move(cid, -1))
+            self.table_widget.setCellWidget(r, 1, up_btn)
+
+            down_btn = self._move_button("down", enabled=r < len(rows) - 1)
+            down_btn.clicked.connect(lambda _checked=False, cid=row["id"]: self.handle_move(cid, 1))
+            self.table_widget.setCellWidget(r, 2, down_btn)
         self.refresh_detail()
 
+    def handle_move(self, class_id: int, direction: int) -> None:
+        self.db.move_class_group(class_id, direction)
+        selected = self.selected_id
+        self.refresh()
+        if selected is not None:
+            self._select_row_by_id(selected)
+
     def refresh_detail(self) -> None:
+        self._pending_availability = {}
         if self.selected_id is None:
-            self.mini_grid.render(self.db, {})
+            self.mini_grid.render(self.db, {}, {})
             self.summary_table.render({})
             return
         schedule, _pool = scheduling.get_week_view(self.db, self.navigator.week_start)
@@ -110,9 +167,28 @@ class ClassesTab(QWidget):
             matched = [b for b in blocks if b.class_group_id == self.selected_id]
             if matched:
                 filtered[cell] = matched
-        self.mini_grid.render(self.db, filtered)
+        availability = scheduling.get_class_availability(self.db, self.selected_id, self.navigator.week_start)
+        self.mini_grid.render(self.db, filtered, availability)
         totals = scheduling.summarize_hours(self.db, self.navigator.week_start, class_group_id=self.selected_id)
         self.summary_table.render(totals)
+
+    def _handle_availability_changed(self, day: int, period: int, status) -> None:
+        self._pending_availability[(day, period)] = status
+
+    def handle_save_availability(self) -> None:
+        if self.selected_id is None:
+            QMessageBox.information(self, "Seçim yok", "Önce listeden bir sınıf seçin.")
+            return
+        if not self._pending_availability:
+            QMessageBox.information(self, "Değişiklik yok", "Kaydedilecek bir müsaitlik değişikliği yok.")
+            return
+        dialog = ScopeDialog(self.db, self, "Müsaitlik değişikliklerini kaydetme")
+        if dialog.exec() != ScopeDialog.Accepted:
+            return
+        scope = dialog.scope()
+        for (day, period), status in self._pending_availability.items():
+            scheduling.set_class_availability(self.db, self.navigator.week_start, self.selected_id, day, period, status, scope)
+        self.refresh_detail()
 
     def handle_selection(self) -> None:
         items = self.table_widget.selectedItems()
@@ -137,7 +213,7 @@ class ClassesTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Sınıf adı boş olamaz.")
             return
-        new_id = self.db.add_row("class_groups", name)
+        new_id = self.db.add_class_group(name)
         self.clear_form()
         self.refresh()
         self._select_row_by_id(new_id)
