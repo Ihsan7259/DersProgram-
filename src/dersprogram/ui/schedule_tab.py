@@ -64,8 +64,23 @@ class PoolList(QListWidget):
         return md
 
 
-def _pool_chip(block) -> QWidget:
-    _bg, dot = theme.LESSON_TYPE_COLORS.get(block.type, (theme.SURFACE, theme.INK_MUTED_58))
+def _group_pool_labels(rep_block, members: list) -> tuple[str, str]:
+    """Bir zümre grubu (birden fazla öğretmenin aynı buluşması) için
+    (kısa, tam) etiket döner; tek üyeli gruplarda normal etiketlere
+    düşer."""
+    if len(members) <= 1:
+        return rep_block.pool_label_short(), rep_block.pool_label()
+    names = sorted(m.teacher_name or "" for m in members)
+    short = f"Züm · {len(members)} hoca"
+    if rep_block.subject_name:
+        short = f"Züm · {rep_block.subject_name[:4]} · {len(members)} hoca"
+    full = "Zümre" + (f" · {rep_block.subject_name}" if rep_block.subject_name else "") + " · " + ", ".join(names)
+    return short, full
+
+
+def _pool_chip(rep_block, members: list) -> QWidget:
+    _bg, dot = theme.LESSON_TYPE_COLORS.get(rep_block.type, (theme.SURFACE, theme.INK_MUTED_58))
+    short_text, full_text = _group_pool_labels(rep_block, members)
     chip = QWidget()
     layout = QHBoxLayout(chip)
     layout.setContentsMargins(11, 8, 12, 9)
@@ -74,11 +89,11 @@ def _pool_chip(block) -> QWidget:
     dot_label.setFixedSize(7, 7)
     dot_label.setStyleSheet(f"background:{dot}; border-radius:3.5px;")
     layout.addWidget(dot_label)
-    text = QLabel(block.pool_label_short())
-    text.setToolTip(block.pool_label())
+    text = QLabel(short_text)
+    text.setToolTip(full_text)
     text.setStyleSheet(f"font-size:8.5pt; font-weight:600; color:{theme.INK_MUTED_30}; background:transparent;")
     layout.addWidget(text)
-    chip.setToolTip(block.pool_label())
+    chip.setToolTip(full_text)
     chip.setStyleSheet(
         f"background:{theme.SURFACE}; border:1px solid {theme.BORDER_SUBTLE}; border-radius:12px;"
     )
@@ -372,24 +387,54 @@ class ScheduleTab(QWidget):
     def _render_pool(self) -> None:
         self.pool_label.setText(f"Atanmamış Dersler ({len(self._pool)})")
         self.pool_list.clear()
-        for block in sorted(self._pool, key=lambda b: b.pool_label()):
+        seen_groups: set[int] = set()
+        pool_items: list[tuple] = []  # (rep_block, members)
+        for block in self._pool:
+            if block.zumre_group_id is not None:
+                if block.zumre_group_id in seen_groups:
+                    continue
+                seen_groups.add(block.zumre_group_id)
+                members = self._group_members(block.zumre_group_id)
+                rep = min(members, key=lambda b: b.id)
+                pool_items.append((rep, members))
+            else:
+                pool_items.append((block, [block]))
+        for rep, members in sorted(pool_items, key=lambda pair: pair[0].pool_label()):
             item = QListWidgetItem()
-            item.setData(Qt.UserRole, block.id)
-            chip = _pool_chip(block)
+            item.setData(Qt.UserRole, rep.id)
+            chip = _pool_chip(rep, members)
             self.pool_list.addItem(item)
             self.pool_list.setItemWidget(item, chip)
             item.setSizeHint(chip.sizeHint())
+
+    # ---------- zümre grupları ----------
+    def _group_members(self, zumre_group_id: int) -> list:
+        return [b for b in self._blocks_by_id.values() if b.zumre_group_id == zumre_group_id]
+
+    def _block_group(self, block) -> list:
+        """block'un ait olduğu tüm üyeler (zümre grubu değilse sadece kendisi)."""
+        if block.zumre_group_id is not None:
+            return self._group_members(block.zumre_group_id)
+        return [block]
+
+    @staticmethod
+    def _group_label(members: list) -> str:
+        if len(members) <= 1:
+            return members[0].pool_label()
+        names = sorted(m.teacher_name or "" for m in members)
+        return "Zümre (" + ", ".join(names) + ")"
 
     # ---------- yerleştirme / kaldırma ----------
     def _row_matches_block(self, block, entity_id) -> bool:
         if self.mode == MODE_CLASS:
             return block.type == TYPE_CLASS and block.class_group_id == entity_id
-        return block.teacher_id == entity_id
+        return any(m.teacher_id == entity_id for m in self._block_group(block))
 
     def _validate_drop(self, block, entity_id, day: int, period: int) -> bool:
         if not self._row_matches_block(block, entity_id):
             return False
-        return not scheduling.find_conflicts(self._schedule, day, period, block, self._unavailable_slots)
+        members = self._block_group(block)
+        return not scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable_slots)
 
     def _handle_drop(self, block_id: int, entity_id, day: int, period: int) -> None:
         block = self._blocks_by_id.get(block_id)
@@ -403,21 +448,25 @@ class ScheduleTab(QWidget):
                 "Lütfen kendi satırına bırakın (ya da uygun görünüme geçin).",
             )
             return
-        conflicts = scheduling.find_conflicts(self._schedule, day, period, block, self._unavailable_slots)
+        members = self._block_group(block)
+        label = self._group_label(members)
+        conflicts = scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable_slots)
         if conflicts:
             proceed = QMessageBox.question(
                 self,
                 "Çakışma bulundu",
-                "Bu hücreye yerleştirmek şu çakışmalara yol açar:\n- " + "\n- ".join(conflicts) +
+                f"'{label}' dersini bu hücreye yerleştirmek şu çakışmalara yol açar:\n- " + "\n- ".join(conflicts) +
                 "\n\nYine de yerleştirmek istiyor musunuz?",
             )
             if proceed != QMessageBox.Yes:
                 return
 
-        dialog = ScopeDialog(self.db, self, f"'{block.pool_label()}' dersini yerleştirme")
+        dialog = ScopeDialog(self.db, self, f"'{label}' dersini yerleştirme")
         if dialog.exec() != ScopeDialog.Accepted:
             return
-        scheduling.place_block(self.db, self.navigator.week_start, block_id, day, period, dialog.scope())
+        scope = dialog.scope()
+        for member in members:
+            scheduling.place_block(self.db, self.navigator.week_start, member.id, day, period, scope)
         self.refresh()
 
     def _handle_remove_request(self, entity_id, day: int, period: int) -> None:
@@ -425,10 +474,14 @@ class ScheduleTab(QWidget):
         if not blocks:
             return
         chosen = blocks[0]
-        dialog = ScopeDialog(self.db, self, f"'{chosen.pool_label()}' dersini kaldırma")
+        members = self._block_group(chosen)
+        label = self._group_label(members)
+        dialog = ScopeDialog(self.db, self, f"'{label}' dersini kaldırma")
         if dialog.exec() != ScopeDialog.Accepted:
             return
-        scheduling.clear_block(self.db, self.navigator.week_start, chosen.id, dialog.scope())
+        scope = dialog.scope()
+        for member in members:
+            scheduling.clear_block(self.db, self.navigator.week_start, member.id, scope)
         self.refresh()
 
     # ---------- ders ekle / oto ata ----------

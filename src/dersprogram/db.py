@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS lesson_blocks (
     class_group_id INTEGER REFERENCES class_groups(id) ON DELETE CASCADE,
     student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
     room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+    zumre_group_id INTEGER,
     template_day INTEGER,
     template_period INTEGER,
     note TEXT DEFAULT ''
@@ -172,6 +173,7 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("class_group_id", "INTEGER REFERENCES class_groups(id) ON DELETE CASCADE"),
         ("student_id", "INTEGER REFERENCES students(id) ON DELETE CASCADE"),
         ("room_id", "INTEGER REFERENCES rooms(id) ON DELETE SET NULL"),
+        ("zumre_group_id", "INTEGER"),
         ("template_day", "INTEGER"),
         ("template_period", "INTEGER"),
         ("note", "TEXT DEFAULT ''"),
@@ -396,6 +398,37 @@ class Database:
                 (type_, teacher_id, subject_id, class_group_id, student_id, room_id, note),
             )
             ids.append(cur.lastrowid)
+        self.conn.commit()
+        return ids
+
+    def add_zumre_group(
+        self,
+        teacher_ids: list[int],
+        subject_id: int | None = None,
+        room_id: int | None = None,
+        note: str = "",
+    ) -> list[int]:
+        """Bir zümre 'buluşması' = seçilen tüm öğretmenler için, ortak bir
+        zumre_group_id ile birbirine bağlı birer blok. Ana Program'da bu
+        grup tek bir atanmamış ders olarak görünür; herhangi bir üyenin
+        satırına sürüklenip bırakıldığında tüm grup aynı gün/saate
+        yerleştirilir (bkz. scheduling.find_group_conflicts,
+        schedule_tab.ScheduleTab._group_members)."""
+        ids = []
+        for teacher_id in teacher_ids:
+            cur = self.conn.execute(
+                """
+                INSERT INTO lesson_blocks(type, teacher_id, subject_id, room_id, note)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (TYPE_DEPARTMENT, teacher_id, subject_id, room_id, note),
+            )
+            ids.append(cur.lastrowid)
+        group_id = min(ids)
+        self.conn.executemany(
+            "UPDATE lesson_blocks SET zumre_group_id=? WHERE id=?",
+            [(group_id, i) for i in ids],
+        )
         self.conn.commit()
         return ids
 

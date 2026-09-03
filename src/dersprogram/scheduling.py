@@ -85,6 +85,7 @@ class BlockView:
     day: int | None = None
     period: int | None = None
     student_class_group_id: int | None = None
+    zumre_group_id: int | None = None
 
     def short_label(self) -> str:
         type_label = LESSON_TYPE_LABELS.get(self.type, self.type)
@@ -184,6 +185,7 @@ def _row_to_blockview(row) -> BlockView:
         room_name=row["room_name"],
         note=row["note"] or "",
         student_class_group_id=row["student_class_group_id"],
+        zumre_group_id=row["zumre_group_id"],
     )
 
 
@@ -260,6 +262,24 @@ def find_conflicts(
             and other.student_class_group_id == block.class_group_id
         ):
             reasons.append(f"{other.student_name} bu saatte kendi sınıfının ({block.class_name}) dersinde olmalı")
+    return reasons
+
+
+def find_group_conflicts(
+    schedule: dict[tuple[int, int], list[BlockView]],
+    day: int,
+    period: int,
+    blocks: list[BlockView],
+    unavailable_teacher_slots: set[tuple[int, int, int]] | None = None,
+) -> list[str]:
+    """find_conflicts'ın bir grup (ör. bir zümre buluşmasındaki tüm
+    öğretmen blokları) için toplu hali: gruptaki herhangi bir üyenin bu
+    (day, period)'a yerleşmesi bir çakışma doğuruyorsa, o üyenin
+    mesajları da sonuca eklenir - grup ancak HİÇBİR üye çakışmıyorsa
+    yerleştirilebilir."""
+    reasons: list[str] = []
+    for block in blocks:
+        reasons.extend(find_conflicts(schedule, day, period, block, unavailable_teacher_slots))
     return reasons
 
 
@@ -344,9 +364,19 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
     unavailable = get_all_unavailable_slots(db, week_start)
     warnings: list[str] = []
 
-    groups: dict[tuple, list[BlockView]] = {}
-    for block in pool:
-        groups.setdefault(block.group_key(), []).append(block)
+    def cross_week_warning(block: BlockView, d: int, p: int) -> None:
+        if block.teacher_id is None:
+            return
+        other_weeks = [
+            w for w in db.get_teacher_unavailable_exception_weeks(block.teacher_id, d, p)
+            if w != this_week_key
+        ]
+        if other_weeks:
+            dates = ", ".join(_dt.date.fromisoformat(w).strftime("%d.%m.%Y") for w in other_weeks)
+            warnings.append(
+                f"{block.teacher_name}: {day_abbrev(day_names[d])} {p}. saat kalıcı olarak "
+                f"yerleştirildi, ama bu saat şu hafta(lar) için 'müsait değil' işaretli: {dates}"
+            )
 
     # basit günlük yük sayacı: (gün) -> o gün kaç blok var
     day_load = [0] * day_count
@@ -354,6 +384,44 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
         day_load[d] += len(blocks)
 
     placed = 0
+
+    # Zümre grupları (aynı zumre_group_id'yi paylaşan bloklar) tek bir
+    # "buluşma" olarak ele alınır: hepsi için ortak, çakışmasız bir
+    # gün/saat bulunup HEPSİ AYNI ANDA o hücreye yerleştirilir - aksi
+    # halde her öğretmenin zümresi farklı bir saate düşebilirdi.
+    zumre_groups: dict[int, list[BlockView]] = {}
+    normal_pool: list[BlockView] = []
+    for block in pool:
+        if block.type == TYPE_DEPARTMENT and block.zumre_group_id is not None:
+            zumre_groups.setdefault(block.zumre_group_id, []).append(block)
+        else:
+            normal_pool.append(block)
+
+    for members in zumre_groups.values():
+        best = None
+        for d in sorted(range(day_count), key=lambda d: day_load[d]):
+            for p in range(1, period_count + 1):
+                if find_group_conflicts(schedule, d, p, members, unavailable):
+                    continue
+                best = (d, p)
+                break
+            if best:
+                break
+        if best is None:
+            continue
+        d, p = best
+        for block in members:
+            place_block(db, week_start, block.id, d, p, SCOPE_ALWAYS)
+            schedule.setdefault((d, p), []).append(block)
+            block.day, block.period = d, p
+            cross_week_warning(block, d, p)
+        day_load[d] += len(members)
+        placed += len(members)
+
+    groups: dict[tuple, list[BlockView]] = {}
+    for block in normal_pool:
+        groups.setdefault(block.group_key(), []).append(block)
+
     for group_key, blocks in groups.items():
         group_days_used: dict[int, int] = {}
         for block in blocks:
@@ -391,18 +459,7 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
             day_load[d] += 1
             group_days_used[d] = group_days_used.get(d, 0) + 1
             placed += 1
-
-            if block.teacher_id is not None:
-                other_weeks = [
-                    w for w in db.get_teacher_unavailable_exception_weeks(block.teacher_id, d, p)
-                    if w != this_week_key
-                ]
-                if other_weeks:
-                    dates = ", ".join(_dt.date.fromisoformat(w).strftime("%d.%m.%Y") for w in other_weeks)
-                    warnings.append(
-                        f"{block.teacher_name}: {day_abbrev(day_names[d])} {p}. saat kalıcı olarak "
-                        f"yerleştirildi, ama bu saat şu hafta(lar) için 'müsait değil' işaretli: {dates}"
-                    )
+            cross_week_warning(block, d, p)
 
     return AutoAssignResult(placed=placed, warnings=warnings)
 
@@ -422,6 +479,38 @@ def summarize_hours(db: Database, week_start: _dt.date, *, teacher_id: int | Non
                 continue
             if class_group_id is not None and block.class_group_id != class_group_id:
                 continue
+            totals[block.type] = totals.get(block.type, 0) + 1
+    return totals
+
+
+def student_effective_blocks(
+    db: Database, week_start: _dt.date, student_id: int, class_group_id: int | None
+) -> dict[tuple[int, int], list[BlockView]]:
+    """Bir öğrencinin haftalık programı: kendi kişisel (birebir/koçluk)
+    blokları + (bir sınıfa atalıysa) o sınıfın tüm sınıf dersleri
+    birleşik olarak - öğrenci kendi sınıfının derslerine de katılır."""
+    schedule, _pool = get_week_view(db, week_start)
+    filtered: dict[tuple[int, int], list[BlockView]] = {}
+    for cell, blocks in schedule.items():
+        matched = [
+            b for b in blocks
+            if b.student_id == student_id
+            or (class_group_id is not None and b.type == TYPE_CLASS and b.class_group_id == class_group_id)
+        ]
+        if matched:
+            filtered[cell] = matched
+    return filtered
+
+
+def summarize_student_hours(
+    db: Database, week_start: _dt.date, student_id: int, class_group_id: int | None
+) -> dict[str, int]:
+    """summarize_hours(student_id=...) ile aynı ama öğrencinin sınıfının
+    dersleri de dahil edilir (bkz. student_effective_blocks)."""
+    filtered = student_effective_blocks(db, week_start, student_id, class_group_id)
+    totals: dict[str, int] = {t: 0 for t in LESSON_TYPE_LABELS}
+    for blocks in filtered.values():
+        for block in blocks:
             totals[block.type] = totals.get(block.type, 0) + 1
     return totals
 

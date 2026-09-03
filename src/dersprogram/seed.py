@@ -79,9 +79,18 @@ def seed_demo_data(db: Database) -> None:
 
     place(TYPE_ONE_ON_ONE, t_ayse, s_fizik, 1, 2, room=r2, student=st_zeynep)
     place(TYPE_ONE_ON_ONE, t_mehmet, s_mat, 2, 1, room=r1, student=st_berk)
-    place(TYPE_DEPARTMENT, t_ahmet, s_mat, 4, 1)
-    place(TYPE_DEPARTMENT, t_mehmet, s_mat, 4, 1)
     place(TYPE_PROBLEM_SOLVING, t_ayse, s_fizik, 4, 2)
+
+    # Zümre: aynı buluşmadaki tüm öğretmenler ortak bir zumre_group_id ile
+    # bağlanır ki Ana Program'da tek bir ders olarak görünsün ve birine
+    # sürüklenince hepsi aynı gün/saate yerleşsin (bkz. db.add_zumre_group).
+    zumre1_ids = db.add_zumre_group([t_ahmet, t_mehmet], subject_id=s_mat)
+    scheduling.place_block(db, week, zumre1_ids[0], day=4, period=1, scope=scheduling.SCOPE_ALWAYS)
+    for other_id in zumre1_ids[1:]:
+        scheduling.place_block(db, week, other_id, day=4, period=1, scope=scheduling.SCOPE_ALWAYS)
+    # ikinci bir zümre bilinçli olarak atanmamış bırakılıyor - "birine
+    # sürükleyince hepsi dolsun" akışını denemek için.
+    db.add_zumre_group([t_ayse, t_canan, t_elif], subject_id=None)
 
     # Zeynep'in otomatik oluşan koçluk bloğunu yerleştir; diğer koçluk
     # blokları (Can/Berk) ve aşağıdaki dersler bilinçli olarak atanmamış

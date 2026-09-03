@@ -149,10 +149,12 @@ class AddLessonDialog(QDialog):
             if not teacher_ids:
                 QMessageBox.warning(self, "Eksik bilgi", "En az bir öğretmen seçmelisiniz.")
                 return
-            for teacher_id in teacher_ids:
-                self.db.add_lesson_blocks(
-                    t, hours, teacher_id=teacher_id, subject_id=subject_id, room_id=room_id
-                )
+            # Her "saat" ayrı bir buluşma: aynı buluşmadaki tüm öğretmenlerin
+            # blokları ortak bir zumre_group_id ile bağlanır ki Ana Program'da
+            # tek bir ders olarak görünüp birine sürüklenince hepsi aynı
+            # gün/saate yerleşsin (bkz. db.add_zumre_group).
+            for _ in range(hours):
+                self.db.add_zumre_group(teacher_ids, subject_id=subject_id, room_id=room_id)
             self.accept()
             return
 

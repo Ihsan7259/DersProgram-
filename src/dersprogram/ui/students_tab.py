@@ -77,16 +77,25 @@ class StudentsTab(QWidget):
         detail = QWidget()
         detail_layout = QVBoxLayout(detail)
         detail_layout.setContentsMargins(0, 0, 0, 0)
-        detail_layout.addWidget(QLabel("Bu haftaki program:"))
+        detail_layout.addWidget(QLabel("Bu haftaki program (kendi dersleri + sınıfının dersleri):"))
         self.navigator = WeekNavigator(lambda: len(self.db.day_names))
         detail_layout.addWidget(self.navigator)
+
+        bottom_row = QHBoxLayout()
+        grid_col = QVBoxLayout()
         self.mini_grid = MiniScheduleGrid()
-        detail_layout.addWidget(self.mini_grid, 2)
-        detail_layout.addWidget(QLabel("Haftalık özet:"))
+        grid_col.addWidget(self.mini_grid, 1)
+        bottom_row.addLayout(grid_col, 3)
+
+        summary_col = QVBoxLayout()
+        summary_col.addWidget(QLabel("Haftalık özet:"))
         self.summary_table = SummaryTable()
-        detail_layout.addWidget(self.summary_table, 1)
+        summary_col.addWidget(self.summary_table, 1)
+        bottom_row.addLayout(summary_col, 1)
+
+        detail_layout.addLayout(bottom_row, 1)
         splitter.addWidget(detail)
-        splitter.setSizes([250, 400])
+        splitter.setSizes([220, 480])
 
         layout.addWidget(splitter, 1)
 
@@ -139,14 +148,15 @@ class StudentsTab(QWidget):
             self.mini_grid.render(self.db, {})
             self.summary_table.render({})
             return
-        schedule, _pool = scheduling.get_week_view(self.db, self.navigator.week_start)
-        filtered: dict[tuple[int, int], list] = {}
-        for cell, blocks in schedule.items():
-            matched = [b for b in blocks if b.student_id == self.selected_id]
-            if matched:
-                filtered[cell] = matched
+        student = self.db.get_student(self.selected_id)
+        class_group_id = student["class_group_id"] if student else None
+        filtered = scheduling.student_effective_blocks(
+            self.db, self.navigator.week_start, self.selected_id, class_group_id
+        )
         self.mini_grid.render(self.db, filtered)
-        totals = scheduling.summarize_hours(self.db, self.navigator.week_start, student_id=self.selected_id)
+        totals = scheduling.summarize_student_hours(
+            self.db, self.navigator.week_start, self.selected_id, class_group_id
+        )
         self.summary_table.render(totals)
 
     def handle_selection(self) -> None:
