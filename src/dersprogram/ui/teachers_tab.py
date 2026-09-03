@@ -69,25 +69,33 @@ class TeachersTab(QWidget):
         detail_layout.addWidget(self.navigator)
 
         availability_hint = QLabel(
-            "Boş bir kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), "
-            "3. tık işareti kaldırır. Müsait değil işaretlenen saatlere Ana Program'da ders atanamaz."
+            "Boş kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), 3. tık kaldırır. "
+            "Gün/saat başlığına tıklarsanız o günün/saatin tamamı topluca değişir. "
+            "Müsait değil işaretlenen saatlere Ana Program'da ders atanamaz."
         )
         availability_hint.setWordWrap(True)
         detail_layout.addWidget(availability_hint)
 
+        bottom_row = QHBoxLayout()
+
+        grid_col = QVBoxLayout()
         self.mini_grid = TeacherAvailabilityGrid()
         self.mini_grid.changed.connect(self._handle_availability_changed)
-        detail_layout.addWidget(self.mini_grid, 2)
-
+        grid_col.addWidget(self.mini_grid, 1)
         self.save_availability_button = QPushButton("Müsaitliği Kaydet")
         self.save_availability_button.clicked.connect(self.handle_save_availability)
-        detail_layout.addWidget(self.save_availability_button)
+        grid_col.addWidget(self.save_availability_button)
+        bottom_row.addLayout(grid_col, 3)
 
-        detail_layout.addWidget(QLabel("Haftalık özet:"))
+        summary_col = QVBoxLayout()
+        summary_col.addWidget(QLabel("Haftalık özet:"))
         self.summary_table = SummaryTable()
-        detail_layout.addWidget(self.summary_table, 1)
+        summary_col.addWidget(self.summary_table, 1)
+        bottom_row.addLayout(summary_col, 1)
+
+        detail_layout.addLayout(bottom_row, 1)
         splitter.addWidget(detail)
-        splitter.setSizes([250, 400])
+        splitter.setSizes([220, 480])
 
         layout.addWidget(splitter, 1)
 

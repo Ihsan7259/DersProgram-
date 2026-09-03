@@ -135,17 +135,30 @@ class TeacherAvailabilityGrid(QTableWidget):
     """Bir öğretmenin haftalık müsaitlik durumunu düzenlemek için
     tıklanabilir ızgara. Zaten ders atanmış hücreler (ders kartı gösterilir)
     tıklanamaz. Boş hücrelere tıklamak durumu döngüsel değiştirir:
-    boş -> müsait (yeşil) -> müsait değil (kırmızı) -> boş."""
+    boş -> müsait (yeşil) -> müsait değil (kırmızı) -> boş. Gün başlığına
+    (üstte) tıklamak o günün tümünü, saat başlığına (solda) tıklamak o
+    saatin tüm günlerini aynı döngüyle topluca değiştirir."""
 
     changed = Signal(int, int, object)  # day, period, yeni durum (None/'available'/'unavailable')
+
+    _ORDER = {None: "available", "available": "unavailable", "unavailable": None}
 
     def __init__(self):
         super().__init__()
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setShowGrid(False)
+        self.setStyleSheet(
+            "QHeaderView::section { font-size: 8pt; padding: 2px 0; }"
+        )
         self._occupied: set[tuple[int, int]] = set()
         self._state: dict[tuple[int, int], str] = {}
+        self._day_header_state: dict[int, str | None] = {}
+        self._period_header_state: dict[int, str | None] = {}
         self.cellClicked.connect(self._handle_click)
+        self.horizontalHeader().setSectionsClickable(True)
+        self.verticalHeader().setSectionsClickable(True)
+        self.horizontalHeader().sectionClicked.connect(self._handle_day_header_click)
+        self.verticalHeader().sectionClicked.connect(self._handle_period_header_click)
 
     def render(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], availability: dict[tuple[int, int], str]) -> None:
         day_names = db.day_names
@@ -155,12 +168,17 @@ class TeacherAvailabilityGrid(QTableWidget):
         self.setHorizontalHeaderLabels(day_names)
         self.setVerticalHeaderLabels([f"{p}." for p in range(1, period_count + 1)])
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.horizontalHeader().setMinimumSectionSize(46)
+        self.verticalHeader().setMaximumWidth(26)
 
         self._occupied = set(blocks_by_cell.keys())
         self._state = dict(availability)
+        self._day_header_state = {}
+        self._period_header_state = {}
 
+        row_height = max(28, min(52, 340 // max(period_count, 1)))
         for period in range(1, period_count + 1):
-            self.setRowHeight(period - 1, 40)
+            self.setRowHeight(period - 1, row_height)
             for day in range(len(day_names)):
                 cell = (day, period)
                 blocks = blocks_by_cell.get(cell, [])
@@ -192,18 +210,39 @@ class TeacherAvailabilityGrid(QTableWidget):
         frame.setStyleSheet(style)
         return frame
 
-    def _handle_click(self, row: int, col: int) -> None:
-        cell = (col, row + 1)  # (day, period)
-        if cell in self._occupied:
-            return
-        order = {None: "available", "available": "unavailable", "unavailable": None}
-        next_status = order[self._state.get(cell)]
+    def _apply(self, day: int, period: int, next_status: str | None) -> None:
+        cell = (day, period)
         if next_status is None:
             self._state.pop(cell, None)
         else:
             self._state[cell] = next_status
-        self.setCellWidget(row, col, self._availability_cell(next_status))
-        self.changed.emit(cell[0], cell[1], next_status)
+        self.setCellWidget(period - 1, day, self._availability_cell(next_status))
+        self.viewport().update()
+        self.changed.emit(day, period, next_status)
+
+    def _handle_click(self, row: int, col: int) -> None:
+        cell = (col, row + 1)  # (day, period)
+        if cell in self._occupied:
+            return
+        next_status = self._ORDER[self._state.get(cell)]
+        self._apply(cell[0], cell[1], next_status)
+
+    def _handle_day_header_click(self, day: int) -> None:
+        next_status = self._ORDER[self._day_header_state.get(day)]
+        self._day_header_state[day] = next_status
+        for period in range(1, self.rowCount() + 1):
+            if (day, period) in self._occupied:
+                continue
+            self._apply(day, period, next_status)
+
+    def _handle_period_header_click(self, row: int) -> None:
+        period = row + 1
+        next_status = self._ORDER[self._period_header_state.get(period)]
+        self._period_header_state[period] = next_status
+        for day in range(self.columnCount()):
+            if (day, period) in self._occupied:
+                continue
+            self._apply(day, period, next_status)
 
 
 class SummaryTable(QTableWidget):
