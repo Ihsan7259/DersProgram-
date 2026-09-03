@@ -25,6 +25,16 @@ from .. import scheduling
 from . import theme
 
 
+def _period_header_labels(db: Database, period_count: int) -> list[str]:
+    """'1.' ya da (Ayarlar'da saat girilmişse) '1.\n08:30-09:20' şeklinde
+    dikey başlık etiketleri üretir."""
+    labels = []
+    for p in range(1, period_count + 1):
+        time_label = db.period_time_label(p)
+        labels.append(f"{p}.\n{time_label}" if time_label else f"{p}.")
+    return labels
+
+
 class WeekNavigator(QWidget):
     week_changed = Signal(object)  # _dt.date (o haftanın pazartesisi)
 
@@ -132,8 +142,9 @@ class MiniScheduleGrid(QTableWidget):
         self.setRowCount(period_count)
         self.setColumnCount(len(day_names))
         self.setHorizontalHeaderLabels(day_names)
-        self.setVerticalHeaderLabels([f"{p}." for p in range(1, period_count + 1)])
+        self.setVerticalHeaderLabels(_period_header_labels(db, period_count))
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.verticalHeader().setMinimumWidth(30)
 
         for period in range(1, period_count + 1):
             self.setRowHeight(period - 1, 40)
@@ -159,7 +170,7 @@ class AvailabilityGrid(QTableWidget):
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setShowGrid(False)
         self.setStyleSheet(
-            "QHeaderView::section { font-size: 8pt; padding: 2px 0; }"
+            "QHeaderView::section { font-size: 7pt; padding: 2px 0; }"
         )
         self._occupied: set[tuple[int, int]] = set()
         self._state: dict[tuple[int, int], str] = {}
@@ -185,10 +196,10 @@ class AvailabilityGrid(QTableWidget):
         self.setRowCount(period_count)
         self.setColumnCount(len(day_names))
         self.setHorizontalHeaderLabels(day_names)
-        self.setVerticalHeaderLabels([f"{p}." for p in range(1, period_count + 1)])
+        self.setVerticalHeaderLabels(_period_header_labels(db, period_count))
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.horizontalHeader().setMinimumSectionSize(46)
-        self.verticalHeader().setMaximumWidth(26)
+        self.verticalHeader().setMaximumWidth(44)
 
         self._occupied = set(blocks_by_cell.keys())
         self._state = dict(availability)

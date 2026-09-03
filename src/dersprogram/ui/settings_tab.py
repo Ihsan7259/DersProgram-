@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, QTime
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QFormLayout,
     QSpinBox,
     QCheckBox,
     QComboBox,
     QDateEdit,
+    QTimeEdit,
     QPushButton,
     QMessageBox,
     QLabel,
@@ -85,6 +87,18 @@ class SettingsTab(QWidget):
 
         layout.addLayout(form)
 
+        layout.addWidget(QLabel(
+            "Her ders saatinin başlangıç/bitiş saatini isterseniz tek tek girin "
+            "(ör. 1. ders 08:30-09:20) - programın diğer yerlerinde saat numarasının "
+            "yanında gösterilir. Boş bırakırsanız sadece saat numarası gösterilir."
+        ))
+        self.period_time_edits: list[tuple[QTimeEdit, QTimeEdit]] = []
+        self.period_times_layout = QVBoxLayout()
+        self.period_times_layout.setSpacing(4)
+        layout.addLayout(self.period_times_layout)
+        self.period_spin.valueChanged.connect(self._rebuild_period_time_rows)
+        self._rebuild_period_time_rows()
+
         layout.addWidget(_divider())
 
         # ---------- dönem tarihleri ----------
@@ -142,6 +156,50 @@ class SettingsTab(QWidget):
         if self.on_change:
             self.on_change()
 
+    def _rebuild_period_time_rows(self) -> None:
+        """Ders saati sayısı değişince (spin box) satır sayısını buna göre
+        yeniden kurar; zaten girilmiş saatleri korur, yeni saatler için
+        önceki saatin bitişinden 10 dakika sonrasını varsayılan önerir."""
+        while self.period_times_layout.count():
+            item = self.period_times_layout.takeAt(0)
+            row_layout = item.layout()
+            if row_layout is not None:
+                while row_layout.count():
+                    sub = row_layout.takeAt(0)
+                    if sub.widget():
+                        sub.widget().deleteLater()
+                row_layout.deleteLater()
+            elif item.widget():
+                item.widget().deleteLater()
+
+        saved = self.db.period_times
+        self.period_time_edits = []
+        prev_end = None
+        for period in range(1, self.period_spin.value() + 1):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"{period}. ders:"))
+            start_edit = QTimeEdit()
+            start_edit.setDisplayFormat("HH:mm")
+            end_edit = QTimeEdit()
+            end_edit.setDisplayFormat("HH:mm")
+
+            entry = saved[period - 1] if period - 1 < len(saved) else None
+            if isinstance(entry, dict) and entry.get("start") and entry.get("end"):
+                start_edit.setTime(QTime.fromString(entry["start"], "HH:mm"))
+                end_edit.setTime(QTime.fromString(entry["end"], "HH:mm"))
+            else:
+                default_start = prev_end.addSecs(10 * 60) if prev_end else QTime(8, 30)
+                start_edit.setTime(default_start)
+                end_edit.setTime(default_start.addSecs(40 * 60))
+
+            row.addWidget(start_edit)
+            row.addWidget(QLabel("–"))
+            row.addWidget(end_edit)
+            row.addStretch()
+            self.period_times_layout.addLayout(row)
+            self.period_time_edits.append((start_edit, end_edit))
+            prev_end = end_edit.time()
+
     @staticmethod
     def _parse_date(value: str | None) -> QDate | None:
         if not value:
@@ -163,6 +221,11 @@ class SettingsTab(QWidget):
 
         self.db.set_setting("day_names", selected_days)
         self.db.set_setting("period_count", self.period_spin.value())
+        period_times = [
+            {"start": start_edit.time().toString("HH:mm"), "end": end_edit.time().toString("HH:mm")}
+            for start_edit, end_edit in self.period_time_edits
+        ]
+        self.db.set_setting("period_times", period_times)
         self.db.set_setting("term_start", self.term_start_edit.date().toString("yyyy-MM-dd"))
         self.db.set_setting("term_end", self.term_end_edit.date().toString("yyyy-MM-dd"))
 

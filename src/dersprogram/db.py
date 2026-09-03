@@ -204,6 +204,10 @@ DEFAULT_SETTINGS = {
     "theme": "light",
     "term_start": None,
     "term_end": None,
+    # Her ders saatinin başlangıç/bitiş saati (ör. "1. ders 08:30-09:20").
+    # Liste index'i period-1'e karşılık gelir; bir saat için henüz
+    # girilmemişse o index null kalır - Ayarlar'dan tek tek doldurulur.
+    "period_times": [],
 }
 
 
@@ -312,6 +316,22 @@ class Database:
     @property
     def term_end(self) -> str | None:
         return self.get_setting("term_end")
+
+    @property
+    def period_times(self) -> list:
+        return self.get_setting("period_times") or []
+
+    def period_time_label(self, period: int) -> str:
+        """'1. ders 08:30-09:20' gibi gösterimlerde kullanılan '08:30-09:20'
+        kısmı; o saat için zaman girilmemişse boş döner."""
+        times = self.period_times
+        if 1 <= period <= len(times) and times[period - 1]:
+            entry = times[period - 1]
+            start = entry.get("start") if isinstance(entry, dict) else None
+            end = entry.get("end") if isinstance(entry, dict) else None
+            if start and end:
+                return f"{start}-{end}"
+        return ""
 
     # ---------- basit tablolar (ders, sınıf, derslik) ----------
     def list_rows(self, table: str) -> list[sqlite3.Row]:

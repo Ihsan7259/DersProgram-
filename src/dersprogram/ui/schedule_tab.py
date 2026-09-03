@@ -12,6 +12,7 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -37,8 +38,8 @@ from . import theme
 
 MIME_PREFIX = "lesson-block:"
 
-VALID_STYLE = f"#cellFrame {{ border:2px dashed {theme.VALID_BORDER}; border-radius:5px; background:{theme.VALID_BG}; }}"
-INVALID_STYLE = f"#cellFrame {{ border:2px solid {theme.CONFLICT_BORDER}; border-radius:5px; background:{theme.CONFLICT_BG}; }}"
+VALID_STYLE = f"#cellFrame {{ border:2px dashed {theme.VALID_BORDER}; border-radius:0; background:{theme.VALID_BG}; }}"
+INVALID_STYLE = f"#cellFrame {{ border:2px solid {theme.CONFLICT_BORDER}; border-radius:0; background:{theme.CONFLICT_BG}; }}"
 
 MODE_CLASS = "class"
 MODE_TEACHER = "teacher"
@@ -116,8 +117,9 @@ class MainGrid(QTableWidget):
     daralır, yatay kaydırma kapalıdır - sadece aşağı kaydırılır."""
 
     row_header_double_clicked = Signal(int)  # entity_id
+    row_header_clicked = Signal(int)  # entity_id
 
-    def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request):
+    def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request, period_time_label=None):
         super().__init__()
         self.setObjectName("mainGrid")
         self.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -130,11 +132,14 @@ class MainGrid(QTableWidget):
         header.setMinimumSectionSize(8)
         header.setMinimumHeight(36)
         header.setDefaultAlignment(Qt.AlignCenter)
+        self.verticalHeader().setSectionsClickable(True)
         self.verticalHeader().sectionDoubleClicked.connect(self._handle_row_header_double_click)
+        self.verticalHeader().sectionClicked.connect(self._handle_row_header_click)
         self._get_block_by_id = get_block_by_id
         self._validate_drop = validate_drop
         self._on_drop = on_drop
         self._on_remove_request = on_remove_request
+        self._period_time_label = period_time_label
         self._hover_cell = None
         self._hover_original = ""
         self._row_entity_ids: list[int] = []
@@ -217,6 +222,13 @@ class MainGrid(QTableWidget):
                 else:
                     headers.append(f"{abbrev}\n{period}")
         self.setHorizontalHeaderLabels(headers)
+        if self._period_time_label:
+            for col in range(self.columnCount()):
+                _day, period = self.col_to_day_period(col)
+                time_label = self._period_time_label(period)
+                item = self.horizontalHeaderItem(col)
+                if item is not None:
+                    item.setToolTip(f"{period}. Ders ({time_label})" if time_label else f"{period}. Ders")
 
     def col_to_day_period(self, col: int) -> tuple[int, int]:
         return col // self._period_count, (col % self._period_count) + 1
@@ -296,6 +308,11 @@ class MainGrid(QTableWidget):
         if entity_id is not None:
             self.row_header_double_clicked.emit(entity_id)
 
+    def _handle_row_header_click(self, row: int) -> None:
+        entity_id = self.row_to_entity(row)
+        if entity_id is not None:
+            self.row_header_clicked.emit(entity_id)
+
 
 class RowPreviewDialog(QDialog):
     """Ana Program'da bir sınıf/öğretmen adının üstüne çift tıklanınca
@@ -326,7 +343,7 @@ class RowPreviewDialog(QDialog):
                 filtered[cell] = matched
 
         grid = MiniScheduleGrid()
-        grid.render(db, filtered, row_mode="class" if mode == MODE_CLASS else None)
+        grid.render(db, filtered, row_mode=mode)
         layout.addWidget(grid, 1)
 
         close_button = QPushButton("Kapat")
@@ -344,6 +361,7 @@ class ScheduleTab(QWidget):
         self._blocks_by_id: dict[int, object] = {}
         self._row_entities: list[tuple[int, str]] = []
         self._unavailable = scheduling.UnavailableSlots()
+        self._selected_row_entity_id: int | None = None
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -417,6 +435,7 @@ class ScheduleTab(QWidget):
             validate_drop=self._validate_drop,
             on_drop=self._handle_drop,
             on_remove_request=self._handle_remove_request,
+            period_time_label=self.db.period_time_label,
         )
         splitter.addWidget(self.grid)
 
@@ -429,6 +448,14 @@ class ScheduleTab(QWidget):
             f"font-family:'{theme.FONT_HEADING}'; font-weight:700; font-size:10pt; color:{theme.INK_MUTED_30};"
         )
         pool_header.addWidget(self.pool_label)
+        self.pool_filter_label = QLabel()
+        self.pool_filter_label.setStyleSheet(f"font-size:8.6pt; color:{theme.ACCENT_HOVER}; font-weight:600;")
+        pool_header.addWidget(self.pool_filter_label)
+        self.pool_filter_clear_button = QPushButton("Filtreyi Temizle")
+        self.pool_filter_clear_button.setObjectName("outlineButton")
+        self.pool_filter_clear_button.setVisible(False)
+        self.pool_filter_clear_button.clicked.connect(self._clear_row_filter)
+        pool_header.addWidget(self.pool_filter_clear_button)
         pool_header.addStretch()
         self.pool_delete_button = QPushButton("Seçili Dersi Sil")
         self.pool_delete_button.setObjectName("outlineButton")
@@ -453,6 +480,8 @@ class ScheduleTab(QWidget):
         self.zoom_in_button.clicked.connect(lambda: self._change_zoom(0.15))
         self.zoom_out_button.clicked.connect(lambda: self._change_zoom(-0.15))
         self.grid.row_header_double_clicked.connect(self._show_row_preview)
+        self.grid.row_header_clicked.connect(self._handle_row_header_click)
+        self.pool_list.itemSelectionChanged.connect(self._handle_pool_selection_changed)
 
         self._update_hint()
         self.refresh()
@@ -474,8 +503,45 @@ class ScheduleTab(QWidget):
 
     def _handle_mode_change(self, checked: bool) -> None:
         self.mode = MODE_CLASS if checked else MODE_TEACHER
+        self._selected_row_entity_id = None
         self._update_hint()
         self.refresh()
+
+    # ---------- satır seçimi <-> havuz filtresi / önizleme ----------
+    def _handle_row_header_click(self, entity_id: int) -> None:
+        self._selected_row_entity_id = None if self._selected_row_entity_id == entity_id else entity_id
+        self._render_pool()
+
+    def _clear_row_filter(self) -> None:
+        self._selected_row_entity_id = None
+        self._render_pool()
+
+    def _handle_pool_selection_changed(self) -> None:
+        self._render_grid()
+        items = self.pool_list.selectedItems()
+        if not items:
+            return
+        block = self._blocks_by_id.get(items[0].data(Qt.UserRole))
+        if block is not None:
+            self._apply_row_preview(block)
+
+    def _apply_row_preview(self, block) -> None:
+        """Havuzdan bir ders seçilince, sürüklemeden önce o dersin ait
+        olduğu satırı vurgular: uygun hücreler yeşil, uygun olmayanlar
+        kırmızı görünür (bkz. MainGrid.dragMoveEvent - aynı mantık)."""
+        for row_index, (entity_id, _name) in enumerate(self._row_entities):
+            if not self._row_matches_block(block, entity_id):
+                continue
+            header_item = self.grid.verticalHeaderItem(row_index)
+            if header_item is not None:
+                header_item.setBackground(QColor(theme.ACCENT_SOFT_BG))
+            for col in range(self.grid.columnCount()):
+                widget = self.grid.cellWidget(row_index, col)
+                if widget is None:
+                    continue
+                day, period = self.grid.col_to_day_period(col)
+                valid = self._validate_drop(block, entity_id, day, period)
+                widget.setStyleSheet(VALID_STYLE if valid else INVALID_STYLE)
 
     def _update_hint(self) -> None:
         if self.mode == MODE_CLASS:
@@ -546,16 +612,15 @@ class ScheduleTab(QWidget):
                             widget = theme.make_dense_empty()
                     elif len(blocks) == 1:
                         line1, line2 = blocks[0].dense_lines(self.mode)
-                        bg, _dot = theme.LESSON_TYPE_COLORS.get(blocks[0].type, (theme.SURFACE, theme.INK_MUTED_58))
+                        bg, _dot = theme.lesson_colors_for(blocks[0], tinted=self.mode == MODE_TEACHER)
                         widget = theme.make_dense_chip(line1, line2, bg)
                     else:
                         line1, line2 = blocks[0].dense_lines(self.mode)
-                        bg, _dot = theme.LESSON_TYPE_COLORS.get(blocks[0].type, (theme.SURFACE, theme.INK_MUTED_58))
+                        bg, _dot = theme.lesson_colors_for(blocks[0], tinted=self.mode == MODE_TEACHER)
                         widget = theme.make_dense_chip(f"{line1} (+{len(blocks) - 1})", line2, bg)
                     self.grid.setCellWidget(row, col, widget)
 
     def _render_pool(self) -> None:
-        self.pool_label.setText(f"Atanmamış Dersler ({len(self._pool)})")
         self.pool_list.clear()
         seen_groups: set[int] = set()
         pool_items: list[tuple] = []  # (rep_block, members)
@@ -569,6 +634,22 @@ class ScheduleTab(QWidget):
                 pool_items.append((rep, members))
             else:
                 pool_items.append((block, [block]))
+
+        if self._selected_row_entity_id is not None:
+            pool_items = [
+                (rep, members) for rep, members in pool_items
+                if any(self._row_matches_block(m, self._selected_row_entity_id) for m in members)
+            ]
+            entity_name = next(
+                (n for i, n in self._row_entities if i == self._selected_row_entity_id), ""
+            )
+            self.pool_filter_label.setText(f"— Filtre: {entity_name}")
+            self.pool_filter_clear_button.setVisible(True)
+        else:
+            self.pool_filter_label.setText("")
+            self.pool_filter_clear_button.setVisible(False)
+        self.pool_label.setText(f"Atanmamış Dersler ({len(pool_items)})")
+
         for rep, members in sorted(pool_items, key=lambda pair: pair[0].pool_label()):
             item = QListWidgetItem()
             item.setData(Qt.UserRole, rep.id)

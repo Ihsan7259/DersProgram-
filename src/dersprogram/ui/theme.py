@@ -12,6 +12,7 @@ kendi arkaplanlarını taşıyor, uygulama temasından etkilenmeleri gerekmiyor.
 from __future__ import annotations
 
 import sys
+from html import escape as _html_escape
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QRectF, Qt
@@ -232,16 +233,48 @@ def lesson_type_label(type_: str) -> str:
     return LESSON_TYPE_LABELS.get(type_, type_)
 
 
+# Öğretmenin haftalık programında/önizlemesinde aynı ders tipi (ör. Sınıf
+# Dersi = mavi) farklı sınıflar/öğrenciler arasında küçük ton farklarıyla
+# ayırt edilsin diye - hem tipi hem de "kiminle" olduğunu tek bakışta
+# gösterir. Işık (L) kanalında küçük kaymalar, rengin ana kimliğini
+# (hue/saturation) korur.
+_TONE_SHIFTS = [0, -20, 16, -36, 28, -10, 10, -28]
+
+
+def _tone_shift(hex_color: str, amount: int) -> str:
+    color = QColor(hex_color)
+    h, s, l, a = color.getHsl()
+    l = max(30, min(240, l + amount))
+    return QColor.fromHsl(h, s, l, a).name()
+
+
+def lesson_colors_for(block, tinted: bool = False) -> tuple[str, str]:
+    """Ders tipine göre (arkaplan, nokta) rengi döner; tinted=True ise
+    (öğretmen görünümünde) sınıf/öğrenciye göre küçük bir ton farkı
+    eklenir - renk hâlâ dersin tipini gösterir, sadece tonu değişir."""
+    bg, dot = LESSON_TYPE_COLORS.get(block.type, (SURFACE, INK_MUTED_58))
+    if not tinted:
+        return bg, dot
+    key = block.class_group_id or block.student_id or block.subject_id or 0
+    shift = _TONE_SHIFTS[key % len(_TONE_SHIFTS)]
+    return _tone_shift(bg, shift), _tone_shift(dot, shift // 2)
+
+
 def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) -> QWidget:
     """Bir ders bloğunu (block: scheduling.BlockView) küçük renkli bir
     kart olarak gösterir - tipe göre pastel arkaplan + nokta işareti.
 
     row_mode='class' ise (sınıfın kendi haftalık programı) kart 'ders adı /
     öğretmen adı' şeklinde gösterilir; sınıf adı zaten belli olduğu için
-    tekrar edilmez."""
-    bg, dot = LESSON_TYPE_COLORS.get(block.type, (SURFACE, INK_MUTED_58))
+    tekrar edilmez. row_mode='teacher' ise (öğretmenin kendi programı/
+    önizlemesi) kart 'sınıf ya da öğrenci adı / branş' şeklinde gösterilir
+    ve renk tonu sınıfa göre hafifçe değişir."""
+    bg, dot = lesson_colors_for(block, tinted=row_mode == "teacher")
     if row_mode == "class":
         primary, secondary = block.class_row_lines()
+        tertiary = ""
+    elif row_mode == "teacher":
+        primary, secondary = block.teacher_row_lines()
         tertiary = ""
     else:
         primary, secondary, tertiary = block.card_lines()
@@ -276,7 +309,7 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
     )
     layout.addWidget(primary_label)
 
-    if secondary and (not compact or row_mode == "class"):
+    if secondary and (not compact or row_mode in ("class", "teacher")):
         secondary_label = QLabel(secondary)
         secondary_label.setWordWrap(True)
         secondary_label.setStyleSheet(
@@ -301,25 +334,22 @@ def _elide(text: str, max_chars: int) -> str:
 
 
 def make_dense_chip(line1: str, line2: str, bg: str) -> QWidget:
-    """Kurum geneli ızgara (satır=sınıf/öğretmen) için çok kompakt hücre kartı."""
-    card = QWidget()
-    card.setObjectName("cellFrame")
-    card.setStyleSheet(f"#cellFrame {{ background:{bg}; border-radius:5px; border: 1px solid {BORDER_SUBTLE}; }}")
-    layout = QVBoxLayout(card)
-    layout.setContentsMargins(2, 1, 2, 1)
-    layout.setSpacing(0)
-    l1 = QLabel(_elide(line1, 5))
-    l1.setToolTip(f"{line1}\n{line2}" if line2 else line1)
-    l1.setStyleSheet(f"font-weight:700; font-size:6.9pt; color:{LESSON_TYPE_TEXT}; background:transparent;")
-    l1.setAlignment(Qt.AlignCenter)
-    layout.addWidget(l1)
+    """Kurum geneli ızgara (satır=sınıf/öğretmen) için çok kompakt hücre
+    kartı. Ana Program'da hücreler arasında boşluk bırakmamak ve köşeleri
+    kare tutmak için tek bir QLabel'e sıkıştırılır (satır=sınıf/öğretmen ×
+    gün×saat kadar hücre olabileceğinden, hücre başına widget sayısını
+    azaltmak tepki hızını da korur)."""
+    text = f"<div style='font-weight:700; font-size:6.9pt; color:{LESSON_TYPE_TEXT};'>{_html_escape(_elide(line1, 5))}</div>"
     if line2:
-        l2 = QLabel(_elide(line2, 6))
-        l2.setToolTip(f"{line1}\n{line2}")
-        l2.setStyleSheet(f"font-size:6.3pt; color:{LESSON_TYPE_TEXT_MUTED}; background:transparent;")
-        l2.setAlignment(Qt.AlignCenter)
-        layout.addWidget(l2)
-    return card
+        text += f"<div style='font-size:6.3pt; color:{LESSON_TYPE_TEXT_MUTED};'>{_html_escape(_elide(line2, 6))}</div>"
+    label = QLabel()
+    label.setObjectName("cellFrame")
+    label.setTextFormat(Qt.RichText)
+    label.setText(text)
+    label.setAlignment(Qt.AlignCenter)
+    label.setToolTip(f"{line1}\n{line2}" if line2 else line1)
+    label.setStyleSheet(f"#cellFrame {{ background:{bg}; border-radius:0; border:1px solid {BORDER_SUBTLE}; }}")
+    return label
 
 
 def make_day_banner(day_name: str) -> QWidget:
@@ -340,26 +370,22 @@ def make_day_banner(day_name: str) -> QWidget:
 def make_dense_empty() -> QWidget:
     frame = QWidget()
     frame.setObjectName("cellFrame")
-    frame.setStyleSheet(f"#cellFrame {{ background:{APP_BG}; border-radius:5px; border: 1px solid {BORDER_SUBTLE}; }}")
+    frame.setStyleSheet(f"#cellFrame {{ background:{APP_BG}; border-radius:0; border:1px solid {BORDER_SUBTLE}; }}")
     return frame
 
 
 def make_dense_unavailable() -> QWidget:
     """Ana Program'ın kurum geneli ızgarasında, öğretmenin kendisinin
     'müsait değil' işaretlediği boş bir hücre için küçük bir x işareti."""
-    frame = QWidget()
-    frame.setObjectName("cellFrame")
-    frame.setStyleSheet(
-        f"#cellFrame {{ background:{CONFLICT_BG}; border-radius:5px; border: 1px solid {CONFLICT_BORDER}; }}"
-    )
-    layout = QVBoxLayout(frame)
-    layout.setContentsMargins(0, 0, 0, 0)
     label = QLabel("×")
+    label.setObjectName("cellFrame")
     label.setAlignment(Qt.AlignCenter)
-    label.setStyleSheet(f"color:{CONFLICT_BORDER}; font-weight:700; font-size:10pt; background:transparent;")
+    label.setStyleSheet(
+        f"#cellFrame {{ background:{CONFLICT_BG}; border-radius:0; border:1px solid {CONFLICT_BORDER}; "
+        f"color:{CONFLICT_BORDER}; font-weight:700; font-size:10pt; }}"
+    )
     label.setToolTip("Öğretmen bu saatte müsait değil olarak işaretlenmiş")
-    layout.addWidget(label)
-    return frame
+    return label
 
 
 def make_empty_cell(compact: bool = False) -> QWidget:

@@ -156,6 +156,20 @@ class BlockView:
             label = f"{label} · {self.subject_name}"
         return label, self.teacher_name or ""
 
+    def teacher_row_lines(self) -> tuple[str, str]:
+        """Öğretmenin kendi haftalık programında (ve önizlemesinde)
+        gösterilecek iki satır: sınıf/öğrenci adı ve branş - öğretmen adı
+        zaten belli olduğu için branş yerine kiminle olduğu öne çıkar."""
+        if self.type == TYPE_CLASS:
+            return self.class_name or "Sınıf Dersi", self.subject_name or ""
+        if self.type == TYPE_ONE_ON_ONE:
+            return self.student_name or "Birebir", self.subject_name or ""
+        if self.type == TYPE_COACHING:
+            return "Öğrenci Koçluk", self.student_name or ""
+        if self.type == TYPE_DEPARTMENT:
+            return "Zümre", self.subject_name or ""
+        return "Soru Çözümü", self.subject_name or ""
+
     def dense_lines(self, row_mode: str) -> tuple[str, str]:
         """Kurum geneli ızgarada (satır=sınıf ya da öğretmen) hücrede
         gösterilecek iki kısa satır. Satırın kendisi zaten hangi sınıf/
@@ -163,9 +177,9 @@ class BlockView:
         if row_mode == "class":
             return self.subject_name or "Ders", short_teacher_name(self.teacher_name)
         if self.type == TYPE_CLASS:
-            return self.subject_name or "Ders", self.class_name or ""
+            return self.class_name or "Ders", self.subject_name or ""
         if self.type == TYPE_ONE_ON_ONE:
-            return self.subject_name or "Birebir", self.student_name or ""
+            return self.student_name or "Birebir", self.subject_name or ""
         if self.type == TYPE_COACHING:
             return "Koçluk", self.student_name or ""
         if self.type == TYPE_DEPARTMENT:

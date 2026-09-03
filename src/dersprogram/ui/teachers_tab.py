@@ -174,7 +174,7 @@ class TeachersTab(QWidget):
             if matched:
                 filtered[cell] = matched
         availability = scheduling.get_teacher_availability(self.db, self.selected_id, self.navigator.week_start)
-        self.mini_grid.render(self.db, filtered, availability)
+        self.mini_grid.render(self.db, filtered, availability, row_mode="teacher")
         totals = scheduling.summarize_hours(self.db, self.navigator.week_start, teacher_id=self.selected_id)
         self.summary_table.render(totals)
 
