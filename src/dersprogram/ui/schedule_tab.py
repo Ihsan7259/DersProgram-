@@ -12,7 +12,7 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -128,10 +128,18 @@ class MainGrid(QTableWidget):
         self.setShowGrid(False)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         header = self.horizontalHeader()
+        header.setObjectName("mainGridHHeader")
         header.setSectionResizeMode(QHeaderView.Stretch)
         header.setMinimumSectionSize(8)
         header.setMinimumHeight(36)
         header.setDefaultAlignment(Qt.AlignCenter)
+        # Satır başlıkları (sınıf/öğretmen adları) sütun sıkışmasından
+        # bağımsız, hep okunaklı kalsın diye ayrı bir isimle stillenir
+        # (bkz. _apply_column_sizing - iki başlığa farklı font boyutu verir).
+        self.verticalHeader().setObjectName("mainGridVHeader")
+        self.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.verticalHeader().setMinimumWidth(64)
+        self.verticalHeader().setDefaultAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.verticalHeader().setSectionsClickable(True)
         self.verticalHeader().sectionDoubleClicked.connect(self._handle_row_header_double_click)
         self.verticalHeader().sectionClicked.connect(self._handle_row_header_click)
@@ -190,17 +198,23 @@ class MainGrid(QTableWidget):
             for col in range(self.columnCount()):
                 self.setColumnWidth(col, per_column)
 
+        # Gün/saat başlığı (yatay) sütun sıkışmasına göre küçülebilir, ama
+        # satır başlığı (sınıf/öğretmen adları - dikey) bundan etkilenmez;
+        # okunaklı kalması için hep büyük ve sabit bir fontla gösterilir
+        # (ayrı ayrı isimlendirilmiş iki QHeaderView, bkz. __init__).
         if per_column >= 30:
-            font_pt, padding = 7.6, 2
+            font_pt, padding = 8.4, 2
         elif per_column >= 22:
-            font_pt, padding = 6.6, 1
+            font_pt, padding = 7.6, 1
         elif per_column >= 16:
-            font_pt, padding = 5.8, 1
+            font_pt, padding = 6.8, 1
         else:
-            font_pt, padding = 5.0, 0
+            font_pt, padding = 6.2, 0
         font_pt *= max(1.0, self._zoom)
+        row_font_pt = min(12.5, 9.2 * max(1.0, self._zoom))
         self.setStyleSheet(
-            f"#mainGrid QHeaderView::section {{ font-size: {font_pt:.1f}pt; padding: {padding}px 0; }}"
+            f"#mainGridHHeader::section {{ font-size: {font_pt:.1f}pt; font-weight:700; padding: {padding}px 0; }}"
+            f"#mainGridVHeader::section {{ font-size: {row_font_pt:.1f}pt; font-weight:700; padding: 4px 10px; }}"
         )
         self._apply_header_labels(per_column)
         for row in range(self.rowCount()):
@@ -362,6 +376,9 @@ class ScheduleTab(QWidget):
         self._row_entities: list[tuple[int, str]] = []
         self._unavailable = scheduling.UnavailableSlots()
         self._selected_row_entity_id: int | None = None
+        self._cell_normal_style: dict[tuple[int, int], str] = {}
+        self._preview_highlighted: list[tuple[int, int]] = []
+        self._preview_header_rows: list[int] = []
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -495,6 +512,7 @@ class ScheduleTab(QWidget):
         # ölçüsüne göre baştan oluştur - sadece boyut değiştirmek eski
         # widget'lardan görsel kalıntı bırakabiliyor.
         self._render_grid()
+        self._handle_pool_selection_changed()  # aktif önizleme varsa yeniden uygula
 
     def _show_row_preview(self, entity_id: int) -> None:
         name = next((n for i, n in self._row_entities if i == entity_id), "")
@@ -517,7 +535,7 @@ class ScheduleTab(QWidget):
         self._render_pool()
 
     def _handle_pool_selection_changed(self) -> None:
-        self._render_grid()
+        self._clear_row_preview()
         items = self.pool_list.selectedItems()
         if not items:
             return
@@ -528,13 +546,17 @@ class ScheduleTab(QWidget):
     def _apply_row_preview(self, block) -> None:
         """Havuzdan bir ders seçilince, sürüklemeden önce o dersin ait
         olduğu satırı vurgular: uygun hücreler yeşil, uygun olmayanlar
-        kırmızı görünür (bkz. MainGrid.dragMoveEvent - aynı mantık)."""
+        kırmızı görünür (bkz. MainGrid.dragMoveEvent - aynı mantık).
+        Izgarayı baştan kurmadan, sadece ilgili hücrelerin stilini
+        değiştirir - büyük programlarda her seçimde yüzlerce widget'ı
+        yeniden oluşturmak takılmalara yol açıyordu (bkz. _clear_row_preview)."""
         for row_index, (entity_id, _name) in enumerate(self._row_entities):
             if not self._row_matches_block(block, entity_id):
                 continue
             header_item = self.grid.verticalHeaderItem(row_index)
             if header_item is not None:
                 header_item.setBackground(QColor(theme.ACCENT_SOFT_BG))
+                self._preview_header_rows.append(row_index)
             for col in range(self.grid.columnCount()):
                 widget = self.grid.cellWidget(row_index, col)
                 if widget is None:
@@ -542,6 +564,21 @@ class ScheduleTab(QWidget):
                 day, period = self.grid.col_to_day_period(col)
                 valid = self._validate_drop(block, entity_id, day, period)
                 widget.setStyleSheet(VALID_STYLE if valid else INVALID_STYLE)
+                self._preview_highlighted.append((row_index, col))
+
+    def _clear_row_preview(self) -> None:
+        """_apply_row_preview ile boyanan hücreleri/satır başlığını,
+        ızgarayı yeniden kurmadan gerçek (normal) görünümüne döndürür."""
+        for row_index, col in self._preview_highlighted:
+            widget = self.grid.cellWidget(row_index, col)
+            if widget is not None:
+                widget.setStyleSheet(self._cell_normal_style.get((row_index, col), ""))
+        self._preview_highlighted = []
+        for row_index in self._preview_header_rows:
+            header_item = self.grid.verticalHeaderItem(row_index)
+            if header_item is not None:
+                header_item.setBackground(QBrush())
+        self._preview_header_rows = []
 
     def _update_hint(self) -> None:
         if self.mode == MODE_CLASS:
@@ -597,6 +634,13 @@ class ScheduleTab(QWidget):
         self.grid.setRowCount(len(self._row_entities))
         self.grid.setVerticalHeaderLabels([name for _id, name in self._row_entities])
 
+        # Havuzdan seçilen bir dersin önizleme vurgusu (bkz. _apply_row_preview)
+        # bu widget'ları geçici olarak boyar; ızgara sıfırdan kurulduğunda o
+        # vurgu artık geçersiz - takip listesini de sıfırlıyoruz.
+        self._preview_highlighted = []
+        self._preview_header_rows = []
+        self._cell_normal_style = {}
+
         for row, (entity_id, _name) in enumerate(self._row_entities):
             self.grid.setRowHeight(row, self.grid.row_height())
             for day in range(len(day_names)):
@@ -618,7 +662,22 @@ class ScheduleTab(QWidget):
                         line1, line2 = blocks[0].dense_lines(self.mode)
                         bg, _dot = theme.lesson_colors_for(blocks[0], tinted=self.mode == MODE_TEACHER)
                         widget = theme.make_dense_chip(f"{line1} (+{len(blocks) - 1})", line2, bg)
-                    self.grid.setCellWidget(row, col, widget)
+                    self._set_cell_widget(row, col, widget)
+                    self._cell_normal_style[(row, col)] = widget.styleSheet()
+
+    def _set_cell_widget(self, row: int, col: int, widget) -> None:
+        """QTableWidget.setCellWidget() eskisini yerine yenisini koyduğunda
+        önceki widget'ı SİLMEZ - üst-alt ilişkisi kalır, sadece görünmez
+        kalır. Ana Program her yenilendiğinde (ders taşıma/kaldırma, hafta
+        değiştirme, yakınlaştırma...) yüzlerce hücre widget'ı böyle
+        birikince program zamanla yavaşlıyor/takılıyordu; eskisini elle
+        koparıp silerek bu sızıntıyı önlüyoruz."""
+        old_widget = self.grid.cellWidget(row, col)
+        if old_widget is not None:
+            self.grid.removeCellWidget(row, col)
+            old_widget.setParent(None)
+            old_widget.deleteLater()
+        self.grid.setCellWidget(row, col, widget)
 
     def _render_pool(self) -> None:
         self.pool_list.clear()

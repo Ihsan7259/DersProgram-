@@ -332,6 +332,17 @@ class ClassesTab(QWidget):
         if self.on_change:
             self.on_change()
 
+    def _set_cell_widget(self, row: int, col: int, widget) -> None:
+        """setCellWidget() eskisini yenisiyle değiştirdiğinde önceki
+        widget'ı silmez - üst-alt ilişkisi kalır ama görünmez kalır ve
+        zamanla birikir; eskisini elle koparıp siliyoruz."""
+        old_widget = self.table_widget.cellWidget(row, col)
+        if old_widget is not None:
+            self.table_widget.removeCellWidget(row, col)
+            old_widget.setParent(None)
+            old_widget.deleteLater()
+        self.table_widget.setCellWidget(row, col, widget)
+
     def refresh(self) -> None:
         self._reload_curriculum_subjects()
         rows = self.db.list_class_groups()
@@ -343,11 +354,11 @@ class ClassesTab(QWidget):
 
             up_btn = self._move_button("up", enabled=r > 0)
             up_btn.clicked.connect(lambda _checked=False, cid=row["id"]: self.handle_move(cid, -1))
-            self.table_widget.setCellWidget(r, 1, up_btn)
+            self._set_cell_widget(r, 1, up_btn)
 
             down_btn = self._move_button("down", enabled=r < len(rows) - 1)
             down_btn.clicked.connect(lambda _checked=False, cid=row["id"]: self.handle_move(cid, 1))
-            self.table_widget.setCellWidget(r, 2, down_btn)
+            self._set_cell_widget(r, 2, down_btn)
         self.refresh_detail()
 
     def handle_move(self, class_id: int, direction: int) -> None:

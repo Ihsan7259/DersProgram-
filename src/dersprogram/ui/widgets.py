@@ -25,6 +25,20 @@ from .. import scheduling
 from . import theme
 
 
+def _set_cell_widget(table: QTableWidget, row: int, col: int, widget: QWidget) -> None:
+    """QTableWidget.setCellWidget() eskisini yenisiyle değiştirdiğinde
+    önceki widget'ı silmez - üst-alt ilişkisi kalır ama görünmez kalır.
+    Sık yeniden çizilen ızgaralarda (müsaitlik tıklaması, haftalık program
+    yenilemesi) bu birikip programı zamanla yavaşlatıyordu; eskisini elle
+    koparıp siliyoruz."""
+    old_widget = table.cellWidget(row, col)
+    if old_widget is not None:
+        table.removeCellWidget(row, col)
+        old_widget.setParent(None)
+        old_widget.deleteLater()
+    table.setCellWidget(row, col, widget)
+
+
 def _period_header_labels(db: Database, period_count: int) -> list[str]:
     """'1.' ya da (Ayarlar'da saat girilmişse) '1.\n08:30-09:20' şeklinde
     dikey başlık etiketleri üretir."""
@@ -150,7 +164,7 @@ class MiniScheduleGrid(QTableWidget):
             self.setRowHeight(period - 1, 40)
             for day in range(len(day_names)):
                 blocks = blocks_by_cell.get((day, period), [])
-                self.setCellWidget(period - 1, day, theme.make_multi_cell(blocks, compact=True, row_mode=row_mode))
+                _set_cell_widget(self, period - 1, day, theme.make_multi_cell(blocks, compact=True, row_mode=row_mode))
 
 
 class AvailabilityGrid(QTableWidget):
@@ -216,7 +230,7 @@ class AvailabilityGrid(QTableWidget):
                     widget = theme.make_multi_cell(blocks, compact=True, row_mode=row_mode)
                 else:
                     widget = self._availability_cell(self._state.get(cell))
-                self.setCellWidget(period - 1, day, widget)
+                _set_cell_widget(self, period - 1, day, widget)
 
     @staticmethod
     def _availability_cell(status: str | None) -> QWidget:
@@ -246,7 +260,7 @@ class AvailabilityGrid(QTableWidget):
             self._state.pop(cell, None)
         else:
             self._state[cell] = next_status
-        self.setCellWidget(period - 1, day, self._availability_cell(next_status))
+        _set_cell_widget(self, period - 1, day, self._availability_cell(next_status))
         self.viewport().update()
         self.changed.emit(day, period, next_status)
 
