@@ -550,6 +550,7 @@ def auto_assign(
         [(d, p) for (d, p) in all_slots if not find_group_conflicts(schedule, d, p, unit, unavailable)]
         for unit in units
     ]
+    domain_sets: list[set[tuple[int, int]]] = [set(d) for d in domains]
 
     model = cp_model.CpModel()
 
@@ -619,6 +620,19 @@ def auto_assign(
         if len(unit) == 1 and unit[0].type != TYPE_DEPARTMENT:
             group_units.setdefault(unit[0].group_key(), []).append(ui)
 
+    # Zaten yerleşmiş (elle ya da önceki bir oto-atamadan kalma) bloklardan
+    # aynı gruptan olanların gün/saatleri - aşağıdaki "art arda en fazla N
+    # saat" kısıtı bunları da SAYMAZSA, örn. manuel yerleştirilmiş 1 saatin
+    # yanına oto-ata 2 saat daha eklerse (kısıt sadece YENİ kararları
+    # sayıp zaten sabit olanı görmezden geldiği için) 3 saat üst üste
+    # oluşabilir - kısıt bu yüzden sabit blokları da pencereye dahil eder.
+    fixed_periods_by_group: dict[tuple, dict[int, set[int]]] = {}
+    for blocks in schedule.values():
+        for b in blocks:
+            if b.type == TYPE_DEPARTMENT or b.day is None or b.period is None:
+                continue
+            fixed_periods_by_group.setdefault(b.group_key(), {}).setdefault(b.day, set()).add(b.period)
+
     # ---------- sert kısıt: bir günde art arda en fazla `max_consecutive` saat ----------
     # Her `max_consecutive + 1` uzunluğundaki ardışık saat penceresinde bu
     # gruptan en fazla `max_consecutive` tanesi seçilebilir - bu, 3 (ya da
@@ -627,21 +641,25 @@ def auto_assign(
     # bulur, ör. 2+2+1 ya da 2+1+2 gibi farklı dağılımlar da olabilir).
     if max_consecutive > 0:
         window_size = max_consecutive + 1
-        for uis in group_units.values():
-            if len(uis) <= max_consecutive:
+        for group_key, uis in group_units.items():
+            fixed_days = fixed_periods_by_group.get(group_key, {})
+            if len(uis) <= max_consecutive and not fixed_days:
                 continue
             for d in range(day_count):
+                fixed_set = fixed_days.get(d, set())
                 var_by_period: dict[int, list] = {}
                 for ui in uis:
                     for (dd, p) in domains[ui]:
                         if dd == d:
                             var_by_period.setdefault(p, []).append(x[(ui, dd, p)])
+                if not var_by_period and not fixed_set:
+                    continue
                 for start in range(1, period_count - window_size + 2):
-                    window_vars = [
-                        v for p in range(start, start + window_size) for v in var_by_period.get(p, [])
-                    ]
+                    window_periods = range(start, start + window_size)
+                    window_vars = [v for p in window_periods for v in var_by_period.get(p, [])]
+                    fixed_in_window = sum(1 for p in window_periods if p in fixed_set)
                     if window_vars:
-                        model.Add(sum(window_vars) <= max_consecutive)
+                        model.Add(sum(window_vars) <= max(0, max_consecutive - fixed_in_window))
 
     # ---------- hafif tercih: aynı ihtiyaçtan gelen dersleri günlere yay ----------
     # Zorunlu değil (yerleştirme sayısını asla düşürmez, sadece eşit
@@ -658,14 +676,86 @@ def auto_assign(
             model.AddMaxEquality(used, day_vars)
             spread_bonus_terms.append(used)
 
+    # ---------- hafif tercih: aynı ihtiyaçtan gelen saatleri BLOK halinde tut ----------
+    # Örn. "9-A Tarih (Zülal), haftada 4 saat" dersi mümkünse aynı gün
+    # içinde başka bir dersle bölünmeden art arda (2+2 gibi) yerleşsin -
+    # öğretmen bir saat gelip başka derse yer açıp sonra tekrar gelmiş
+    # gibi olmasın. Zorunlu değil (yerleştirme sayısını asla düşürmez).
+    adjacency_bonus_terms = []
+    for gi, uis in enumerate(group_units.values()):
+        if len(uis) < 2:
+            continue
+        for d in range(day_count):
+            for p in range(1, period_count):
+                occ_p = [x[(ui, d, p)] for ui in uis if (d, p) in domain_sets[ui]]
+                occ_p1 = [x[(ui, d, p + 1)] for ui in uis if (d, p + 1) in domain_sets[ui]]
+                if not occ_p or not occ_p1:
+                    continue
+                bonus = model.NewBoolVar(f"adjacent_{gi}_{d}_{p}")
+                model.Add(bonus <= sum(occ_p))
+                model.Add(bonus <= sum(occ_p1))
+                adjacency_bonus_terms.append(bonus)
+
+    # ---------- hafif tercih: aynı sınıfın art arda saatlerinde ders çeşitliliği ----------
+    # Aynı dersi (ör. Matematik) FARKLI öğretmenlerden art arda görmek
+    # (öğretmen değişse bile) tekdüze/garip görünüyor - mümkünse aynı gün
+    # art arda saatlerde farklı dersler olsun (zorunlu değil, sadece bir
+    # tercih; aynı öğretmenin kendi bloğu içindeki bitişiklik yukarıdaki
+    # blok tercihiyle zaten ayrıca ödüllendiriliyor, burada CEZALANDIRILMAZ
+    # çünkü sadece FARKLI grupların bitişikliğine bakılıyor).
+    subject_class_groups: dict[tuple[int, int], list[tuple]] = {}
+    for group_key, uis in group_units.items():
+        g_type, _teacher_id, g_class_id, _student_id, g_subject_id = group_key
+        if g_type != TYPE_CLASS or g_class_id is None or g_subject_id is None:
+            continue
+        subject_class_groups.setdefault((g_class_id, g_subject_id), []).append(group_key)
+
+    diversity_penalty_terms = []
+    for groups in subject_class_groups.values():
+        if len(groups) < 2:
+            continue
+        for gi in range(len(groups)):
+            for gj in range(gi + 1, len(groups)):
+                uis_a = group_units[groups[gi]]
+                uis_b = group_units[groups[gj]]
+                for d in range(day_count):
+                    for p in range(1, period_count):
+                        occ_a_p = [x[(ui, d, p)] for ui in uis_a if (d, p) in domain_sets[ui]]
+                        occ_b_p1 = [x[(ui, d, p + 1)] for ui in uis_b if (d, p + 1) in domain_sets[ui]]
+                        if occ_a_p and occ_b_p1:
+                            penalty = model.NewBoolVar(f"same_subject_adj_{d}_{p}_{gi}_{gj}_a")
+                            model.Add(penalty <= sum(occ_a_p))
+                            model.Add(penalty <= sum(occ_b_p1))
+                            diversity_penalty_terms.append(penalty)
+                        occ_b_p = [x[(ui, d, p)] for ui in uis_b if (d, p) in domain_sets[ui]]
+                        occ_a_p1 = [x[(ui, d, p + 1)] for ui in uis_a if (d, p + 1) in domain_sets[ui]]
+                        if occ_b_p and occ_a_p1:
+                            penalty = model.NewBoolVar(f"same_subject_adj_{d}_{p}_{gi}_{gj}_b")
+                            model.Add(penalty <= sum(occ_b_p))
+                            model.Add(penalty <= sum(occ_a_p1))
+                            diversity_penalty_terms.append(penalty)
+
     placed_terms = list(x.values())
-    # Yerleştirilen ders sayısı her zaman gün-yayma tercihinden ağır
-    # basar - "daha iyi dağılsın diye bir dersi havuzda bırak" asla olmaz.
-    place_weight = len(spread_bonus_terms) + 1
+    # Yerleştirilen ders sayısı her zaman diğer tüm tercihlerden ağır
+    # basar - "daha iyi dağılsın/bloklansın diye bir dersi havuzda bırak"
+    # asla olmaz. Blok bütünlüğü (adjacency), ders çeşitliliğinden
+    # (diversity), o da gün yaymadan (spread) daha öncelikli tercih.
+    ADJACENCY_WEIGHT = 4
+    DIVERSITY_WEIGHT = 2
+    SPREAD_WEIGHT = 1
+    place_weight = (
+        ADJACENCY_WEIGHT * len(adjacency_bonus_terms)
+        + DIVERSITY_WEIGHT * len(diversity_penalty_terms)
+        + SPREAD_WEIGHT * len(spread_bonus_terms)
+        + 1
+    )
     model.Maximize(
         cp_model.LinearExpr.WeightedSum(
-            placed_terms + spread_bonus_terms,
-            [place_weight] * len(placed_terms) + [1] * len(spread_bonus_terms),
+            placed_terms + adjacency_bonus_terms + spread_bonus_terms + diversity_penalty_terms,
+            [place_weight] * len(placed_terms)
+            + [ADJACENCY_WEIGHT] * len(adjacency_bonus_terms)
+            + [SPREAD_WEIGHT] * len(spread_bonus_terms)
+            + [-DIVERSITY_WEIGHT] * len(diversity_penalty_terms),
         )
     )
 
