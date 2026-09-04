@@ -274,7 +274,12 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
 class Database:
     def __init__(self, path: Path | str | None = None):
         self.path = Path(path) if path else default_db_path()
-        self.conn = sqlite3.connect(self.path)
+        # check_same_thread=False: Oto Ata (bkz. scheduling.auto_assign) arayüzü
+        # kilitlememek için ayrı bir iş parçacığında çalışıyor. O sırada
+        # arayüz tamamen kilitli (bkz. ScheduleTab.handle_auto_assign'daki
+        # uygulama-geneli modal ilerleme penceresi) olduğundan iki
+        # iş parçacığı asla AYNI ANDA veritabanına yazmıyor - güvenli.
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)

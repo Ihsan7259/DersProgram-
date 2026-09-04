@@ -447,10 +447,15 @@ def set_class_availability(
 class AutoAssignResult:
     placed: int
     warnings: list[str]
+    placed_block_ids: list[int] = field(default_factory=list)
 
 
 def auto_assign(
-    db: Database, week_start: _dt.date, max_consecutive: int = 2, time_limit_seconds: float = 20.0
+    db: Database,
+    week_start: _dt.date,
+    max_consecutive: int = 2,
+    time_limit_seconds: float = 20.0,
+    progress_callback=None,
 ) -> AutoAssignResult:
     """Atanmamış dersleri (havuzu) bir kısıt çözücü (Google OR-Tools CP-SAT)
     ile, ÇAKIŞMASIZ ve mümkün olan en fazla ders sayısını yerleştirecek
@@ -478,8 +483,19 @@ def auto_assign(
     öğretmen bu haftaki (day, period) için müsaitse ama BAŞKA bir hafta
     için o saati özellikle 'müsait değil' işaretlemişse, kalıcı
     yerleştirme o haftayla çelişebilir; bu durumlar uyarı olarak
-    döndürülür ki kullanıcı isterse o haftaları elle kontrol etsin."""
+    döndürülür ki kullanıcı isterse o haftaları elle kontrol etsin.
+
+    `progress_callback`, verilirse `(yüzde: int, mesaj: str)` ile art arda
+    çağrılır (ör. bir ilerleme diyaloğunu güncellemek için) - uzun süren
+    aramalarda kullanıcıya "ne yapıldığı" hakkında geri bildirim vermek
+    içindir, sonucu etkilemez."""
     from ortools.sat.python import cp_model
+
+    def report(pct: int, msg: str) -> None:
+        if progress_callback is not None:
+            progress_callback(min(100, max(0, pct)), msg)
+
+    report(0, "Program verileri okunuyor...")
 
     day_count = len(db.day_names)
     day_names = db.day_names
@@ -505,7 +521,10 @@ def auto_assign(
             )
 
     if not pool:
+        report(100, "Atanmamış ders yok.")
         return AutoAssignResult(placed=0, warnings=warnings)
+
+    report(5, f"{len(pool)} ders saati için uygun yerler hesaplanıyor...")
 
     # ---------- havuzdaki dersleri "yerleştirme birimleri"ne ayır ----------
     # Zümre grubundaki bloklar (aynı zumre_group_id) her zaman BİRLİKTE
@@ -650,12 +669,34 @@ def auto_assign(
         )
     )
 
+    report(15, f"En uygun program aranıyor ({len(units)} ders saati için)...")
+
+    class _ProgressReporter(cp_model.CpSolverSolutionCallback):
+        """CP-SAT her iyileştirilmiş çözüm bulduğunda (aramanın süresi
+        boyunca birkaç kez) tetiklenir - o ana kadar kaç dersin
+        yerleştiği bilgisini ilerleme çubuğuna yansıtmak için."""
+
+        def __init__(self, placed_vars, total_units, time_limit):
+            super().__init__()
+            self._placed_vars = placed_vars
+            self._total_units = total_units
+            self._time_limit = time_limit
+
+        def on_solution_callback(self) -> None:
+            placed_now = sum(1 for v in self._placed_vars if self.Value(v))
+            pct = 15 + int(80 * min(1.0, self.WallTime() / max(self._time_limit, 0.1)))
+            report(pct, f"En uygun program aranıyor... (şu an {placed_now}/{self._total_units} ders yerleşti)")
+
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
     solver.parameters.num_search_workers = 8
-    solver.Solve(model)
+    reporter = _ProgressReporter(placed_terms, len(units), time_limit_seconds)
+    solver.Solve(model, reporter)
+
+    report(96, "Sonuçlar kaydediliyor...")
 
     placed = 0
+    placed_block_ids: list[int] = []
     for ui, unit in enumerate(units):
         chosen = None
         for (d, p) in domains[ui]:
@@ -671,8 +712,10 @@ def auto_assign(
             block.day, block.period = d, p
             cross_week_warning(block, d, p)
             placed += 1
+            placed_block_ids.append(block.id)
 
-    return AutoAssignResult(placed=placed, warnings=warnings)
+    report(100, f"Tamamlandı: {placed} ders yerleştirildi.")
+    return AutoAssignResult(placed=placed, warnings=warnings, placed_block_ids=placed_block_ids)
 
 
 # ---------- özet / analiz ----------

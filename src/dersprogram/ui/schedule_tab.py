@@ -11,7 +11,7 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag
 from PySide6.QtWidgets import (
     QWidget,
@@ -28,7 +28,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QButtonGroup,
     QDialog,
-    QApplication,
+    QMenu,
+    QProgressDialog,
 )
 
 from ..db import Database, LESSON_TYPES, TYPE_CLASS
@@ -141,6 +142,7 @@ class MainGrid(QTableWidget):
 
     row_header_double_clicked = Signal(int)  # entity_id
     row_header_clicked = Signal(int)  # entity_id
+    row_header_context_menu_requested = Signal(int, object)  # entity_id, QPoint (global)
 
     def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request, period_time_label=None):
         super().__init__()
@@ -169,6 +171,8 @@ class MainGrid(QTableWidget):
         self.verticalHeader().setSectionsClickable(True)
         self.verticalHeader().sectionDoubleClicked.connect(self._handle_row_header_double_click)
         self.verticalHeader().sectionClicked.connect(self._handle_row_header_click)
+        self.verticalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.verticalHeader().customContextMenuRequested.connect(self._handle_row_header_context_menu)
         self._get_block_by_id = get_block_by_id
         self._validate_drop = validate_drop
         self._on_drop = on_drop
@@ -354,6 +358,13 @@ class MainGrid(QTableWidget):
         if entity_id is not None:
             self.row_header_clicked.emit(entity_id)
 
+    def _handle_row_header_context_menu(self, pos) -> None:
+        row = self.verticalHeader().logicalIndexAt(pos)
+        entity_id = self.row_to_entity(row)
+        if entity_id is not None:
+            global_pos = self.verticalHeader().mapToGlobal(pos)
+            self.row_header_context_menu_requested.emit(entity_id, global_pos)
+
 
 class RowPreviewDialog(QDialog):
     """Ana Program'da bir sınıf/öğretmen adının üstüne çift tıklanınca
@@ -392,6 +403,34 @@ class RowPreviewDialog(QDialog):
         layout.addWidget(close_button)
 
 
+class _AutoAssignWorker(QThread):
+    """Oto Ata'yı (kısıt çözücü, birkaç saniye ila onlarca saniye sürebilir)
+    ayrı bir iş parçacığında çalıştırır ki arayüz o sırada donmuş görünmesin
+    ve ilerleme yüzdesi canlı güncellenebilsin. ScheduleTab.handle_auto_assign
+    bu süre boyunca pencereyi uygulama-geneli modal tutar - bu yüzden ana
+    iş parçacığı ile bu iş parçacığı hiçbir zaman aynı anda veritabanına
+    yazmaz (bkz. db.py'deki check_same_thread=False notu)."""
+
+    progress = Signal(int, str)
+    finished_with_result = Signal(object)  # AutoAssignResult ya da Exception
+
+    def __init__(self, db: Database, week_start, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.week_start = week_start
+
+    def run(self) -> None:
+        try:
+            result = scheduling.auto_assign(
+                self.db, self.week_start,
+                progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
+            )
+        except Exception as exc:  # pragma: no cover - beklenmedik hata
+            self.finished_with_result.emit(exc)
+            return
+        self.finished_with_result.emit(result)
+
+
 class ScheduleTab(QWidget):
     def __init__(self, db: Database):
         super().__init__()
@@ -406,6 +445,9 @@ class ScheduleTab(QWidget):
         self._cell_normal_style: dict[tuple[int, int], str] = {}
         self._preview_highlighted: list[tuple[int, int]] = []
         self._preview_header_rows: list[int] = []
+        self._last_auto_assign_block_ids: list[int] = []
+        self._auto_assign_worker: "_AutoAssignWorker | None" = None
+        self._auto_assign_progress_dialog: QProgressDialog | None = None
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -450,9 +492,13 @@ class ScheduleTab(QWidget):
         self.auto_assign_button = QPushButton("  Oto Ata")
         self.auto_assign_button.setObjectName("primaryButton")
         self.auto_assign_button.setIcon(theme.icon(theme.NAV_ICONS["bolt"], theme.AMBER_TEXT))
+        self.undo_auto_assign_button = QPushButton("  Son Oto Atamayı Geri Al")
+        self.undo_auto_assign_button.setObjectName("outlineButton")
+        self.undo_auto_assign_button.setVisible(False)
         toolbar.addStretch()
         toolbar.addWidget(self.add_lesson_button)
         toolbar.addWidget(self.auto_assign_button)
+        toolbar.addWidget(self.undo_auto_assign_button)
         layout.addLayout(toolbar)
 
         legend = QHBoxLayout()
@@ -519,6 +565,7 @@ class ScheduleTab(QWidget):
 
         self.add_lesson_button.clicked.connect(self.handle_add_lesson)
         self.auto_assign_button.clicked.connect(self.handle_auto_assign)
+        self.undo_auto_assign_button.clicked.connect(self.handle_undo_auto_assign)
         self.pool_list.delete_requested.connect(self.handle_delete_pool_lesson)
         self.navigator.week_changed.connect(lambda _w: self.refresh())
         self.class_mode_button.toggled.connect(self._handle_mode_change)
@@ -526,6 +573,7 @@ class ScheduleTab(QWidget):
         self.zoom_out_button.clicked.connect(lambda: self._change_zoom(-0.15))
         self.grid.row_header_double_clicked.connect(self._show_row_preview)
         self.grid.row_header_clicked.connect(self._handle_row_header_click)
+        self.grid.row_header_context_menu_requested.connect(self._show_row_context_menu)
         self.pool_list.itemSelectionChanged.connect(self._handle_pool_selection_changed)
 
         self._update_hint()
@@ -566,6 +614,48 @@ class ScheduleTab(QWidget):
         name = next((n for i, n in self._row_entities if i == entity_id), "")
         dialog = RowPreviewDialog(self.db, self.navigator.week_start, self.mode, entity_id, name, self)
         dialog.exec()
+
+    def _show_row_context_menu(self, entity_id: int, global_pos) -> None:
+        """Bir sınıf/öğretmen adına sağ tıklanınca: önizleme ya da o
+        satırın yerleştirilmiş TÜM derslerini tek seferde 'Atanmamış
+        Dersler' havuzuna düşürme seçeneği (müsaitlik ayarlarına dokunmaz,
+        sadece ders yerleşimlerini kaldırır)."""
+        name = next((n for i, n in self._row_entities if i == entity_id), "")
+        menu = QMenu(self)
+        preview_action = menu.addAction("Önizleme")
+        menu.addSeparator()
+        clear_action = menu.addAction("Yerleştirilmiş Dersleri Havuza Düşür")
+        chosen = menu.exec(global_pos)
+        if chosen == preview_action:
+            self._show_row_preview(entity_id)
+        elif chosen == clear_action:
+            self._clear_row_assignments(entity_id, name)
+
+    def _clear_row_assignments(self, entity_id: int, name: str) -> None:
+        matching_blocks = [
+            b for blocks in self._schedule.values() for b in blocks if self._row_matches_block(b, entity_id)
+        ]
+        if not matching_blocks:
+            QMessageBox.information(self, "Ders yok", f"{name} için şu anda yerleştirilmiş ders yok.")
+            return
+        all_members = {}
+        for b in matching_blocks:
+            for m in self._block_group(b):
+                all_members[m.id] = m
+        confirm = QMessageBox.question(
+            self, "Onay",
+            f"{name} için yerleştirilmiş {len(all_members)} ders saatinin tamamı 'Atanmamış Dersler' "
+            "havuzuna düşürülsün mü?\n\n(Müsaitlik ayarlarına dokunulmaz, sadece ders yerleşimleri kaldırılır.)",
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        dialog = ScopeDialog(self.db, self, f"{name} derslerini kaldırma")
+        if dialog.exec() != ScopeDialog.Accepted:
+            return
+        scope = dialog.scope()
+        for block_id in all_members:
+            scheduling.clear_block(self.db, self.navigator.week_start, block_id, scope)
+        self.refresh()
 
     def _handle_mode_change(self, checked: bool) -> None:
         self.mode = MODE_CLASS if checked else MODE_TEACHER
@@ -903,18 +993,64 @@ class ScheduleTab(QWidget):
 
     def handle_auto_assign(self) -> None:
         # Kısıt çözücü (bkz. scheduling.auto_assign) çok sayıda öğretmen/
-        # sınıfta birkaç saniyeden onlarca saniyeye kadar sürebilir; pencere
-        # o sırada tepkisiz görünmesin diye kum saati imleci gösteriliyor.
+        # sınıfta birkaç saniyeden onlarca saniyeye kadar sürebilir; arayüz
+        # o sırada donmuş görünmesin ve ilerleme yüzdesi görülebilsin diye
+        # ayrı bir iş parçacığında çalıştırılıyor. Pencere bu süre boyunca
+        # UYGULAMA GENELİNDE modal (bkz. setWindowModality altında) - hem
+        # kullanıcının yarım kalmış bir işlemi görmesini engeller hem de
+        # arka plan iş parçacığıyla veritabanına aynı anda erişilmesini
+        # önler (bkz. db.py'deki check_same_thread=False notu).
         self.auto_assign_button.setEnabled(False)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
-        try:
-            result = scheduling.auto_assign(self.db, self.navigator.week_start)
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.auto_assign_button.setEnabled(True)
+        self.undo_auto_assign_button.setVisible(False)
+
+        progress_dialog = QProgressDialog("Program hesaplanıyor...", None, 0, 100, self)
+        progress_dialog.setWindowTitle("Oto Ata")
+        progress_dialog.setWindowModality(Qt.ApplicationModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setValue(0)
+        self._auto_assign_progress_dialog = progress_dialog
+
+        worker = _AutoAssignWorker(self.db, self.navigator.week_start, self)
+        worker.progress.connect(self._handle_auto_assign_progress)
+        worker.finished_with_result.connect(self._handle_auto_assign_finished)
+        self._auto_assign_worker = worker
+        worker.start()
+        progress_dialog.show()
+
+    def _handle_auto_assign_progress(self, pct: int, msg: str) -> None:
+        dialog = self._auto_assign_progress_dialog
+        if dialog is None:
+            return
+        # QProgressDialog.setValue() modal iken içeride kendi processEvents()
+        # çağrısını yapar - bu, henüz bu fonksiyondan çıkmadan
+        # _handle_auto_assign_finished'ın araya girip diyaloğu kapatıp
+        # self._auto_assign_progress_dialog'u None yapmasına yol açabilir.
+        # Bu yüzden referansı yerelde tutup setValue'yu EN SON çağırıyoruz -
+        # sonrasında self._auto_assign_progress_dialog'a bir daha dokunmuyoruz.
+        dialog.setLabelText(msg)
+        dialog.setValue(pct)
+
+    def _handle_auto_assign_finished(self, result_or_exc) -> None:
+        if self._auto_assign_progress_dialog is not None:
+            self._auto_assign_progress_dialog.close()
+            self._auto_assign_progress_dialog = None
+        self.auto_assign_button.setEnabled(True)
+        self._auto_assign_worker = None
+
+        if isinstance(result_or_exc, Exception):
+            QMessageBox.critical(self, "Oto Ata", f"Oto Ata sırasında bir hata oluştu:\n{result_or_exc}")
+            return
+
+        result = result_or_exc
         self.refresh()
+        self._last_auto_assign_block_ids = result.placed_block_ids
+        self.undo_auto_assign_button.setVisible(bool(result.placed_block_ids))
+
         message = f"{result.placed} ders otomatik olarak yerleştirildi."
+        if result.placed_block_ids:
+            message += "\n\nBeğenmezseniz 'Son Oto Atamayı Geri Al' ile tamamını havuza geri alabilirsiniz."
         if result.warnings:
             message += (
                 "\n\nUyarı: Bazı dersler kalıcı olarak yerleştirildi ama başka haftalarda "
@@ -923,3 +1059,20 @@ class ScheduleTab(QWidget):
             QMessageBox.warning(self, "Oto Ata", message)
         else:
             QMessageBox.information(self, "Oto Ata", message)
+
+    def handle_undo_auto_assign(self) -> None:
+        block_ids = self._last_auto_assign_block_ids
+        if not block_ids:
+            return
+        confirm = QMessageBox.question(
+            self, "Geri Al",
+            f"Son Oto Ata ile yerleştirilen {len(block_ids)} ders saati 'Atanmamış Dersler' "
+            "havuzuna geri alınsın mı?",
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        for block_id in block_ids:
+            scheduling.clear_block(self.db, self.navigator.week_start, block_id, scheduling.SCOPE_ALWAYS)
+        self._last_auto_assign_block_ids = []
+        self.undo_auto_assign_button.setVisible(False)
+        self.refresh()
