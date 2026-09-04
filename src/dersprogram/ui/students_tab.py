@@ -16,12 +16,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QHeaderView,
+    QDialog,
 )
 from PySide6.QtCore import Qt
 
 from ..db import Database
 from .. import scheduling
 from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog, section_title as _section_title, divider as _divider
+from .import_students_dialog import ImportStudentsDialog
 
 
 class StudentsTab(QWidget):
@@ -128,6 +130,9 @@ class StudentsTab(QWidget):
         list_header_row = QHBoxLayout()
         list_header_row.addWidget(_section_title("Öğrenci Listesi"))
         list_header_row.addStretch()
+        self.import_excel_button = QPushButton("Excel'den İçe Aktar")
+        self.import_excel_button.clicked.connect(self.handle_import_excel)
+        list_header_row.addWidget(self.import_excel_button)
         right_layout.addLayout(list_header_row)
 
         self.search_edit = QLineEdit()
@@ -338,6 +343,13 @@ class StudentsTab(QWidget):
         self.refresh()
         if self.on_change:
             self.on_change()
+
+    def handle_import_excel(self) -> None:
+        dialog = ImportStudentsDialog(self.db, self)
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh()
+            if self.on_change:
+                self.on_change()
 
     def handle_delete(self) -> None:
         if self.selected_id is None:
