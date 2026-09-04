@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QButtonGroup,
     QDialog,
+    QApplication,
 )
 
 from ..db import Database, LESSON_TYPES, TYPE_CLASS
@@ -901,7 +902,17 @@ class ScheduleTab(QWidget):
             self.refresh()
 
     def handle_auto_assign(self) -> None:
-        result = scheduling.auto_assign(self.db, self.navigator.week_start)
+        # Kısıt çözücü (bkz. scheduling.auto_assign) çok sayıda öğretmen/
+        # sınıfta birkaç saniyeden onlarca saniyeye kadar sürebilir; pencere
+        # o sırada tepkisiz görünmesin diye kum saati imleci gösteriliyor.
+        self.auto_assign_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        try:
+            result = scheduling.auto_assign(self.db, self.navigator.week_start)
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.auto_assign_button.setEnabled(True)
         self.refresh()
         message = f"{result.placed} ders otomatik olarak yerleştirildi."
         if result.warnings:

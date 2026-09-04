@@ -449,11 +449,29 @@ class AutoAssignResult:
     warnings: list[str]
 
 
-def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) -> AutoAssignResult:
-    """Atanmamış dersleri, çakışma olmayan ve mümkün olduğunca dengeli
-    dağılan (aynı grup art arda en fazla `max_consecutive` saat) uygun
-    slotlara otomatik yerleştirir. Kaç ders yerleştirildiğini ve varsa
-    uyarıları (bkz. aşağıda) döner.
+def auto_assign(
+    db: Database, week_start: _dt.date, max_consecutive: int = 2, time_limit_seconds: float = 20.0
+) -> AutoAssignResult:
+    """Atanmamış dersleri (havuzu) bir kısıt çözücü (Google OR-Tools CP-SAT)
+    ile, ÇAKIŞMASIZ ve mümkün olan en fazla ders sayısını yerleştirecek
+    şekilde otomatik yerleştirir. Zaten elle/önceden yerleştirilmiş dersler
+    (schedule) SABİT kabul edilir, sadece havuzdakiler için karar verilir.
+
+    Önceki (açgözlü/sırayla dene) yöntem, hoca/sınıf sayısı arttıkça
+    "erken yerleşen kolay dersler yüzünden zor bir ders için hiç yer
+    kalmaması" durumuna düşebiliyordu. CP-SAT tüm dersleri BİRLİKTE
+    değerlendirip, mümkünse hepsini, değilse mümkün olan en fazlasını
+    çakışmasız yerleştirecek bir çözüm arar - tek tek sırayla denemekten
+    çok daha güvenilir, özellikle çok sayıda öğretmen/sınıf olduğunda.
+
+    Kısıtlar find_conflicts/find_group_conflicts ile birebir aynı mantığı
+    kullanır (aynı öğretmen/sınıf/öğrenci/derslik aynı anda iki yerde
+    olamaz, öğrenci kendi sınıfının dersiyle çakışamaz, müsait-değil
+    işaretli saatlere girilemez, zümre grubundaki tüm hocalar aynı anda
+    boş olmalı). Ayrıca aynı ihtiyaçtan gelen (ör. '9-A Matematik haftada
+    4 saat') dersler bir günde en fazla `max_consecutive` saat art arda
+    olacak şekilde SERT bir kısıtla sınırlanır (üstüne, mümkünse tek güne
+    yığılmak yerine birden fazla güne de yayılması hafifçe ödüllendirilir).
 
     Yerleştirme HER HAFTA için kalıcıdır (SCOPE_ALWAYS), ama uygunluk
     kontrolü sadece bu haftanın müsaitlik durumuna bakar. Bu yüzden bir
@@ -461,6 +479,8 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
     için o saati özellikle 'müsait değil' işaretlemişse, kalıcı
     yerleştirme o haftayla çelişebilir; bu durumlar uyarı olarak
     döndürülür ki kullanıcı isterse o haftaları elle kontrol etsin."""
+    from ortools.sat.python import cp_model
+
     day_count = len(db.day_names)
     day_names = db.day_names
     period_count = db.period_count
@@ -484,108 +504,175 @@ def auto_assign(db: Database, week_start: _dt.date, max_consecutive: int = 2) ->
                 f"yerleştirildi, ama bu saat şu hafta(lar) için 'müsait değil' işaretli: {dates}"
             )
 
-    # basit günlük yük sayacı: (gün) -> o gün kaç blok var
-    day_load = [0] * day_count
-    for (d, _p), blocks in schedule.items():
-        day_load[d] += len(blocks)
+    if not pool:
+        return AutoAssignResult(placed=0, warnings=warnings)
 
-    placed = 0
-
-    # Zümre grupları (aynı zumre_group_id'yi paylaşan bloklar) tek bir
-    # "buluşma" olarak ele alınır: hepsi için ortak, çakışmasız bir
-    # gün/saat bulunup HEPSİ AYNI ANDA o hücreye yerleştirilir - aksi
-    # halde her öğretmenin zümresi farklı bir saate düşebilirdi.
-    zumre_groups: dict[int, list[BlockView]] = {}
-    normal_pool: list[BlockView] = []
+    # ---------- havuzdaki dersleri "yerleştirme birimleri"ne ayır ----------
+    # Zümre grubundaki bloklar (aynı zumre_group_id) her zaman BİRLİKTE
+    # yerleşmeli - tek bir birim olarak ele alınır. Diğer her blok kendi
+    # başına bir birimdir.
+    units: list[list[BlockView]] = []
+    seen_zumre: set[int] = set()
     for block in pool:
         if block.type == TYPE_DEPARTMENT and block.zumre_group_id is not None:
-            zumre_groups.setdefault(block.zumre_group_id, []).append(block)
+            if block.zumre_group_id in seen_zumre:
+                continue
+            seen_zumre.add(block.zumre_group_id)
+            units.append([b for b in pool if b.zumre_group_id == block.zumre_group_id])
         else:
-            normal_pool.append(block)
+            units.append([block])
 
-    for members in zumre_groups.values():
-        best = None
-        for d in sorted(range(day_count), key=lambda d: day_load[d]):
-            for p in range(1, period_count + 1):
-                if find_group_conflicts(schedule, d, p, members, unavailable):
-                    continue
-                best = (d, p)
-                break
-            if best:
-                break
-        if best is None:
+    all_slots = [(d, p) for d in range(day_count) for p in range(1, period_count + 1)]
+
+    # Her birim için, sabit (zaten yerleşmiş) derslerle çakışmayan ve
+    # müsaitlik kurallarını ihlal etmeyen (day, period) adayları -
+    # find_group_conflicts ile AYNI kontrol, tek doğru kaynak orası.
+    domains: list[list[tuple[int, int]]] = [
+        [(d, p) for (d, p) in all_slots if not find_group_conflicts(schedule, d, p, unit, unavailable)]
+        for unit in units
+    ]
+
+    model = cp_model.CpModel()
+
+    # x[(birim_no, gün, saat)] = 1  <=>  o birim o gün/saate yerleşti
+    x: dict[tuple[int, int, int], "cp_model.IntVar"] = {}
+    for ui, slots in enumerate(domains):
+        for (d, p) in slots:
+            x[(ui, d, p)] = model.NewBoolVar(f"x_{ui}_{d}_{p}")
+
+    # Her birim en fazla bir kez yerleşsin (hiç yerleşmeyebilir de - o
+    # zaman havuzda kalır, tıpkı eski yöntemde olduğu gibi).
+    for ui, slots in enumerate(domains):
+        unit_vars = [x[(ui, d, p)] for (d, p) in slots]
+        if unit_vars:
+            model.Add(sum(unit_vars) <= 1)
+
+    def add_resource_constraint(key_fn) -> None:
+        """Aynı kaynağı (öğretmen/sınıf/öğrenci/derslik) paylaşan
+        birimlerin aynı (gün, saat)'e birden fazlası yerleşemez."""
+        buckets: dict[tuple, dict[tuple[int, int], list[int]]] = {}
+        for ui, unit in enumerate(units):
+            for key in key_fn(unit):
+                for (d, p) in domains[ui]:
+                    buckets.setdefault(key, {}).setdefault((d, p), []).append(ui)
+        for per_slot in buckets.values():
+            for (d, p), uis in per_slot.items():
+                if len(uis) > 1:
+                    model.Add(sum(x[(ui, d, p)] for ui in uis) <= 1)
+
+    add_resource_constraint(lambda unit: {b.teacher_id for b in unit if b.teacher_id is not None})
+    add_resource_constraint(lambda unit: {b.class_group_id for b in unit if b.class_group_id is not None})
+    add_resource_constraint(lambda unit: {b.student_id for b in unit if b.student_id is not None})
+    add_resource_constraint(lambda unit: {b.room_id for b in unit if b.room_id is not None})
+
+    # Bir öğrencinin birebir/koçluk dersi kendi sınıfının o saatteki sınıf
+    # dersiyle çakışmasın (find_conflicts'taki çapraz kural) - ama iki
+    # farklı öğrencinin birebir dersleri birbirini ETKİLEMEZ, bu yüzden
+    # genel bir "kaynak" kovasına değil, sadece sınıf<->o sınıfın
+    # öğrencisi çiftlerine uygulanır.
+    class_slot_units: dict[int, dict[tuple[int, int], list[int]]] = {}
+    personal_slot_units: dict[int, dict[tuple[int, int], list[int]]] = {}
+    for ui, unit in enumerate(units):
+        for b in unit:
+            if b.type == TYPE_CLASS and b.class_group_id is not None:
+                for (d, p) in domains[ui]:
+                    class_slot_units.setdefault(b.class_group_id, {}).setdefault((d, p), []).append(ui)
+            if b.student_id is not None and b.student_class_group_id is not None:
+                for (d, p) in domains[ui]:
+                    personal_slot_units.setdefault(b.student_class_group_id, {}).setdefault((d, p), []).append(ui)
+    for class_id, class_by_slot in class_slot_units.items():
+        personal_by_slot = personal_slot_units.get(class_id)
+        if not personal_by_slot:
             continue
-        d, p = best
-        for block in members:
+        for slot, class_uis in class_by_slot.items():
+            personal_uis = personal_by_slot.get(slot)
+            if not personal_uis:
+                continue
+            for cu in class_uis:
+                for pu in personal_uis:
+                    model.Add(x[(cu, *slot)] + x[(pu, *slot)] <= 1)
+
+    # Aynı ihtiyaçtan gelen (aynı tip+öğretmen+sınıf+öğrenci+ders) dersler
+    # tek bir grup sayılır - hem "art arda en fazla N saat" sert kısıtı hem
+    # de aşağıdaki gün-yayma tercihi bu gruplamaya göre çalışır.
+    group_units: dict[tuple, list[int]] = {}
+    for ui, unit in enumerate(units):
+        if len(unit) == 1 and unit[0].type != TYPE_DEPARTMENT:
+            group_units.setdefault(unit[0].group_key(), []).append(ui)
+
+    # ---------- sert kısıt: bir günde art arda en fazla `max_consecutive` saat ----------
+    # Her `max_consecutive + 1` uzunluğundaki ardışık saat penceresinde bu
+    # gruptan en fazla `max_consecutive` tanesi seçilebilir - bu, 3 (ya da
+    # kaç ayarlanmışsa) saatin üst üste gelmesini KESİN olarak engeller,
+    # ama HANGİ saatlerin seçileceğini serbest bırakır (çözücü en uygununu
+    # bulur, ör. 2+2+1 ya da 2+1+2 gibi farklı dağılımlar da olabilir).
+    if max_consecutive > 0:
+        window_size = max_consecutive + 1
+        for uis in group_units.values():
+            if len(uis) <= max_consecutive:
+                continue
+            for d in range(day_count):
+                var_by_period: dict[int, list] = {}
+                for ui in uis:
+                    for (dd, p) in domains[ui]:
+                        if dd == d:
+                            var_by_period.setdefault(p, []).append(x[(ui, dd, p)])
+                for start in range(1, period_count - window_size + 2):
+                    window_vars = [
+                        v for p in range(start, start + window_size) for v in var_by_period.get(p, [])
+                    ]
+                    if window_vars:
+                        model.Add(sum(window_vars) <= max_consecutive)
+
+    # ---------- hafif tercih: aynı ihtiyaçtan gelen dersleri günlere yay ----------
+    # Zorunlu değil (yerleştirme sayısını asla düşürmez, sadece eşit
+    # kalitede birden fazla çözüm varsa aralarında seçim yapar).
+    spread_bonus_terms = []
+    for gi, uis in enumerate(group_units.values()):
+        if len(uis) < 2:
+            continue
+        for d in range(day_count):
+            day_vars = [x[(ui, d, p)] for ui in uis for (dd, p) in domains[ui] if dd == d]
+            if not day_vars:
+                continue
+            used = model.NewBoolVar(f"day_used_{gi}_{d}")
+            model.AddMaxEquality(used, day_vars)
+            spread_bonus_terms.append(used)
+
+    placed_terms = list(x.values())
+    # Yerleştirilen ders sayısı her zaman gün-yayma tercihinden ağır
+    # basar - "daha iyi dağılsın diye bir dersi havuzda bırak" asla olmaz.
+    place_weight = len(spread_bonus_terms) + 1
+    model.Maximize(
+        cp_model.LinearExpr.WeightedSum(
+            placed_terms + spread_bonus_terms,
+            [place_weight] * len(placed_terms) + [1] * len(spread_bonus_terms),
+        )
+    )
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = time_limit_seconds
+    solver.parameters.num_search_workers = 8
+    solver.Solve(model)
+
+    placed = 0
+    for ui, unit in enumerate(units):
+        chosen = None
+        for (d, p) in domains[ui]:
+            if solver.Value(x[(ui, d, p)]):
+                chosen = (d, p)
+                break
+        if chosen is None:
+            continue
+        d, p = chosen
+        for block in unit:
             place_block(db, week_start, block.id, d, p, SCOPE_ALWAYS)
             schedule.setdefault((d, p), []).append(block)
             block.day, block.period = d, p
             cross_week_warning(block, d, p)
-        day_load[d] += len(members)
-        placed += len(members)
-
-    groups: dict[tuple, list[BlockView]] = {}
-    for block in normal_pool:
-        groups.setdefault(block.group_key(), []).append(block)
-
-    # Haftalık saati çok olan gruplar önce yerleşsin: ardışık ikili bir
-    # aralık bulmak onlar için daha zordur, program dolmadan yerleşmeliler.
-    for _group_key, blocks in sorted(groups.items(), key=lambda item: -len(item[1])):
-        pending = list(blocks)
-        group_days: set[int] = set()
-        while pending:
-            # Her seferinde mümkün olduğunca `max_consecutive` (varsayılan 2)
-            # saatlik ardışık bir blok yerleştir: 5 saat -> 2 + 2 + 1.
-            chunk_size = min(max_consecutive, len(pending))
-            slot = None
-            while chunk_size >= 1:
-                slot = _find_consecutive_slot(
-                    schedule, pending[:chunk_size], day_count, period_count,
-                    unavailable, day_load, group_days,
-                )
-                if slot is not None:
-                    break
-                chunk_size -= 1  # ardışık yer yoksa daha kısa blok dene
-            if slot is None:
-                break  # bu grup için uygun hiçbir saat kalmadı
-            day, start_period = slot
-            for offset in range(chunk_size):
-                block = pending[offset]
-                period = start_period + offset
-                place_block(db, week_start, block.id, day, period, SCOPE_ALWAYS)
-                schedule.setdefault((day, period), []).append(block)
-                block.day, block.period = day, period
-                day_load[day] += 1
-                placed += 1
-                cross_week_warning(block, day, period)
-            group_days.add(day)
-            pending = pending[chunk_size:]
+            placed += 1
 
     return AutoAssignResult(placed=placed, warnings=warnings)
-
-
-def _find_consecutive_slot(
-    schedule: dict[tuple[int, int], list[BlockView]],
-    chunk: list[BlockView],
-    day_count: int,
-    period_count: int,
-    unavailable: "UnavailableSlots | None",
-    day_load: list[int],
-    group_days: set[int],
-) -> tuple[int, int] | None:
-    """`chunk` kadar ardışık saatin tamamı çakışmasız olan bir
-    (gün, başlangıç saati) döner. Önce bu grubun HİÇ dersi olmayan günler
-    denenir (dersler haftaya yayılsın), sonra günlük yükü az olanlar."""
-    size = len(chunk)
-    day_order = sorted(range(day_count), key=lambda d: (d in group_days, day_load[d], d))
-    for day in day_order:
-        for start in range(1, period_count - size + 2):
-            if all(
-                not find_conflicts(schedule, day, start + offset, chunk[offset], unavailable)
-                for offset in range(size)
-            ):
-                return day, start
-    return None
 
 
 # ---------- özet / analiz ----------
