@@ -11,7 +11,7 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRect, QThread, Signal
+from PySide6.QtCore import Qt, QMimeData, QRect, QSize, QThread, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget,
@@ -23,8 +23,10 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QStyledItemDelegate,
     QHeaderView,
-    QListWidget,
-    QListWidgetItem,
+    QFrame,
+    QCheckBox,
+    QScrollArea,
+    QLayout,
     QAbstractItemView,
     QMessageBox,
     QSplitter,
@@ -34,7 +36,15 @@ from PySide6.QtWidgets import (
     QProgressDialog,
 )
 
-from ..db import Database, LESSON_TYPES, TYPE_CLASS
+from ..db import (
+    Database,
+    LESSON_TYPES,
+    TYPE_CLASS,
+    TYPE_ONE_ON_ONE,
+    TYPE_COACHING,
+    TYPE_DEPARTMENT,
+    TYPE_PROBLEM_SOLVING,
+)
 from .. import scheduling
 from .widgets import WeekNavigator, ScopeDialog, MiniScheduleGrid
 from .add_lesson_dialog import AddLessonDialog
@@ -119,55 +129,73 @@ class _CellDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class PoolList(QListWidget):
-    """Atanmamış dersler havuzu; buradan ızgaraya sürüklenebilir."""
+class FlowLayout(QLayout):
+    """Öğeleri soldan sağa dizip pencere genişliğine sığmayınca alt satıra
+    saran basit bir yerleşim (Qt'nin QHBoxLayout'u sarma desteklemiyor).
+    Atanmamış dersler havuzunda her kategorinin kartlarını (bkz. PoolChip)
+    genişliğe göre sarıp gruplamak için kullanılır."""
 
-    delete_requested = Signal()
+    def __init__(self, parent=None, margin: int = 0, h_spacing: int = 6, v_spacing: int = 6):
+        super().__init__(parent)
+        self._h_spacing = h_spacing
+        self._v_spacing = v_spacing
+        self._items: list = []
+        self.setContentsMargins(margin, margin, margin, margin)
 
-    def __init__(self):
-        super().__init__()
-        self.setDragEnabled(True)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.setFlow(QListWidget.LeftToRight)
-        self.setWrapping(True)
-        self.setResizeMode(QListWidget.Adjust)
-        self.setSpacing(6)
-        self.setStyleSheet(f"QListWidget {{ background:{theme.APP_BG}; border:none; }}")
-        # Sürüklerken imleçle birlikte gösterilecek küçük önizleme
-        # görüntüsünü üreten fonksiyon - ScheduleTab tarafından verilir
-        # (Ana Program'daki hücre kartıyla aynı boyut/görünümde olsun diye,
-        # bkz. ScheduleTab._render_drag_pixmap). Yoksa Qt'nin varsayılanı
-        # olan, liste öğesinin tam boyutundaki kocaman kutuyu sürükler.
-        self.drag_pixmap_provider = None
+    def addItem(self, item) -> None:
+        self._items.append(item)
 
-    def mimeData(self, items):
-        md = super().mimeData(items)
-        if items:
-            block_id = items[0].data(Qt.UserRole)
-            md.setText(f"{MIME_PREFIX}{block_id}")
-        return md
+    def count(self) -> int:
+        return len(self._items)
 
-    def startDrag(self, supportedActions):
-        item = self.currentItem()
-        if item is None or self.drag_pixmap_provider is None:
-            super().startDrag(supportedActions)
-            return
-        block_id = item.data(Qt.UserRole)
-        pixmap = self.drag_pixmap_provider(block_id)
-        if pixmap is None or pixmap.isNull():
-            super().startDrag(supportedActions)
-            return
-        drag = QDrag(self)
-        drag.setMimeData(self.mimeData([item]))
-        drag.setPixmap(pixmap)
-        drag.setHotSpot(pixmap.rect().center())
-        drag.exec(supportedActions)
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
 
-    def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
-            self.delete_requested.emit()
-            return
-        super().keyPressEvent(event)
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        left, top, right, bottom = self.getContentsMargins()
+        effective = rect.adjusted(left, top, -right, -bottom)
+        x, y = effective.x(), effective.y()
+        line_height = 0
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + self._h_spacing
+            if next_x - self._h_spacing > effective.right() and line_height > 0:
+                x = effective.x()
+                y += line_height + self._v_spacing
+                next_x = x + hint.width() + self._h_spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(x, y, hint.width(), hint.height()))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + bottom
 
 
 def _group_pool_labels(rep_block, members: list) -> tuple[str, str]:
@@ -184,27 +212,99 @@ def _group_pool_labels(rep_block, members: list) -> tuple[str, str]:
     return short, full
 
 
-def _pool_chip(rep_block, members: list) -> QWidget:
-    _bg, dot = theme.lesson_colors_for(rep_block)
-    short_text, full_text = _group_pool_labels(rep_block, members)
-    chip = QWidget()
-    layout = QHBoxLayout(chip)
-    layout.setContentsMargins(11, 8, 12, 9)
-    layout.setSpacing(7)
-    dot_label = QLabel()
-    dot_label.setFixedSize(7, 7)
-    dot_label.setStyleSheet(f"background:{dot}; border-radius:3.5px;")
-    layout.addWidget(dot_label)
-    text = QLabel(short_text)
-    text.setToolTip(full_text)
-    text.setStyleSheet(f"font-size:8.5pt; font-weight:600; color:{theme.INK_MUTED_30}; background:transparent;")
-    layout.addWidget(text)
-    chip.setToolTip(full_text)
-    chip.setStyleSheet(
-        f"background:{theme.SURFACE}; border:1px solid {theme.BORDER_SUBTLE}; border-radius:12px;"
-    )
-    chip.setMinimumHeight(26)
-    return chip
+def _pool_dense_lines(rep_block, members: list) -> tuple[str, str]:
+    """Havuzdaki bir kart için Ana Program hücreleriyle AYNI iki satırlı
+    yoğun etiket (bkz. theme.make_dense_chip) - tür + kiminle olduğu
+    bilgisini en kısa şekilde verir, tam bilgi tooltip'te kalır (bkz.
+    _group_pool_labels)."""
+    teacher_short = scheduling.short_teacher_name(rep_block.teacher_name)
+    if rep_block.type == TYPE_DEPARTMENT:
+        line1 = rep_block.subject_name or "Zümre"
+        line2 = f"{len(members)} hoca" if len(members) > 1 else teacher_short
+    elif rep_block.type == TYPE_CLASS:
+        line1 = rep_block.subject_name or "Sınıf Dersi"
+        line2 = f"{rep_block.class_name} · {teacher_short}" if rep_block.class_name else teacher_short
+    elif rep_block.type == TYPE_ONE_ON_ONE:
+        line1 = rep_block.subject_name or "Birebir"
+        line2 = f"{rep_block.student_name} · {teacher_short}" if rep_block.student_name else teacher_short
+    elif rep_block.type == TYPE_COACHING:
+        line1 = "Öğrenci Koçluk"
+        line2 = f"{rep_block.student_name} · {teacher_short}" if rep_block.student_name else teacher_short
+    else:  # TYPE_PROBLEM_SOLVING
+        line1 = rep_block.subject_name or "Soru Çözümü"
+        line2 = teacher_short
+    return line1, line2
+
+
+class PoolChip(QFrame):
+    """Havuzdaki bir dersi, Ana Program ızgarasındaki hücre kartlarıyla
+    AYNI görünümde (küçük, renkli, iki satırlı) gösteren, sürüklenip
+    ızgaraya bırakılabilen kart. Önceden tek satırlık soluk bir 'hap'
+    (pill) görünümündeydi - havuz kalabalıklaşınca ana tablodaki dersle
+    aynı derse ait kartı göz ile eşleştirmek zorlaşıyordu."""
+
+    clicked = Signal(int)  # block_id
+    delete_requested = Signal()
+
+    _DRAG_THRESHOLD = 6
+
+    def __init__(self, block_id: int, line1: str, line2: str, bg: str, tooltip: str, drag_pixmap_provider, parent=None):
+        super().__init__(parent)
+        self.block_id = block_id
+        self._drag_pixmap_provider = drag_pixmap_provider
+        self._drag_start_pos = None
+        self._selected = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.ClickFocus)
+        self.setToolTip(tooltip)
+        self.setFixedSize(66, 40)
+        chip_layout = QVBoxLayout(self)
+        chip_layout.setContentsMargins(0, 0, 0, 0)
+        chip_layout.addWidget(theme.make_dense_chip(line1, line2, bg))
+        self._apply_frame_style()
+
+    def _apply_frame_style(self) -> None:
+        border = f"2px solid {theme.ACCENT}" if self._selected else "2px solid transparent"
+        self.setStyleSheet(f"PoolChip {{ border-radius:5px; border:{border}; }}")
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        self._apply_frame_style()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            self.setFocus()
+            self.clicked.emit(self.block_id)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_start_pos is None or not (event.buttons() & Qt.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        if (pos - self._drag_start_pos).manhattanLength() < self._DRAG_THRESHOLD:
+            return
+        self._drag_start_pos = None
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(f"{MIME_PREFIX}{self.block_id}")
+        drag.setMimeData(mime)
+        pixmap = self._drag_pixmap_provider(self.block_id) if self._drag_pixmap_provider else None
+        if pixmap is not None and not pixmap.isNull():
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(pixmap.rect().center())
+        drag.exec(Qt.CopyAction)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            self.delete_requested.emit()
+            return
+        super().keyPressEvent(event)
 
 
 class MainGrid(QTableWidget):
@@ -493,15 +593,16 @@ class _AutoAssignWorker(QThread):
     progress = Signal(int, str)
     finished_with_result = Signal(object)  # AutoAssignResult ya da Exception
 
-    def __init__(self, db: Database, week_start, parent=None):
+    def __init__(self, db: Database, week_start, include_types: set[str] | None, parent=None):
         super().__init__(parent)
         self.db = db
         self.week_start = week_start
+        self.include_types = include_types
 
     def run(self) -> None:
         try:
             result = scheduling.auto_assign(
-                self.db, self.week_start,
+                self.db, self.week_start, include_types=self.include_types,
                 progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
             )
         except Exception as exc:  # pragma: no cover - beklenmedik hata
@@ -523,6 +624,8 @@ class ScheduleTab(QWidget):
         self._selected_row_entity_id: int | None = None
         self._preview_highlighted: list[tuple[int, int]] = []
         self._preview_header_rows: list[int] = []
+        self._selected_pool_block_id: int | None = None
+        self._pool_chips: dict[int, PoolChip] = {}
         self._last_auto_assign_block_ids: list[int] = []
         self._auto_assign_worker: "_AutoAssignWorker | None" = None
         self._auto_assign_progress_dialog: QProgressDialog | None = None
@@ -633,18 +736,44 @@ class ScheduleTab(QWidget):
         self.hint_label = QLabel()
         self.hint_label.setStyleSheet(f"font-size:8.3pt; color:{theme.INK_MUTED_58};")
         pool_layout.addWidget(self.hint_label)
-        self.pool_list = PoolList()
-        self.pool_list.drag_pixmap_provider = self._render_drag_pixmap
-        pool_layout.addWidget(self.pool_list)
+
+        # Oto Ata'nın hangi ders kategorilerini işleyeceğini seçmek için -
+        # havuzdaki kartların kendisi hep tüm kategorileri gösterir, bu
+        # onay kutuları sadece "Oto Ata" tıklanınca neyin işleneceğini
+        # daraltır (bkz. handle_auto_assign).
+        category_row = QHBoxLayout()
+        category_row.setSpacing(14)
+        category_label = QLabel("Oto Ata kategorileri:")
+        category_label.setStyleSheet(f"font-size:8.3pt; color:{theme.INK_MUTED_52}; font-weight:600;")
+        category_row.addWidget(category_label)
+        self.category_checks: dict[str, QCheckBox] = {}
+        for lesson_type in LESSON_TYPES:
+            checkbox = QCheckBox(theme.lesson_type_label(lesson_type))
+            checkbox.setChecked(True)
+            self.category_checks[lesson_type] = checkbox
+            category_row.addWidget(checkbox)
+        category_row.addStretch()
+        pool_layout.addLayout(category_row)
+
+        self.pool_scroll = QScrollArea()
+        self.pool_scroll.setWidgetResizable(True)
+        self.pool_scroll.setFrameShape(QFrame.NoFrame)
+        self.pool_scroll.setStyleSheet(f"QScrollArea {{ background:{theme.APP_BG}; border:none; }}")
+        self._pool_content = QWidget()
+        self._pool_content.setStyleSheet(f"background:{theme.APP_BG};")
+        self._pool_content_layout = QVBoxLayout(self._pool_content)
+        self._pool_content_layout.setContentsMargins(2, 2, 2, 2)
+        self._pool_content_layout.setSpacing(10)
+        self.pool_scroll.setWidget(self._pool_content)
+        pool_layout.addWidget(self.pool_scroll)
         splitter.addWidget(pool_container)
-        splitter.setSizes([520, 190])
+        splitter.setSizes([470, 240])
 
         layout.addWidget(splitter, 1)
 
         self.add_lesson_button.clicked.connect(self.handle_add_lesson)
         self.auto_assign_button.clicked.connect(self.handle_auto_assign)
         self.undo_auto_assign_button.clicked.connect(self.handle_undo_auto_assign)
-        self.pool_list.delete_requested.connect(self.handle_delete_pool_lesson)
         self.navigator.week_changed.connect(lambda _w: self.refresh())
         self.class_mode_button.toggled.connect(self._handle_mode_change)
         self.zoom_in_button.clicked.connect(lambda: self._change_zoom(0.15))
@@ -652,7 +781,6 @@ class ScheduleTab(QWidget):
         self.grid.row_header_double_clicked.connect(self._show_row_preview)
         self.grid.row_header_clicked.connect(self._handle_row_header_click)
         self.grid.row_header_context_menu_requested.connect(self._show_row_context_menu)
-        self.pool_list.itemSelectionChanged.connect(self._handle_pool_selection_changed)
 
         self._update_hint()
         self.refresh()
@@ -666,7 +794,7 @@ class ScheduleTab(QWidget):
         # ölçüsüne göre baştan oluştur - sadece boyut değiştirmek eski
         # widget'lardan görsel kalıntı bırakabiliyor.
         self._render_grid()
-        self._handle_pool_selection_changed()  # aktif önizleme varsa yeniden uygula
+        self._reapply_pool_preview()  # aktif önizleme varsa yeniden uygula
 
     def _render_drag_pixmap(self, block_id: int):
         """Havuzdan bir ders sürüklenirken imleçle birlikte gösterilecek
@@ -750,12 +878,25 @@ class ScheduleTab(QWidget):
         self._selected_row_entity_id = None
         self._render_pool()
 
-    def _handle_pool_selection_changed(self) -> None:
-        self._clear_row_preview()
-        items = self.pool_list.selectedItems()
-        if not items:
+    def _handle_pool_chip_clicked(self, block_id: int) -> None:
+        if self._selected_pool_block_id == block_id:
             return
-        block = self._blocks_by_id.get(items[0].data(Qt.UserRole))
+        previous = self._pool_chips.get(self._selected_pool_block_id)
+        if previous is not None:
+            previous.set_selected(False)
+        self._selected_pool_block_id = block_id
+        chip = self._pool_chips.get(block_id)
+        if chip is not None:
+            chip.set_selected(True)
+        self._clear_row_preview()
+        block = self._blocks_by_id.get(block_id)
+        if block is not None:
+            self._apply_row_preview(block)
+
+    def _reapply_pool_preview(self) -> None:
+        if self._selected_pool_block_id is None:
+            return
+        block = self._blocks_by_id.get(self._selected_pool_block_id)
         if block is not None:
             self._apply_row_preview(block)
 
@@ -894,21 +1035,50 @@ class ScheduleTab(QWidget):
                     item.setData(Qt.UserRole, payload)
                     item.setToolTip(tooltip)
 
-    def _render_pool(self) -> None:
-        self.pool_list.clear()
+    def _grouped_pool_items(self, blocks: list) -> list[tuple]:
+        """Havuzdaki blokları (rep_block, members) çiftlerine indirger -
+        zümre grubundaki bloklar tek bir kart olarak (bkz. _group_members),
+        diğer her blok kendi başına."""
         seen_groups: set[int] = set()
-        pool_items: list[tuple] = []  # (rep_block, members)
-        for block in self._pool:
+        items: list[tuple] = []
+        for block in blocks:
             if block.zumre_group_id is not None:
                 if block.zumre_group_id in seen_groups:
                     continue
                 seen_groups.add(block.zumre_group_id)
                 members = self._group_members(block.zumre_group_id)
                 rep = min(members, key=lambda b: b.id)
-                pool_items.append((rep, members))
+                items.append((rep, members))
             else:
-                pool_items.append((block, [block]))
+                items.append((block, [block]))
+        return items
 
+    def _clear_pool_content(self) -> None:
+        while self._pool_content_layout.count():
+            child = self._pool_content_layout.takeAt(0)
+            widget = child.widget()
+            if widget is not None:
+                widget.deleteLater()
+            else:
+                sub_layout = child.layout()
+                if sub_layout is not None:
+                    sub_layout.deleteLater()
+        self._pool_chips = {}
+
+    def _render_pool(self) -> None:
+        all_items = self._grouped_pool_items(self._pool)
+
+        # Kategori onay kutularının sayaçları HER ZAMAN tüm havuza göre
+        # (satır filtresinden bağımsız) güncellenir - Oto Ata, ekrandaki
+        # satır filtresine değil bu onay kutularına bakar.
+        counts_by_type: dict[str, int] = {t: 0 for t in LESSON_TYPES}
+        for rep, _members in all_items:
+            counts_by_type[rep.type] = counts_by_type.get(rep.type, 0) + 1
+        for lesson_type, checkbox in self.category_checks.items():
+            count = counts_by_type.get(lesson_type, 0)
+            checkbox.setText(f"{theme.lesson_type_label(lesson_type)} ({count})")
+
+        pool_items = all_items
         if self._selected_row_entity_id is not None:
             pool_items = [
                 (rep, members) for rep, members in pool_items
@@ -924,13 +1094,53 @@ class ScheduleTab(QWidget):
             self.pool_filter_clear_button.setVisible(False)
         self.pool_label.setText(f"Atanmamış Dersler ({len(pool_items)})")
 
-        for rep, members in sorted(pool_items, key=lambda pair: pair[0].pool_label()):
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, rep.id)
-            chip = _pool_chip(rep, members)
-            self.pool_list.addItem(item)
-            self.pool_list.setItemWidget(item, chip)
-            item.setSizeHint(chip.sizeHint())
+        # Seçili kart artık (yerleştirildi/silindi/filtrelendi diye)
+        # havuzda yoksa seçim geçersiz kalır.
+        visible_ids = {rep.id for rep, _members in pool_items}
+        if self._selected_pool_block_id not in visible_ids:
+            self._selected_pool_block_id = None
+
+        self._clear_pool_content()
+
+        if not pool_items:
+            empty_text = (
+                "Bu satır için atanmamış ders yok." if self._selected_row_entity_id is not None
+                else "Atanmamış ders yok."
+            )
+            empty_label = QLabel(empty_text)
+            empty_label.setStyleSheet(f"font-size:9pt; color:{theme.INK_MUTED_58}; padding:4px 0;")
+            self._pool_content_layout.addWidget(empty_label)
+
+        by_type: dict[str, list[tuple]] = {}
+        for rep, members in pool_items:
+            by_type.setdefault(rep.type, []).append((rep, members))
+
+        for lesson_type in LESSON_TYPES:
+            items = by_type.get(lesson_type)
+            if not items:
+                continue
+            section_header = QLabel(f"{theme.lesson_type_label(lesson_type)} ({len(items)})")
+            section_header.setStyleSheet(
+                f"font-size:8.6pt; font-weight:700; color:{theme.INK_MUTED_52}; "
+                f"padding-top:4px; border-top:1px solid {theme.BORDER_SUBTLE};"
+            )
+            self._pool_content_layout.addWidget(section_header)
+
+            flow_container = QWidget()
+            FlowLayout(flow_container, margin=0, h_spacing=6, v_spacing=6)
+            for rep, members in sorted(items, key=lambda pair: pair[0].pool_label()):
+                line1, line2 = _pool_dense_lines(rep, members)
+                bg, _dot = theme.lesson_colors_for(rep)
+                _short, full_text = _group_pool_labels(rep, members)
+                chip = PoolChip(rep.id, line1, line2, bg, full_text, self._render_drag_pixmap, flow_container)
+                chip.clicked.connect(self._handle_pool_chip_clicked)
+                chip.delete_requested.connect(self.handle_delete_pool_lesson)
+                chip.set_selected(rep.id == self._selected_pool_block_id)
+                self._pool_chips[rep.id] = chip
+                flow_container.layout().addWidget(chip)
+            self._pool_content_layout.addWidget(flow_container)
+
+        self._pool_content_layout.addStretch()
 
     # ---------- zümre grupları ----------
     def _group_members(self, zumre_group_id: int) -> list:
@@ -1039,14 +1249,13 @@ class ScheduleTab(QWidget):
         """Havuzdaki seçili dersi tamamen siler (zümre ise tüm grubu).
         Silinen ders bir sınıf hedefine bağlıysa, Sınıflar sekmesindeki
         'Ders Hedefleri' tablosunda 'eksik' uyarısı olarak görünür."""
-        items = self.pool_list.selectedItems()
-        if not items:
+        if self._selected_pool_block_id is None:
             QMessageBox.information(
                 self, "Seçim yok",
                 "Önce aşağıdaki 'Atanmamış Dersler' listesinden silmek istediğiniz derse tıklayın.",
             )
             return
-        block = self._blocks_by_id.get(items[0].data(Qt.UserRole))
+        block = self._blocks_by_id.get(self._selected_pool_block_id)
         if block is None:
             return
         members = self._block_group(block)
@@ -1060,6 +1269,7 @@ class ScheduleTab(QWidget):
             return
         for member in members:
             self.db.delete_lesson_block(member.id)
+        self._selected_pool_block_id = None
         self.refresh()
 
     # ---------- ders ekle / oto ata ----------
@@ -1077,6 +1287,16 @@ class ScheduleTab(QWidget):
         # kullanıcının yarım kalmış bir işlemi görmesini engeller hem de
         # arka plan iş parçacığıyla veritabanına aynı anda erişilmesini
         # önler (bkz. db.py'deki check_same_thread=False notu).
+        selected_types = {t for t, checkbox in self.category_checks.items() if checkbox.isChecked()}
+        if not selected_types:
+            QMessageBox.information(
+                self, "Kategori seçin",
+                "Oto Ata çalıştırmak için en az bir ders kategorisi seçili olmalı "
+                "(havuzun üstündeki 'Oto Ata kategorileri' onay kutularından).",
+            )
+            return
+        include_types = None if selected_types == set(LESSON_TYPES) else selected_types
+
         self.auto_assign_button.setEnabled(False)
         self.undo_auto_assign_button.setVisible(False)
 
@@ -1089,7 +1309,7 @@ class ScheduleTab(QWidget):
         progress_dialog.setValue(0)
         self._auto_assign_progress_dialog = progress_dialog
 
-        worker = _AutoAssignWorker(self.db, self.navigator.week_start, self)
+        worker = _AutoAssignWorker(self.db, self.navigator.week_start, include_types, self)
         worker.progress.connect(self._handle_auto_assign_progress)
         worker.finished_with_result.connect(self._handle_auto_assign_finished)
         self._auto_assign_worker = worker
@@ -1110,6 +1330,7 @@ class ScheduleTab(QWidget):
         dialog.setValue(pct)
 
     def _handle_auto_assign_finished(self, result_or_exc) -> None:
+        worker = self._auto_assign_worker
         if self._auto_assign_progress_dialog is not None:
             self._auto_assign_progress_dialog.close()
             self._auto_assign_progress_dialog = None
@@ -1126,6 +1347,9 @@ class ScheduleTab(QWidget):
         self.undo_auto_assign_button.setVisible(bool(result.placed_block_ids))
 
         message = f"{result.placed} ders otomatik olarak yerleştirildi."
+        if worker is not None and worker.include_types is not None:
+            names = ", ".join(theme.lesson_type_label(t) for t in LESSON_TYPES if t in worker.include_types)
+            message += f"\n\n(Sadece seçili kategoriler işlendi: {names})"
         if result.placed_block_ids:
             message += "\n\nBeğenmezseniz 'Son Oto Atamayı Geri Al' ile tamamını havuza geri alabilirsiniz."
         if result.warnings:

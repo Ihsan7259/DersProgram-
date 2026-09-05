@@ -530,6 +530,7 @@ def auto_assign(
     time_limit_seconds: float = 120.0,
     quality_time_limit_seconds: float = 180.0,
     progress_callback=None,
+    include_types: set[str] | None = None,
 ) -> AutoAssignResult:
     """Atanmamış dersleri (havuzu) bir kısıt çözücü (Google OR-Tools CP-SAT)
     ile, ÇAKIŞMASIZ ve mümkün olan en fazla ders sayısını yerleştirecek
@@ -575,7 +576,12 @@ def auto_assign(
     `progress_callback`, verilirse `(yüzde: int, mesaj: str)` ile art arda
     çağrılır (ör. bir ilerleme diyaloğunu güncellemek için) - uzun süren
     aramalarda kullanıcıya "ne yapıldığı" hakkında geri bildirim vermek
-    içindir, sonucu etkilemez."""
+    içindir, sonucu etkilemez.
+
+    `include_types` verilirse (ör. {TYPE_CLASS, TYPE_COACHING}), havuzdaki
+    SADECE bu türden dersler bu çalıştırmada değerlendirilir - diğer
+    türdeki dersler dokunulmadan havuzda kalır. Varsayılan (None) tüm
+    havuzu işler."""
     from ortools.sat.python import cp_model
 
     def report(pct: int, msg: str) -> None:
@@ -590,6 +596,8 @@ def auto_assign(
     this_week_key = week_key(week_start)
 
     schedule, pool = get_week_view(db, week_start)
+    if include_types is not None:
+        pool = [b for b in pool if b.type in include_types]
     unavailable = UnavailableSlots.compute(db, week_start)
     warnings: list[str] = []
 
