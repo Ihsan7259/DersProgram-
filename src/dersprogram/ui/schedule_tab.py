@@ -493,17 +493,15 @@ class _AutoAssignWorker(QThread):
     progress = Signal(int, str)
     finished_with_result = Signal(object)  # AutoAssignResult ya da Exception
 
-    def __init__(self, db: Database, week_start, max_consecutive: int, parent=None):
+    def __init__(self, db: Database, week_start, parent=None):
         super().__init__(parent)
         self.db = db
         self.week_start = week_start
-        self.max_consecutive = max_consecutive
 
     def run(self) -> None:
         try:
             result = scheduling.auto_assign(
                 self.db, self.week_start,
-                max_consecutive=self.max_consecutive,
                 progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
             )
         except Exception as exc:  # pragma: no cover - beklenmedik hata
@@ -528,11 +526,6 @@ class ScheduleTab(QWidget):
         self._last_auto_assign_block_ids: list[int] = []
         self._auto_assign_worker: "_AutoAssignWorker | None" = None
         self._auto_assign_progress_dialog: QProgressDialog | None = None
-        # Bir "Oto Ata" tıklaması, kullanıcı gevşetilmiş kuralı (bkz.
-        # _handle_auto_assign_finished) kabul ederse birden fazla tur
-        # (önce sert, sonra gevşetilmiş) sürebilir - "Geri Al" ikisini de
-        # kapsasın diye bu turların tamamındaki blok id'leri burada birikir.
-        self._auto_assign_session_ids: list[int] = []
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -1075,24 +1068,15 @@ class ScheduleTab(QWidget):
         if dialog.exec() == AddLessonDialog.Accepted:
             self.refresh()
 
-    def handle_auto_assign(self, max_consecutive: int = 2) -> None:
+    def handle_auto_assign(self) -> None:
         # Kısıt çözücü (bkz. scheduling.auto_assign) çok sayıda öğretmen/
-        # sınıfta birkaç saniyeden birkaç dakikaya kadar sürebilir; arayüz
+        # sınıfta birkaç saniyeden onlarca saniyeye kadar sürebilir; arayüz
         # o sırada donmuş görünmesin ve ilerleme yüzdesi görülebilsin diye
         # ayrı bir iş parçacığında çalıştırılıyor. Pencere bu süre boyunca
         # UYGULAMA GENELİNDE modal (bkz. setWindowModality altında) - hem
         # kullanıcının yarım kalmış bir işlemi görmesini engeller hem de
         # arka plan iş parçacığıyla veritabanına aynı anda erişilmesini
         # önler (bkz. db.py'deki check_same_thread=False notu).
-        #
-        # max_consecutive=2 (varsayılan, "Oto Ata" butonuna basılınca) sert
-        # kuralı uygular; hâlâ yerleşemeyen ders kalırsa kullanıcıya
-        # gevşetilmiş bir tur (max_consecutive=3, ör. 2+1) önerilir (bkz.
-        # _handle_auto_assign_finished) - bu durumda buraya max_consecutive=3
-        # ile tekrar girilir. Sert turda "Oto Ata" tıklaması yeni bir oturum
-        # başlattığı için geri alma listesi sadece o zaman sıfırlanır.
-        if max_consecutive <= 2:
-            self._auto_assign_session_ids = []
         self.auto_assign_button.setEnabled(False)
         self.undo_auto_assign_button.setVisible(False)
 
@@ -1105,7 +1089,7 @@ class ScheduleTab(QWidget):
         progress_dialog.setValue(0)
         self._auto_assign_progress_dialog = progress_dialog
 
-        worker = _AutoAssignWorker(self.db, self.navigator.week_start, max_consecutive, self)
+        worker = _AutoAssignWorker(self.db, self.navigator.week_start, self)
         worker.progress.connect(self._handle_auto_assign_progress)
         worker.finished_with_result.connect(self._handle_auto_assign_finished)
         self._auto_assign_worker = worker
@@ -1126,9 +1110,6 @@ class ScheduleTab(QWidget):
         dialog.setValue(pct)
 
     def _handle_auto_assign_finished(self, result_or_exc) -> None:
-        worker = self._auto_assign_worker
-        used_max_consecutive = worker.max_consecutive if worker is not None else 2
-
         if self._auto_assign_progress_dialog is not None:
             self._auto_assign_progress_dialog.close()
             self._auto_assign_progress_dialog = None
@@ -1141,50 +1122,17 @@ class ScheduleTab(QWidget):
 
         result = result_or_exc
         self.refresh()
-        self._auto_assign_session_ids.extend(result.placed_block_ids)
-        self._last_auto_assign_block_ids = self._auto_assign_session_ids
-        self.undo_auto_assign_button.setVisible(bool(self._auto_assign_session_ids))
-
-        remaining = len(self._pool)
+        self._last_auto_assign_block_ids = result.placed_block_ids
+        self.undo_auto_assign_button.setVisible(bool(result.placed_block_ids))
 
         message = f"{result.placed} ders otomatik olarak yerleştirildi."
-        if self._auto_assign_session_ids:
+        if result.placed_block_ids:
             message += "\n\nBeğenmezseniz 'Son Oto Atamayı Geri Al' ile tamamını havuza geri alabilirsiniz."
         if result.warnings:
-            message += "\n\nUyarı:\n- " + "\n- ".join(result.warnings)
-
-        # Sert kuralla (max_consecutive=2) hâlâ yerleşemeyen ders kaldıysa,
-        # bunun bir kısmı "bir günde en fazla 2 saat, bitişik" kuralından
-        # kaynaklanıyor olabilir - bazı günler daha uzun olup 2+1 gibi 3
-        # saate izin verilse yerleşebilir. Kullanıcıya bu kuralı SADECE bu
-        # tur için gevşetip tekrar denememizi isteyip istemediği sorulur -
-        # kesin imkansızlık (kapasite vb.) uyarıları zaten yukarıda gösterildi.
-        if used_max_consecutive <= 2 and remaining > 0:
-            if result.warnings:
-                QMessageBox.warning(self, "Oto Ata", message)
-            else:
-                QMessageBox.information(self, "Oto Ata", message)
-            retry = QMessageBox.question(
-                self, "Oto Ata",
-                f"{remaining} ders saati hâlâ havuzda kaldı. Bunun bir kısmı 'bir öğretmen bir sınıfa "
-                "günde en fazla 2 saat, bitişik' kuralından kaynaklanıyor olabilir.\n\n"
-                "Bazı günler daha uzun olabileceğinden, SADECE bu kalan dersler için kuralı gevşetip "
-                "(günde en fazla 3 saate kadar, ör. 2+1) tekrar denememi ister misiniz?",
+            message += (
+                "\n\nUyarı: Bazı dersler kalıcı olarak yerleştirildi ama başka haftalarda "
+                "öğretmenin müsait değil işaretiyle çelişiyor:\n- " + "\n- ".join(result.warnings)
             )
-            if retry == QMessageBox.Yes:
-                self.handle_auto_assign(max_consecutive=3)
-            return
-
-        if used_max_consecutive > 2:
-            if remaining > 0:
-                message += (
-                    f"\n\nKural gevşetildikten sonra bile {remaining} ders saati yerleşemedi - "
-                    "bu artık gerçekten müsaitlik/çakışma kaynaklı bir sınır olabilir."
-                )
-            else:
-                message += "\n\nKural gevşetilerek kalan dersler de yerleştirildi."
-
-        if result.warnings:
             QMessageBox.warning(self, "Oto Ata", message)
         else:
             QMessageBox.information(self, "Oto Ata", message)
@@ -1203,6 +1151,5 @@ class ScheduleTab(QWidget):
         for block_id in block_ids:
             scheduling.clear_block(self.db, self.navigator.week_start, block_id, scheduling.SCOPE_ALWAYS)
         self._last_auto_assign_block_ids = []
-        self._auto_assign_session_ids = []
         self.undo_auto_assign_button.setVisible(False)
         self.refresh()
