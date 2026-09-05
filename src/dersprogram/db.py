@@ -482,19 +482,6 @@ class Database:
         ids[idx], ids[new_idx] = ids[new_idx], ids[idx]
         self._resequence("teachers", ids)
 
-    def sort_teachers_by_name(self) -> None:
-        """Öğretmen listesini isme göre alfabetik sıraya sokar ve bu
-        sırayı kalıcı hale getirir (sonrasında yukarı/aşağı oklarıyla bu
-        yeni sıradan devam edilebilir)."""
-        rows = self.list_teachers()
-        ordered = sorted(rows, key=lambda r: r["name"].lower())
-        self._resequence("teachers", [r["id"] for r in ordered])
-
-    def sort_teachers_by_subject(self) -> None:
-        rows = self.list_teachers()
-        ordered = sorted(rows, key=lambda r: (r["subject_area"] or "").lower())
-        self._resequence("teachers", [r["id"] for r in ordered])
-
     def update_teacher(self, teacher_id: int, name: str, subject_area: str = "", note: str = "") -> None:
         self.conn.execute(
             "UPDATE teachers SET name=?, subject_area=?, note=? WHERE id=?",
@@ -585,13 +572,6 @@ class Database:
             return
         ids[idx], ids[new_idx] = ids[new_idx], ids[idx]
         self._resequence("students", ids)
-
-    def reorder_students(self, ordered_ids: list[int]) -> None:
-        """Öğrenci listesi ekranında bir sütun başlığına (Ad/Sınıf/Ünvan/
-        Koç) tıklanınca hesaplanan yeni sırayı kalıcı hale getirir -
-        Ünvan gibi hesaplanan (tek bir sütunda tutulmayan) alanlara göre
-        sıralama arayüz katmanında yapılır, burada sadece kaydedilir."""
-        self._resequence("students", ordered_ids)
 
     def update_student(
         self,

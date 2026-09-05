@@ -35,6 +35,11 @@ class StudentsTab(QWidget):
         self.selected_id: int | None = None
         self._pending_availability: dict[tuple[int, int], str | None] = {}
         self._all_rows: list = []
+        # None = "ana sıralama" (yukarı/aşağı oklarıyla elle belirlenen
+        # kalıcı sıra); "name"/"class"/"title"/"coach" = başlığa
+        # tıklanınca geçici alfabetik görünüm - aynı başlığa tekrar
+        # tıklayınca ana sıraya döner (bkz. _handle_header_clicked).
+        self._active_sort: str | None = None
 
         root_layout = QVBoxLayout(self)
 
@@ -141,7 +146,10 @@ class StudentsTab(QWidget):
         self.search_edit.textChanged.connect(self._apply_search_filter)
         right_layout.addWidget(self.search_edit)
 
-        sort_hint = QLabel("Başlıklara (Ad/Sınıf/Ünvan/Koç) tıklayarak o alana göre sıralayabilirsiniz.")
+        sort_hint = QLabel(
+            "Başlıklara (Ad/Sınıf/Ünvan/Koç) tıklayarak o alana göre sıralayabilirsiniz "
+            "(tekrar tıklayınca elle belirlediğiniz ana sıraya döner)."
+        )
         sort_hint.setWordWrap(True)
         right_layout.addWidget(sort_hint)
 
@@ -154,6 +162,7 @@ class StudentsTab(QWidget):
         header.setSectionResizeMode(5, QHeaderView.Fixed)
         self.table_widget.setColumnWidth(4, 30)
         self.table_widget.setColumnWidth(5, 30)
+        header.setSortIndicatorShown(False)
         header.sectionClicked.connect(self._handle_header_clicked)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -242,9 +251,26 @@ class StudentsTab(QWidget):
             old_widget.deleteLater()
         self.table_widget.setCellWidget(row, col, widget)
 
+    # Ünvan hesaplanan bir özet olduğu için ayrı bir sorgu gerekiyor,
+    # diğerleri doğrudan sütun - hepsi tek yerden erişilsin diye burada.
+    def _sort_key_fns(self) -> dict[str, "callable"]:
+        return {
+            "name": lambda r: r["name"].lower(),
+            "class": lambda r: (r["class_name"] or "").lower(),
+            "title": lambda r: self.db.student_titles_summary(r["id"]).lower(),
+            "coach": lambda r: (r["coach_name"] or "").lower(),
+        }
+
     def _populate_table(self, rows: list) -> None:
         is_filtered = bool(self.search_edit.text().strip())
-        filter_tip = "Sıralamayı değiştirmek için önce aramayı temizleyin." if is_filtered else ""
+        is_sorted = self._active_sort is not None
+        locked = is_filtered or is_sorted
+        if is_filtered:
+            tip = "Sıralamayı değiştirmek için önce aramayı temizleyin."
+        elif is_sorted:
+            tip = "Yeniden sıralamak için önce ana sıraya dönün (başlığa tekrar tıklayın)."
+        else:
+            tip = ""
         self.table_widget.setRowCount(len(rows))
         for r, row in enumerate(rows):
             item_name = QTableWidgetItem(row["name"])
@@ -257,11 +283,11 @@ class StudentsTab(QWidget):
             self.table_widget.setItem(r, 2, titles_item)
             self.table_widget.setItem(r, 3, QTableWidgetItem(row["coach_name"] or ""))
 
-            up_btn = self._move_button("up", enabled=not is_filtered and r > 0, tooltip=filter_tip)
+            up_btn = self._move_button("up", enabled=not locked and r > 0, tooltip=tip)
             up_btn.clicked.connect(lambda _checked=False, sid=row["id"]: self.handle_move(sid, -1))
             self._set_cell_widget(r, 4, up_btn)
 
-            down_btn = self._move_button("down", enabled=not is_filtered and r < len(rows) - 1, tooltip=filter_tip)
+            down_btn = self._move_button("down", enabled=not locked and r < len(rows) - 1, tooltip=tip)
             down_btn.clicked.connect(lambda _checked=False, sid=row["id"]: self.handle_move(sid, 1))
             self._set_cell_widget(r, 5, down_btn)
 
@@ -273,25 +299,26 @@ class StudentsTab(QWidget):
             self._select_row_by_id(selected)
 
     def _handle_header_clicked(self, column: int) -> None:
-        key_fns = {
-            0: lambda r: r["name"].lower(),
-            1: lambda r: (r["class_name"] or "").lower(),
-            2: lambda r: self.db.student_titles_summary(r["id"]).lower(),
-            3: lambda r: (r["coach_name"] or "").lower(),
-        }
-        key_fn = key_fns.get(column)
-        if key_fn is None:
+        target = {0: "name", 1: "class", 2: "title", 3: "coach"}.get(column)
+        if target is None:
             return
-        ordered_ids = [r["id"] for r in sorted(self._all_rows, key=key_fn)]
-        self.db.reorder_students(ordered_ids)
+        self._active_sort = None if self._active_sort == target else target
+        header = self.table_widget.horizontalHeader()
+        if self._active_sort is None:
+            header.setSortIndicatorShown(False)
+        else:
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(column, Qt.AscendingOrder)
         selected = self.selected_id
-        self.refresh()
+        self._apply_search_filter()
         if selected is not None:
             self._select_row_by_id(selected)
 
     def _apply_search_filter(self, text: str = "") -> None:
         query = self.search_edit.text().strip().lower()
         rows = self._all_rows if not query else [r for r in self._all_rows if query in r["name"].lower()]
+        if self._active_sort is not None:
+            rows = sorted(rows, key=self._sort_key_fns()[self._active_sort])
         self._populate_table(rows)
 
     def refresh(self) -> None:

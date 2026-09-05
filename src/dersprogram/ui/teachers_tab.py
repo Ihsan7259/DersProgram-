@@ -30,6 +30,11 @@ class TeachersTab(QWidget):
         self.on_change = on_change
         self.selected_id: int | None = None
         self._pending_availability: dict[tuple[int, int], str | None] = {}
+        # None = "ana sıralama" (yukarı/aşağı oklarıyla elle belirlenen
+        # kalıcı sıra); "name"/"subject" = başlığa tıklanınca geçici
+        # alfabetik görünüm - aynı başlığa tekrar tıklayınca ana sıraya
+        # döner (bkz. _handle_header_clicked).
+        self._active_sort: str | None = None
 
         root_layout = QVBoxLayout(self)
 
@@ -106,7 +111,10 @@ class TeachersTab(QWidget):
         list_header_row = QHBoxLayout()
         list_header_row.addWidget(_section_title("Öğretmen Listesi"))
         list_header_row.addStretch()
-        list_header_row.addWidget(QLabel("İsim ya da Branşlar başlığına tıklayarak alfabetik sıralayabilirsiniz."))
+        list_header_row.addWidget(QLabel(
+            "İsim ya da Branşlar başlığına tıklayarak alfabetik sıralayabilirsiniz "
+            "(tekrar tıklayınca elle belirlediğiniz ana sıraya döner)."
+        ))
         right_layout.addLayout(list_header_row)
 
         self.table_widget = QTableWidget(0, 4)
@@ -118,6 +126,7 @@ class TeachersTab(QWidget):
         header.setSectionResizeMode(3, QHeaderView.Fixed)
         self.table_widget.setColumnWidth(2, 30)
         self.table_widget.setColumnWidth(3, 30)
+        header.setSortIndicatorShown(False)
         header.sectionClicked.connect(self._handle_header_clicked)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -173,11 +182,13 @@ class TeachersTab(QWidget):
         return [sid for sid, cb in self.subject_checks.items() if cb.isChecked()]
 
     @staticmethod
-    def _move_button(icon_name: str, enabled: bool) -> QPushButton:
+    def _move_button(icon_name: str, enabled: bool, tooltip: str = "") -> QPushButton:
         btn = QPushButton()
         btn.setIcon(theme.icon(theme.NAV_ICONS[icon_name], theme.INK_MUTED_38, 11))
         btn.setFixedSize(24, 24)
         btn.setEnabled(enabled)
+        if tooltip:
+            btn.setToolTip(tooltip)
         btn.setStyleSheet(
             f"QPushButton {{ border:1px solid {theme.BORDER_INPUT}; border-radius:6px; background:{theme.SURFACE}; }}"
             f"QPushButton:hover {{ background:{theme.APP_BG}; }}"
@@ -195,6 +206,13 @@ class TeachersTab(QWidget):
 
     def refresh(self) -> None:
         rows = self.db.list_teachers()
+        if self._active_sort == "name":
+            rows = sorted(rows, key=lambda r: r["name"].lower())
+        elif self._active_sort == "subject":
+            rows = sorted(rows, key=lambda r: (r["subject_area"] or "").lower())
+        is_sorted = self._active_sort is not None
+        tip = "Yeniden sıralamak için önce ana sıraya dönün (başlığa tekrar tıklayın)." if is_sorted else ""
+
         self.table_widget.setRowCount(len(rows))
         for r, row in enumerate(rows):
             item_name = QTableWidgetItem(row["name"])
@@ -202,11 +220,11 @@ class TeachersTab(QWidget):
             self.table_widget.setItem(r, 0, item_name)
             self.table_widget.setItem(r, 1, QTableWidgetItem(row["subject_area"] or ""))
 
-            up_btn = self._move_button("up", enabled=r > 0)
+            up_btn = self._move_button("up", enabled=not is_sorted and r > 0, tooltip=tip)
             up_btn.clicked.connect(lambda _checked=False, tid=row["id"]: self.handle_move(tid, -1))
             self._set_cell_widget(r, 2, up_btn)
 
-            down_btn = self._move_button("down", enabled=r < len(rows) - 1)
+            down_btn = self._move_button("down", enabled=not is_sorted and r < len(rows) - 1, tooltip=tip)
             down_btn.clicked.connect(lambda _checked=False, tid=row["id"]: self.handle_move(tid, 1))
             self._set_cell_widget(r, 3, down_btn)
         current = set(self._selected_subject_ids())
@@ -221,12 +239,16 @@ class TeachersTab(QWidget):
             self._select_row_by_id(selected)
 
     def _handle_header_clicked(self, column: int) -> None:
-        if column == 0:
-            self.db.sort_teachers_by_name()
-        elif column == 1:
-            self.db.sort_teachers_by_subject()
-        else:
+        target = {0: "name", 1: "subject"}.get(column)
+        if target is None:
             return
+        self._active_sort = None if self._active_sort == target else target
+        header = self.table_widget.horizontalHeader()
+        if self._active_sort is None:
+            header.setSortIndicatorShown(False)
+        else:
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(column, Qt.AscendingOrder)
         selected = self.selected_id
         self.refresh()
         if selected is not None:
