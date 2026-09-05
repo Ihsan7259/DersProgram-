@@ -355,16 +355,47 @@ def get_teacher_availability(db: Database, teacher_id: int, week_start: _dt.date
     return result
 
 
+def _compute_unavailable_slots(
+    entity_ids: list[int],
+    templates_by_entity: dict[int, dict[tuple[int, int], str]],
+    exceptions_flat: dict[tuple[int, int, int], str],
+) -> set[tuple[int, int, int]]:
+    """get_all_unavailable_*_slots fonksiyonlarının ortak hesaplama
+    mantığı: her varlık için şablon + o haftaki istisnaları birleştirip
+    'müsait değil' olanları toplar.
+
+    Önceden her varlık için ayrı ayrı get_..._availability_exceptions(week)
+    çağrılıyordu - bu fonksiyon TÜM haftanın istisnalarını (zaten tek
+    sorguda gelen exceptions_flat) tek seferde varlık bazında gruplar,
+    böylece N varlık için veritabanına N kez gidilmesi gerekmez (bkz.
+    get_all_teacher_availability_templates/get_teacher_availability_exceptions
+    çağrıları - Ana Program'ı açarken 100 öğretmen/öğrenci/sınıf olduğunda
+    bu N+1 sorgu deseni asıl takılma sebeplerinden biriydi)."""
+    exceptions_by_entity: dict[int, dict[tuple[int, int], str]] = {}
+    for (entity_id, day, period), status in exceptions_flat.items():
+        exceptions_by_entity.setdefault(entity_id, {})[(day, period)] = status
+
+    slots: set[tuple[int, int, int]] = set()
+    for entity_id in entity_ids:
+        merged = dict(templates_by_entity.get(entity_id, {}))
+        for (day, period), status in exceptions_by_entity.get(entity_id, {}).items():
+            if status == "clear":
+                merged.pop((day, period), None)
+            else:
+                merged[(day, period)] = status
+        for (day, period), status in merged.items():
+            if status == "unavailable":
+                slots.add((entity_id, day, period))
+    return slots
+
+
 def get_all_unavailable_slots(db: Database, week_start: _dt.date) -> set[tuple[int, int, int]]:
     """Tüm öğretmenler için o hafta 'müsait değil' işaretli
     (teacher_id, day, period) üçlülerinin kümesi."""
-    slots: set[tuple[int, int, int]] = set()
-    for teacher in db.list_teachers():
-        avail = get_teacher_availability(db, teacher["id"], week_start)
-        for (day, period), status in avail.items():
-            if status == "unavailable":
-                slots.add((teacher["id"], day, period))
-    return slots
+    entity_ids = [row["id"] for row in db.list_teachers()]
+    templates = db.get_all_teacher_availability_templates()
+    exceptions = db.get_teacher_availability_exceptions(week_key(week_start))
+    return _compute_unavailable_slots(entity_ids, templates, exceptions)
 
 
 def set_teacher_availability(
@@ -391,13 +422,10 @@ def get_student_availability(db: Database, student_id: int, week_start: _dt.date
 
 
 def get_all_unavailable_student_slots(db: Database, week_start: _dt.date) -> set[tuple[int, int, int]]:
-    slots: set[tuple[int, int, int]] = set()
-    for student in db.list_students():
-        avail = get_student_availability(db, student["id"], week_start)
-        for (day, period), status in avail.items():
-            if status == "unavailable":
-                slots.add((student["id"], day, period))
-    return slots
+    entity_ids = [row["id"] for row in db.list_students()]
+    templates = db.get_all_student_availability_templates()
+    exceptions = db.get_student_availability_exceptions(week_key(week_start))
+    return _compute_unavailable_slots(entity_ids, templates, exceptions)
 
 
 def set_student_availability(
@@ -424,13 +452,10 @@ def get_class_availability(db: Database, class_group_id: int, week_start: _dt.da
 
 
 def get_all_unavailable_class_slots(db: Database, week_start: _dt.date) -> set[tuple[int, int, int]]:
-    slots: set[tuple[int, int, int]] = set()
-    for class_group in db.list_class_groups():
-        avail = get_class_availability(db, class_group["id"], week_start)
-        for (day, period), status in avail.items():
-            if status == "unavailable":
-                slots.add((class_group["id"], day, period))
-    return slots
+    entity_ids = [row["id"] for row in db.list_class_groups()]
+    templates = db.get_all_class_availability_templates()
+    exceptions = db.get_class_availability_exceptions(week_key(week_start))
+    return _compute_unavailable_slots(entity_ids, templates, exceptions)
 
 
 def set_class_availability(

@@ -11,8 +11,8 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag
+from PySide6.QtCore import Qt, QRect, QThread, Signal
+from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTableWidget,
+    QTableWidgetItem,
+    QStyledItemDelegate,
     QHeaderView,
     QListWidget,
     QListWidgetItem,
@@ -40,11 +42,81 @@ from . import theme
 
 MIME_PREFIX = "lesson-block:"
 
-VALID_STYLE = f"#cellFrame {{ border:2px dashed {theme.VALID_BORDER}; border-radius:0; background:{theme.VALID_BG}; }}"
-INVALID_STYLE = f"#cellFrame {{ border:2px solid {theme.CONFLICT_BORDER}; border-radius:0; background:{theme.CONFLICT_BG}; }}"
-
 MODE_CLASS = "class"
 MODE_TEACHER = "teacher"
+
+
+class _CellDelegate(QStyledItemDelegate):
+    """MainGrid'in her hücresini (sınıf/öğretmen × gün/saat) çizer.
+
+    Önceden her hücre için ayrı bir QWidget kuruluyordu (setCellWidget) -
+    büyük kurumlarda (çok sayıda sınıf/öğretmen × gün×saat) bu, binlerce
+    widget'ın her yenilemede sıfırdan oluşturulup silinmesi anlamına
+    geliyordu ve Ana Program'ı açarken/yenilerken gözle görülür bir
+    takılmaya yol açıyordu. Bunun yerine hücre verisi (payload: bkz.
+    ScheduleTab._render_grid) hafif bir QTableWidgetItem'da tutulur, bu
+    delegate ise sadece GÖRÜNEN hücreleri QPainter ile çizer - Qt'nin
+    item tabanlı tablo render mimarisi widget tabanlıdan çok daha hafiftir.
+    """
+
+    def paint(self, painter, option, index) -> None:
+        payload = index.data(Qt.UserRole)
+        if not payload:
+            super().paint(painter, option, index)
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        rect = option.rect
+
+        border_state = payload.get("border_state", "normal")
+        if border_state == "valid":
+            painter.fillRect(rect, QColor(theme.VALID_BG))
+        elif border_state == "invalid":
+            painter.fillRect(rect, QColor(theme.CONFLICT_BG))
+        else:
+            painter.fillRect(rect, QColor(payload.get("bg", theme.APP_BG)))
+
+        if border_state in ("valid", "invalid"):
+            pen = QPen(QColor(theme.VALID_BORDER if border_state == "valid" else theme.CONFLICT_BORDER))
+            pen.setWidth(2)
+            pen.setStyle(Qt.DashLine if border_state == "valid" else Qt.SolidLine)
+            painter.setPen(pen)
+            painter.drawRect(rect.adjusted(1, 1, -2, -2))
+
+        kind = payload.get("kind")
+        if kind == "unavailable":
+            font = QFont(painter.font())
+            font.setBold(True)
+            font.setPointSizeF(10)
+            painter.setFont(font)
+            painter.setPen(QColor(theme.CONFLICT_BORDER))
+            painter.drawText(rect, Qt.AlignCenter, "×")
+        elif kind == "chip":
+            line1 = payload.get("line1", "")
+            line2 = payload.get("line2", "")
+            inner = rect.adjusted(2, 1, -2, -1)
+            if line2:
+                top = QRect(inner.x(), inner.y(), inner.width(), inner.height() // 2)
+                bottom = QRect(inner.x(), inner.y() + inner.height() // 2, inner.width(), inner.height() - inner.height() // 2)
+            else:
+                top, bottom = inner, None
+
+            font1 = QFont(painter.font())
+            font1.setBold(True)
+            font1.setPointSizeF(6.9)
+            painter.setFont(font1)
+            painter.setPen(QColor(theme.LESSON_TYPE_TEXT))
+            elided1 = QFontMetrics(font1).elidedText(line1, Qt.ElideRight, top.width())
+            painter.drawText(top, Qt.AlignHCenter | (Qt.AlignBottom if bottom else Qt.AlignVCenter), elided1)
+
+            if bottom is not None:
+                font2 = QFont(painter.font())
+                font2.setPointSizeF(6.3)
+                painter.setFont(font2)
+                painter.setPen(QColor(theme.LESSON_TYPE_TEXT_MUTED))
+                elided2 = QFontMetrics(font2).elidedText(line2, Qt.ElideRight, bottom.width())
+                painter.drawText(bottom, Qt.AlignHCenter | Qt.AlignTop, elided2)
+        painter.restore()
 
 
 class PoolList(QListWidget):
@@ -113,7 +185,7 @@ def _group_pool_labels(rep_block, members: list) -> tuple[str, str]:
 
 
 def _pool_chip(rep_block, members: list) -> QWidget:
-    _bg, dot = theme.LESSON_TYPE_COLORS.get(rep_block.type, (theme.SURFACE, theme.INK_MUTED_58))
+    _bg, dot = theme.lesson_colors_for(rep_block)
     short_text, full_text = _group_pool_labels(rep_block, members)
     chip = QWidget()
     layout = QHBoxLayout(chip)
@@ -154,6 +226,7 @@ class MainGrid(QTableWidget):
         # yerine ızgaranın tek gridline'ı ile çiziliyor - çift kenarlıktan
         # doğan görünür boşluk kalmıyor, hücreler tam bitişik görünüyor.
         self.setShowGrid(True)
+        self.setItemDelegate(_CellDelegate(self))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         header = self.horizontalHeader()
         header.setObjectName("mainGridHHeader")
@@ -179,7 +252,7 @@ class MainGrid(QTableWidget):
         self._on_remove_request = on_remove_request
         self._period_time_label = period_time_label
         self._hover_cell = None
-        self._hover_original = ""
+        self._hover_original_state = "normal"
         self._row_entity_ids: list[int] = []
         self._day_names: list[str] = []
         self._day_count = 1
@@ -306,15 +379,18 @@ class MainGrid(QTableWidget):
             self._restore_hover()
             self._hover_cell = cell
             row, col = cell
-            widget = self.cellWidget(row, col)
-            if widget is not None:
-                self._hover_original = widget.styleSheet()
+            item = self.item(row, col)
+            if item is not None:
+                payload = dict(item.data(Qt.UserRole) or {})
+                self._hover_original_state = payload.get("border_state", "normal")
                 block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
                 block = self._get_block_by_id(block_id)
                 entity_id = self.row_to_entity(row)
                 day, period = self.col_to_day_period(col)
                 valid = block is not None and self._validate_drop(block, entity_id, day, period)
-                widget.setStyleSheet(VALID_STYLE if valid else INVALID_STYLE)
+                payload["border_state"] = "valid" if valid else "invalid"
+                item.setData(Qt.UserRole, payload)
+                self.viewport().update()
         event.acceptProposedAction()
 
     def dragLeaveEvent(self, event):
@@ -324,9 +400,12 @@ class MainGrid(QTableWidget):
     def _restore_hover(self) -> None:
         if self._hover_cell is not None:
             row, col = self._hover_cell
-            widget = self.cellWidget(row, col)
-            if widget is not None:
-                widget.setStyleSheet(self._hover_original)
+            item = self.item(row, col)
+            if item is not None:
+                payload = dict(item.data(Qt.UserRole) or {})
+                payload["border_state"] = self._hover_original_state
+                item.setData(Qt.UserRole, payload)
+                self.viewport().update()
         self._hover_cell = None
 
     def dropEvent(self, event):
@@ -442,7 +521,6 @@ class ScheduleTab(QWidget):
         self._row_entities: list[tuple[int, str]] = []
         self._unavailable = scheduling.UnavailableSlots()
         self._selected_row_entity_id: int | None = None
-        self._cell_normal_style: dict[tuple[int, int], str] = {}
         self._preview_highlighted: list[tuple[int, int]] = []
         self._preview_header_rows: list[int] = []
         self._last_auto_assign_block_ids: list[int] = []
@@ -685,8 +763,8 @@ class ScheduleTab(QWidget):
         """Havuzdan bir ders seçilince, sürüklemeden önce o dersin ait
         olduğu satırı vurgular: uygun hücreler yeşil, uygun olmayanlar
         kırmızı görünür (bkz. MainGrid.dragMoveEvent - aynı mantık).
-        Izgarayı baştan kurmadan, sadece ilgili hücrelerin stilini
-        değiştirir - büyük programlarda her seçimde yüzlerce widget'ı
+        Izgarayı baştan kurmadan, sadece ilgili hücrelerin durumunu
+        değiştirir - büyük programlarda her seçimde yüzlerce hücreyi
         yeniden oluşturmak takılmalara yol açıyordu (bkz. _clear_row_preview)."""
         for row_index, (entity_id, _name) in enumerate(self._row_entities):
             if not self._row_matches_block(block, entity_id):
@@ -696,27 +774,33 @@ class ScheduleTab(QWidget):
                 header_item.setBackground(QColor(theme.ACCENT_SOFT_BG))
                 self._preview_header_rows.append(row_index)
             for col in range(self.grid.columnCount()):
-                widget = self.grid.cellWidget(row_index, col)
-                if widget is None:
+                item = self.grid.item(row_index, col)
+                if item is None:
                     continue
                 day, period = self.grid.col_to_day_period(col)
                 valid = self._validate_drop(block, entity_id, day, period)
-                widget.setStyleSheet(VALID_STYLE if valid else INVALID_STYLE)
+                payload = dict(item.data(Qt.UserRole) or {})
+                payload["border_state"] = "valid" if valid else "invalid"
+                item.setData(Qt.UserRole, payload)
                 self._preview_highlighted.append((row_index, col))
+        self.grid.viewport().update()
 
     def _clear_row_preview(self) -> None:
         """_apply_row_preview ile boyanan hücreleri/satır başlığını,
         ızgarayı yeniden kurmadan gerçek (normal) görünümüne döndürür."""
         for row_index, col in self._preview_highlighted:
-            widget = self.grid.cellWidget(row_index, col)
-            if widget is not None:
-                widget.setStyleSheet(self._cell_normal_style.get((row_index, col), ""))
+            item = self.grid.item(row_index, col)
+            if item is not None:
+                payload = dict(item.data(Qt.UserRole) or {})
+                payload["border_state"] = "normal"
+                item.setData(Qt.UserRole, payload)
         self._preview_highlighted = []
         for row_index in self._preview_header_rows:
             header_item = self.grid.verticalHeaderItem(row_index)
             if header_item is not None:
                 header_item.setBackground(QBrush())
         self._preview_header_rows = []
+        self.grid.viewport().update()
 
     def _update_hint(self) -> None:
         if self.mode == MODE_CLASS:
@@ -773,11 +857,10 @@ class ScheduleTab(QWidget):
         self.grid.setVerticalHeaderLabels([name for _id, name in self._row_entities])
 
         # Havuzdan seçilen bir dersin önizleme vurgusu (bkz. _apply_row_preview)
-        # bu widget'ları geçici olarak boyar; ızgara sıfırdan kurulduğunda o
+        # bu hücreleri geçici olarak boyar; ızgara sıfırdan kurulduğunda o
         # vurgu artık geçersiz - takip listesini de sıfırlıyoruz.
         self._preview_highlighted = []
         self._preview_header_rows = []
-        self._cell_normal_style = {}
 
         for row, (entity_id, _name) in enumerate(self._row_entities):
             self.grid.setRowHeight(row, self.grid.row_height())
@@ -787,35 +870,29 @@ class ScheduleTab(QWidget):
                     blocks = self._cell_blocks(entity_id, day, period)
                     if not blocks:
                         if self.mode == MODE_TEACHER and (entity_id, day, period) in self._unavailable.teacher:
-                            widget = theme.make_dense_unavailable()
+                            payload = {"kind": "unavailable", "bg": theme.CONFLICT_BG}
+                            tooltip = "Öğretmen bu saatte müsait değil olarak işaretlenmiş"
                         elif self.mode == MODE_CLASS and (entity_id, day, period) in self._unavailable.class_:
-                            widget = theme.make_dense_unavailable()
+                            payload = {"kind": "unavailable", "bg": theme.CONFLICT_BG}
+                            tooltip = "Sınıf bu saatte müsait değil olarak işaretlenmiş"
                         else:
-                            widget = theme.make_dense_empty()
-                    elif len(blocks) == 1:
-                        line1, line2 = blocks[0].dense_lines(self.mode)
-                        bg, _dot = theme.lesson_colors_for(blocks[0], tinted=self.mode == MODE_TEACHER)
-                        widget = theme.make_dense_chip(line1, line2, bg)
+                            payload = {"kind": "empty", "bg": theme.APP_BG}
+                            tooltip = ""
                     else:
                         line1, line2 = blocks[0].dense_lines(self.mode)
                         bg, _dot = theme.lesson_colors_for(blocks[0], tinted=self.mode == MODE_TEACHER)
-                        widget = theme.make_dense_chip(f"{line1} (+{len(blocks) - 1})", line2, bg)
-                    self._set_cell_widget(row, col, widget)
-                    self._cell_normal_style[(row, col)] = widget.styleSheet()
+                        if len(blocks) > 1:
+                            line1 = f"{line1} (+{len(blocks) - 1})"
+                        payload = {"kind": "chip", "bg": bg, "line1": line1, "line2": line2}
+                        tooltip = f"{line1}\n{line2}" if line2 else line1
+                    payload["border_state"] = "normal"
 
-    def _set_cell_widget(self, row: int, col: int, widget) -> None:
-        """QTableWidget.setCellWidget() eskisini yerine yenisini koyduğunda
-        önceki widget'ı SİLMEZ - üst-alt ilişkisi kalır, sadece görünmez
-        kalır. Ana Program her yenilendiğinde (ders taşıma/kaldırma, hafta
-        değiştirme, yakınlaştırma...) yüzlerce hücre widget'ı böyle
-        birikince program zamanla yavaşlıyor/takılıyordu; eskisini elle
-        koparıp silerek bu sızıntıyı önlüyoruz."""
-        old_widget = self.grid.cellWidget(row, col)
-        if old_widget is not None:
-            self.grid.removeCellWidget(row, col)
-            old_widget.setParent(None)
-            old_widget.deleteLater()
-        self.grid.setCellWidget(row, col, widget)
+                    item = self.grid.item(row, col)
+                    if item is None:
+                        item = QTableWidgetItem()
+                        self.grid.setItem(row, col, item)
+                    item.setData(Qt.UserRole, payload)
+                    item.setToolTip(tooltip)
 
     def _render_pool(self) -> None:
         self.pool_list.clear()

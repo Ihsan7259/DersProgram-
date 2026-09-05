@@ -248,11 +248,34 @@ def _tone_shift(hex_color: str, amount: int) -> str:
     return QColor.fromHsl(h, s, l, a).name()
 
 
+# Sınıf dersi / birebir / soru çözümü kartlarında artık DERSİN KENDİSİ
+# (branş) renk belirliyor - "Matematik" mavi, "Kimya" yeşil, "Türkçe" pembe
+# gibi - aynı ders tipindeki (ör. hepsi "sınıf dersi") kartlar birbirinden
+# ayırt edilebilsin diye. Koçluk ve zümre gibi branşsız/tek amaçlı
+# derslerde eski tip-bazlı renk (amber/yeşil) korunuyor. Sabit bir renk
+# çemberinden (hue) eşit aralıklarla seçilir - subject_id'ye göre
+# deterministik olduğundan aynı ders her zaman aynı renkte kalır.
+_SUBJECT_APPLICABLE_TYPES = {TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_PROBLEM_SOLVING}
+_SUBJECT_HUES = [210, 20, 140, 280, 45, 165, 320, 0, 190, 100, 260, 340, 60, 230]
+
+
+def _subject_colors(subject_id: int) -> tuple[str, str]:
+    hue = _SUBJECT_HUES[subject_id % len(_SUBJECT_HUES)]
+    bg = QColor.fromHsl(hue, 190, 228).name()
+    dot = QColor.fromHsl(hue, 200, 100).name()
+    return bg, dot
+
+
 def lesson_colors_for(block, tinted: bool = False) -> tuple[str, str]:
-    """Ders tipine göre (arkaplan, nokta) rengi döner; tinted=True ise
-    (öğretmen görünümünde) sınıf/öğrenciye göre küçük bir ton farkı
-    eklenir - renk hâlâ dersin tipini gösterir, sadece tonu değişir."""
-    bg, dot = LESSON_TYPE_COLORS.get(block.type, (SURFACE, INK_MUTED_58))
+    """(Arkaplan, nokta) rengi döner - branşı olan ders tiplerinde
+    (sınıf/birebir/soru çözümü) dersin kendisine (subject_id) göre, yoksa
+    (koçluk/zümre) ders tipine göre. tinted=True ise (öğretmen
+    görünümünde) sınıf/öğrenciye göre küçük bir ton farkı eklenir - renk
+    ailesi korunur, sadece tonu değişir."""
+    if block.type in _SUBJECT_APPLICABLE_TYPES and block.subject_id is not None:
+        bg, dot = _subject_colors(block.subject_id)
+    else:
+        bg, dot = LESSON_TYPE_COLORS.get(block.type, (SURFACE, INK_MUTED_58))
     if not tinted:
         return bg, dot
     key = block.class_group_id or block.student_id or block.subject_id or 0

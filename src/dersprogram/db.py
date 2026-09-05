@@ -837,6 +837,17 @@ class Database:
         ).fetchall()
         return {(row["day"], row["period"]): row["status"] for row in rows}
 
+    def _get_all_availability_templates(self, table: str, id_column: str) -> dict[int, dict[tuple[int, int], str]]:
+        """_get_availability_template'in TÜM varlıklar için tek sorguda
+        çalışan hali - ör. Ana Program'ı açarken 100 öğretmenin her biri
+        için ayrı ayrı sorgu atmak yerine (bkz. scheduling.get_all_
+        unavailable_slots) tek seferde çekip öğretmen bazında gruplar."""
+        rows = self.conn.execute(f"SELECT {id_column} AS eid, day, period, status FROM {table}").fetchall()
+        result: dict[int, dict[tuple[int, int], str]] = {}
+        for row in rows:
+            result.setdefault(row["eid"], {})[(row["day"], row["period"])] = row["status"]
+        return result
+
     def _set_availability_template(self, table: str, id_column: str, entity_id: int, day: int, period: int, status: str | None) -> None:
         if status is None:
             self.conn.execute(
@@ -883,6 +894,9 @@ class Database:
     def get_teacher_availability_template(self, teacher_id: int) -> dict[tuple[int, int], str]:
         return self._get_availability_template("teacher_availability", "teacher_id", teacher_id)
 
+    def get_all_teacher_availability_templates(self) -> dict[int, dict[tuple[int, int], str]]:
+        return self._get_all_availability_templates("teacher_availability", "teacher_id")
+
     def set_teacher_availability_template(self, teacher_id: int, day: int, period: int, status: str | None) -> None:
         self._set_availability_template("teacher_availability", "teacher_id", teacher_id, day, period, status)
 
@@ -914,6 +928,9 @@ class Database:
     def get_student_availability_template(self, student_id: int) -> dict[tuple[int, int], str]:
         return self._get_availability_template("student_availability", "student_id", student_id)
 
+    def get_all_student_availability_templates(self) -> dict[int, dict[tuple[int, int], str]]:
+        return self._get_all_availability_templates("student_availability", "student_id")
+
     def set_student_availability_template(self, student_id: int, day: int, period: int, status: str | None) -> None:
         self._set_availability_template("student_availability", "student_id", student_id, day, period, status)
 
@@ -929,6 +946,9 @@ class Database:
     # ---------- sınıf müsaitliği ----------
     def get_class_availability_template(self, class_group_id: int) -> dict[tuple[int, int], str]:
         return self._get_availability_template("class_availability", "class_group_id", class_group_id)
+
+    def get_all_class_availability_templates(self) -> dict[int, dict[tuple[int, int], str]]:
+        return self._get_all_availability_templates("class_availability", "class_group_id")
 
     def set_class_availability_template(self, class_group_id: int, day: int, period: int, status: str | None) -> None:
         self._set_availability_template("class_availability", "class_group_id", class_group_id, day, period, status)
