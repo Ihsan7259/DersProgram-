@@ -742,7 +742,7 @@ def auto_assign(
     # Şimdi hem günlük toplam hem de bitişiklik ayrı ayrı ve kesin olarak
     # zorunlu kılınıyor.
     if max_consecutive > 0:
-        for group_key, uis in group_units.items():
+        for gi, (group_key, uis) in enumerate(group_units.items()):
             fixed_days = fixed_periods_by_group.get(group_key, {})
             if len(uis) <= 1 and not fixed_days:
                 continue
@@ -762,20 +762,41 @@ def auto_assign(
                 if day_terms:
                     model.Add(sum(day_terms) <= max(0, max_consecutive - len(fixed_set)))
 
-                # (2) kullanılan saatler bitişik olmalı: aralarında boşluk
-                # olan (ardışık olmayan) herhangi iki saat birlikte
-                # DOLU olamaz.
+                # (2) kullanılan saatler TEK bir bitişik blok oluşturmalı -
+                # yani en fazla bir "blok başlangıcı" olabilir (bir saat,
+                # kendisi dolu ama bir önceki saat boşsa yeni bir blok
+                # başlatır). Sabit (zaten yerleşmiş) bir blokla ZİNCİRLENEN
+                # yeni bir saat (ör. sabit 1-2. saat + yeni 3. saat) doğru
+                # şekilde TEK blok sayılır - eski (basit ikili) kontrol bunu
+                # yanlışlıkla iki ayrı blokmuş gibi görüp reddediyordu.
+                def occ_expr(p, _var_by_period=var_by_period, _fixed_set=fixed_set):
+                    terms = _var_by_period.get(p, [])
+                    const = 1 if p in _fixed_set else 0
+                    if terms:
+                        return const + sum(terms) if const else sum(terms)
+                    return const
+
                 sorted_periods = sorted(candidate_periods)
-                for i in range(len(sorted_periods)):
-                    for j in range(i + 1, len(sorted_periods)):
-                        p, q = sorted_periods[i], sorted_periods[j]
-                        if q - p < 2:
-                            continue
-                        terms = list(var_by_period.get(p, [])) + list(var_by_period.get(q, []))
-                        fixed_count = (1 if p in fixed_set else 0) + (1 if q in fixed_set else 0)
-                        if not terms:
-                            continue
-                        model.Add(sum(terms) <= max(0, 1 - fixed_count))
+                start_terms = []  # BoolVar ya da sabit 0/1 (int) karışık olabilir
+                for p in sorted_periods:
+                    occ_p = occ_expr(p)
+                    occ_prev = occ_expr(p - 1) if (p - 1) in candidate_periods else 0
+                    if isinstance(occ_p, int) and isinstance(occ_prev, int):
+                        start_terms.append(1 if (occ_p - occ_prev) > 0 else 0)
+                        continue
+                    start = model.NewBoolVar(f"blockstart_{gi}_{d}_{p}")
+                    model.Add(start >= occ_p - occ_prev)
+                    start_terms.append(start)
+
+                fixed_extra = sum(t for t in start_terms if isinstance(t, int))
+                var_terms = [t for t in start_terms if not isinstance(t, int)]
+                if var_terms:
+                    model.Add(sum(var_terms) <= max(0, 1 - fixed_extra))
+                # fixed_extra > 1 (var_terms boşken de) ise, bu günün sabit
+                # verisi zaten birden fazla ayrı blok içeriyor demektir (ör.
+                # elle yapılmış önceki bir yerleştirme) - çözücünün bunu
+                # düzeltebileceği bir karar yok, yeni bir kısıt eklemeye
+                # gerek yok.
 
     # ---------- hafif tercih: aynı ihtiyaçtan gelen dersleri günlere yay ----------
     # Zorunlu değil (yerleştirme sayısını asla düşürmez, sadece eşit
