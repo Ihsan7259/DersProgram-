@@ -633,17 +633,23 @@ def auto_assign(
                 continue
             fixed_periods_by_group.setdefault(b.group_key(), {}).setdefault(b.day, set()).add(b.period)
 
-    # ---------- sert kısıt: bir günde art arda en fazla `max_consecutive` saat ----------
-    # Her `max_consecutive + 1` uzunluğundaki ardışık saat penceresinde bu
-    # gruptan en fazla `max_consecutive` tanesi seçilebilir - bu, 3 (ya da
-    # kaç ayarlanmışsa) saatin üst üste gelmesini KESİN olarak engeller,
-    # ama HANGİ saatlerin seçileceğini serbest bırakır (çözücü en uygununu
-    # bulur, ör. 2+2+1 ya da 2+1+2 gibi farklı dağılımlar da olabilir).
+    # ---------- sert kısıt: bir günde en fazla `max_consecutive` saat, VE bitişik ----------
+    # Aynı ihtiyaçtan (ör. "9-A Matematik, Hasan Bingöl") gelen dersler bir
+    # günde en fazla `max_consecutive` (varsayılan 2) saat olabilir VE bu
+    # saatler MUTLAKA bitişik olmalı - aynı öğretmen aynı sınıfa aynı gün
+    # içinde iki AYRI girişte bulunamaz (ör. 1-2. saat + tekrar 5. saat
+    # gibi bölünmüş bir yerleşim artık kesinlikle oluşmaz).
+    #
+    # Not: eski sürüm sadece `max_consecutive + 1` uzunluğundaki kayan
+    # pencerelerde "üst üste en fazla N" diye bakıyordu - bu, GÜN İÇİNDE
+    # TOPLAM sayıyı sınırlamıyordu (ör. 1-2. saat + 5. saat, hiçbir 3'lü
+    # pencerenin içine birlikte düşmediği için sorunsuz sayılıyordu).
+    # Şimdi hem günlük toplam hem de bitişiklik ayrı ayrı ve kesin olarak
+    # zorunlu kılınıyor.
     if max_consecutive > 0:
-        window_size = max_consecutive + 1
         for group_key, uis in group_units.items():
             fixed_days = fixed_periods_by_group.get(group_key, {})
-            if len(uis) <= max_consecutive and not fixed_days:
+            if len(uis) <= 1 and not fixed_days:
                 continue
             for d in range(day_count):
                 fixed_set = fixed_days.get(d, set())
@@ -652,14 +658,29 @@ def auto_assign(
                     for (dd, p) in domains[ui]:
                         if dd == d:
                             var_by_period.setdefault(p, []).append(x[(ui, dd, p)])
-                if not var_by_period and not fixed_set:
+                candidate_periods = set(fixed_set) | set(var_by_period.keys())
+                if not candidate_periods:
                     continue
-                for start in range(1, period_count - window_size + 2):
-                    window_periods = range(start, start + window_size)
-                    window_vars = [v for p in window_periods for v in var_by_period.get(p, [])]
-                    fixed_in_window = sum(1 for p in window_periods if p in fixed_set)
-                    if window_vars:
-                        model.Add(sum(window_vars) <= max(0, max_consecutive - fixed_in_window))
+
+                # (1) o gün bu gruptan toplam en fazla max_consecutive saat.
+                day_terms = [v for p in candidate_periods for v in var_by_period.get(p, [])]
+                if day_terms:
+                    model.Add(sum(day_terms) <= max(0, max_consecutive - len(fixed_set)))
+
+                # (2) kullanılan saatler bitişik olmalı: aralarında boşluk
+                # olan (ardışık olmayan) herhangi iki saat birlikte
+                # DOLU olamaz.
+                sorted_periods = sorted(candidate_periods)
+                for i in range(len(sorted_periods)):
+                    for j in range(i + 1, len(sorted_periods)):
+                        p, q = sorted_periods[i], sorted_periods[j]
+                        if q - p < 2:
+                            continue
+                        terms = list(var_by_period.get(p, [])) + list(var_by_period.get(q, []))
+                        fixed_count = (1 if p in fixed_set else 0) + (1 if q in fixed_set else 0)
+                        if not terms:
+                            continue
+                        model.Add(sum(terms) <= max(0, 1 - fixed_count))
 
     # ---------- hafif tercih: aynı ihtiyaçtan gelen dersleri günlere yay ----------
     # Zorunlu değil (yerleştirme sayısını asla düşürmez, sadece eşit
