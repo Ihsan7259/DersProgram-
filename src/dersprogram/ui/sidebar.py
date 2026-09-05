@@ -24,6 +24,7 @@ NAV_ITEMS = [
 
 class Sidebar(QWidget):
     page_selected = Signal(str)
+    switch_institution_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -80,6 +81,24 @@ class Sidebar(QWidget):
 
         layout.addStretch()
 
+        self.institution_button = QPushButton(" Kurum")
+        self.institution_button.setIcon(theme.icon(theme.NAV_ICONS["derslikler"], theme.SIDEBAR_TEXT_MUTED))
+        self.institution_button.setCursor(Qt.PointingHandCursor)
+        self.institution_button.setFixedHeight(34)
+        self.institution_button.setToolTip("Başka bir kuruma geç ya da yeni kurum ekle")
+        self.institution_button.setStyleSheet(
+            f"QPushButton {{ text-align:left; border:1px solid {theme.SIDEBAR_BORDER}; border-radius:8px; "
+            f"background:transparent; color:{theme.SIDEBAR_TEXT_MUTED}; font-size:8.3pt; font-weight:600; padding:0 10px; }}"
+            f"QPushButton:hover {{ background:#182231; color:{theme.SIDEBAR_TEXT_ACTIVE}; }}"
+        )
+        self.institution_button.clicked.connect(self.switch_institution_requested.emit)
+        layout.addWidget(self.institution_button)
+
+        divider2 = QFrame()
+        divider2.setFrameShape(QFrame.VLine)
+        divider2.setStyleSheet(f"color:{theme.SIDEBAR_BORDER};")
+        layout.addWidget(divider2)
+
         avatar = QLabel("SY")
         avatar.setFixedSize(28, 28)
         avatar.setAlignment(Qt.AlignCenter)
@@ -99,6 +118,9 @@ class Sidebar(QWidget):
         layout.addLayout(footer_text)
 
         self.set_active("ana-program")
+
+    def set_institution_name(self, name: str) -> None:
+        self.institution_button.setText(f" {name}")
 
     def _select(self, item_id: str) -> None:
         self.set_active(item_id)

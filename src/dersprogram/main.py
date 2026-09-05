@@ -8,8 +8,8 @@ from pathlib import Path
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from .db import Database
-from . import seed
+from .db import Database, default_db_path
+from . import institutions, seed
 from .ui import theme
 from .ui.main_window import MainWindow
 
@@ -52,8 +52,13 @@ def main() -> int:
     theme.load_fonts()
     app.setFont(QFont(theme.FONT_BODY))
 
-    db = Database()
-    if seed.is_empty(db):
+    active_institution = institutions.get_active_institution()
+    db = Database(institutions.institution_db_path(active_institution))
+    # Örnek veri, sadece hiç kurum ayrımı yokken kullanılan asıl (varsayılan)
+    # kurum ilk kez boşken eklenir - sonradan eklenen yeni kurumlar bomboş
+    # başlar, kullanıcıyı yanıltacak hazır veriyle karışmaz.
+    is_default_institution = active_institution["file"] == default_db_path().name
+    if is_default_institution and seed.is_empty(db):
         seed.seed_demo_data(db)
 
     # Fusion stili + kendi paletimiz: Windows'un açık/koyu sistem temasından
@@ -65,7 +70,7 @@ def main() -> int:
     app.setStyle("Fusion")
     app.setPalette(theme.build_palette(mode))
 
-    window = MainWindow(db)
+    window = MainWindow(db, institution_entry=active_institution)
     window.show()
 
     exit_code = app.exec()
