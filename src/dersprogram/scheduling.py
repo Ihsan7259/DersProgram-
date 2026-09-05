@@ -475,11 +475,60 @@ class AutoAssignResult:
     placed_block_ids: list[int] = field(default_factory=list)
 
 
+def _teacher_capacity_warnings(
+    db: Database,
+    pool: list[BlockView],
+    schedule: dict[tuple[int, int], list[BlockView]],
+    unavailable: "UnavailableSlots",
+    day_count: int,
+    period_count: int,
+) -> list[str]:
+    """Oto ata çalışmadan ÖNCE, en bariz imkansızlık türünü (bir
+    öğretmenin haftalık boş kapasitesinden fazla ders istenmesi) ucuz bir
+    sayımla tespit eder - ör. 'Ahmet Yılmaz: 8 saat boş kapasitesi var ama
+    10 saat ders bekliyor'. Bu, tek başına diğer kısıtları (sınıf/derslik/
+    öğrenci çakışmaları, art arda/bitişiklik kuralı) hesaba katmaz - o
+    yüzden daha ince imkansızlıklar (bkz. _shortfall_warnings) çözücünün
+    kendisinden gelir; burası sadece en açık/erken uyarıyı verir."""
+    demand_by_teacher: dict[int, int] = {}
+    for b in pool:
+        if b.teacher_id is not None:
+            demand_by_teacher[b.teacher_id] = demand_by_teacher.get(b.teacher_id, 0) + 1
+    if not demand_by_teacher:
+        return []
+
+    total_slots = day_count * period_count
+    occupied_by_teacher: dict[int, int] = {}
+    for blocks in schedule.values():
+        for b in blocks:
+            if b.teacher_id is not None:
+                occupied_by_teacher[b.teacher_id] = occupied_by_teacher.get(b.teacher_id, 0) + 1
+    unavailable_by_teacher: dict[int, int] = {}
+    for (tid, _d, _p) in unavailable.teacher:
+        unavailable_by_teacher[tid] = unavailable_by_teacher.get(tid, 0) + 1
+
+    teacher_names = {t["id"]: t["name"] for t in db.list_teachers()}
+    warnings: list[str] = []
+    for tid, demand in demand_by_teacher.items():
+        occupied = occupied_by_teacher.get(tid, 0)
+        blocked = unavailable_by_teacher.get(tid, 0)
+        capacity = max(0, total_slots - occupied - blocked)
+        if demand > capacity:
+            name = teacher_names.get(tid, f"Öğretmen #{tid}")
+            warnings.append(
+                f"{name}: bu hafta {capacity} saat boş kapasitesi var ama havuzda {demand} saat ders "
+                f"bekliyor ({demand - capacity} saat matematiksel olarak sığmaz) - müsaitliğini gözden "
+                "geçirin ya da bu derslerin bir kısmını başka bir öğretmene aktarın."
+            )
+    return warnings
+
+
 def auto_assign(
     db: Database,
     week_start: _dt.date,
     max_consecutive: int = 2,
-    time_limit_seconds: float = 20.0,
+    time_limit_seconds: float = 120.0,
+    quality_time_limit_seconds: float = 180.0,
     progress_callback=None,
 ) -> AutoAssignResult:
     """Atanmamış dersleri (havuzu) bir kısıt çözücü (Google OR-Tools CP-SAT)
@@ -509,6 +558,19 @@ def auto_assign(
     için o saati özellikle 'müsait değil' işaretlemişse, kalıcı
     yerleştirme o haftayla çelişebilir; bu durumlar uyarı olarak
     döndürülür ki kullanıcı isterse o haftaları elle kontrol etsin.
+
+    Atanmamış ders bırakmak yerine ("hız için" bir dersi havuzda bırakmak)
+    ARAMA İKİ AŞAMADA yapılır: önce (time_limit_seconds bütçesiyle) SADECE
+    kaç dersin yerleşebileceği maksimize edilir - bu daha basit bir hedef
+    olduğu için genelde optimal'e (kanıtlanmış en iyi sonuca) hızlı ulaşır.
+    Eğer bu aşama optimal'i KANITLAYIP hâlâ bazı dersleri yerleştiremiyorsa,
+    bu gerçekten matematiksel bir imkansızlıktır (ör. bir öğretmenin
+    müsaitliği/çakışmaları o kadar saati kaldıramıyor) ve ayrıntılı bir
+    uyarı olarak döndürülür - "hız yetmedi" ile "gerçekten imkansız"
+    birbirine karıştırılmaz. İkinci aşamada (quality_time_limit_seconds
+    bütçesiyle) yerleştirme sayısı asla düşürülmeden (sert bir alt sınır
+    olarak sabitlenir) kalan süre blok bütünlüğü/çeşitlilik/gün yayma
+    tercihlerini iyileştirmek için kullanılır.
 
     `progress_callback`, verilirse `(yüzde: int, mesaj: str)` ile art arda
     çağrılır (ör. bir ilerleme diyaloğunu güncellemek için) - uzun süren
@@ -548,6 +610,11 @@ def auto_assign(
     if not pool:
         report(100, "Atanmamış ders yok.")
         return AutoAssignResult(placed=0, warnings=warnings)
+
+    # En bariz imkansızlığı (bir öğretmenin haftalık boş kapasitesinden
+    # fazla ders istenmesi) çözücüyü hiç çalıştırmadan tespit et - bkz.
+    # _teacher_capacity_warnings docstring'i.
+    warnings.extend(_teacher_capacity_warnings(db, pool, schedule, unavailable, day_count, period_count))
 
     report(5, f"{len(pool)} ders saati için uygun yerler hesaplanıyor...")
 
@@ -641,9 +708,12 @@ def auto_assign(
     # tek bir grup sayılır - hem "art arda en fazla N saat" sert kısıtı hem
     # de aşağıdaki gün-yayma tercihi bu gruplamaya göre çalışır.
     group_units: dict[tuple, list[int]] = {}
+    group_representative: dict[tuple, BlockView] = {}
     for ui, unit in enumerate(units):
         if len(unit) == 1 and unit[0].type != TYPE_DEPARTMENT:
-            group_units.setdefault(unit[0].group_key(), []).append(ui)
+            key = unit[0].group_key()
+            group_units.setdefault(key, []).append(ui)
+            group_representative.setdefault(key, unit[0])
 
     # Zaten yerleşmiş (elle ya da önceki bir oto-atamadan kalma) bloklardan
     # aynı gruptan olanların gün/saatleri - aşağıdaki "art arda en fazla N
@@ -782,52 +852,102 @@ def auto_assign(
                             diversity_penalty_terms.append(penalty)
 
     placed_terms = list(x.values())
-    # Yerleştirilen ders sayısı her zaman diğer tüm tercihlerden ağır
-    # basar - "daha iyi dağılsın/bloklansın diye bir dersi havuzda bırak"
-    # asla olmaz. Blok bütünlüğü (adjacency), ders çeşitliliğinden
-    # (diversity), o da gün yaymadan (spread) daha öncelikli tercih.
+    # Blok bütünlüğü (adjacency), ders çeşitliliğinden (diversity), o da
+    # gün yaymadan (spread) daha öncelikli tercih - ama YERLEŞTİRME SAYISI
+    # bunların hepsinden önce gelir; bu artık tek bir ağırlıklı toplamla
+    # "umulur" değil, aşağıdaki 1. aşamada SERT bir alt sınır olarak
+    # garanti edilir (bkz. fonksiyon docstring'i).
     ADJACENCY_WEIGHT = 4
     DIVERSITY_WEIGHT = 2
     SPREAD_WEIGHT = 1
-    place_weight = (
-        ADJACENCY_WEIGHT * len(adjacency_bonus_terms)
-        + DIVERSITY_WEIGHT * len(diversity_penalty_terms)
-        + SPREAD_WEIGHT * len(spread_bonus_terms)
-        + 1
-    )
-    model.Maximize(
-        cp_model.LinearExpr.WeightedSum(
-            placed_terms + adjacency_bonus_terms + spread_bonus_terms + diversity_penalty_terms,
-            [place_weight] * len(placed_terms)
-            + [ADJACENCY_WEIGHT] * len(adjacency_bonus_terms)
-            + [SPREAD_WEIGHT] * len(spread_bonus_terms)
-            + [-DIVERSITY_WEIGHT] * len(diversity_penalty_terms),
-        )
-    )
-
-    report(15, f"En uygun program aranıyor ({len(units)} ders saati için)...")
 
     class _ProgressReporter(cp_model.CpSolverSolutionCallback):
         """CP-SAT her iyileştirilmiş çözüm bulduğunda (aramanın süresi
         boyunca birkaç kez) tetiklenir - o ana kadar kaç dersin
         yerleştiği bilgisini ilerleme çubuğuna yansıtmak için."""
 
-        def __init__(self, placed_vars, total_units, time_limit):
+        def __init__(self, placed_vars, total_units, time_limit, pct_start, pct_span, label):
             super().__init__()
             self._placed_vars = placed_vars
             self._total_units = total_units
             self._time_limit = time_limit
+            self._pct_start = pct_start
+            self._pct_span = pct_span
+            self._label = label
 
         def on_solution_callback(self) -> None:
             placed_now = sum(1 for v in self._placed_vars if self.Value(v))
-            pct = 15 + int(80 * min(1.0, self.WallTime() / max(self._time_limit, 0.1)))
-            report(pct, f"En uygun program aranıyor... (şu an {placed_now}/{self._total_units} ders yerleşti)")
+            pct = self._pct_start + int(self._pct_span * min(1.0, self.WallTime() / max(self._time_limit, 0.1)))
+            report(pct, f"{self._label} (şu an {placed_now}/{self._total_units} ders yerleşti)")
 
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = time_limit_seconds
-    solver.parameters.num_search_workers = 8
-    reporter = _ProgressReporter(placed_terms, len(units), time_limit_seconds)
-    solver.Solve(model, reporter)
+    # ---------- 1. aşama: SADECE yerleştirme sayısını maksimize et ----------
+    # Daha basit bir hedef olduğu için genelde optimal'i (kanıtlanmış en
+    # iyi sonucu) yumuşak tercihli birleşik hedeften çok daha hızlı bulur -
+    # bu da "gerçekten imkansız mı yoksa arama daha süremi buldu mu"
+    # ayrımını güvenilir kılar (bkz. docstring).
+    report(15, f"En fazla kaç ders yerleşebileceği hesaplanıyor ({len(units)} ders saati için)...")
+    model.Maximize(sum(placed_terms))
+    solver1 = cp_model.CpSolver()
+    solver1.parameters.max_time_in_seconds = time_limit_seconds
+    solver1.parameters.num_search_workers = 8
+    reporter1 = _ProgressReporter(
+        placed_terms, len(units), time_limit_seconds, 15, 40, "En fazla kaç ders yerleşebileceği hesaplanıyor..."
+    )
+    status1 = solver1.Solve(model, reporter1)
+
+    if status1 not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        report(100, "Uygun bir yerleşim bulunamadı.")
+        return AutoAssignResult(placed=0, warnings=warnings)
+
+    max_placed = sum(1 for v in placed_terms if solver1.Value(v))
+    proven_optimal = status1 == cp_model.OPTIMAL
+
+    if max_placed < len(units):
+        if proven_optimal:
+            warnings.extend(
+                _shortfall_warnings(units, domains, group_units, group_representative, x, solver1)
+            )
+        else:
+            warnings.append(
+                f"{len(units) - max_placed} ders saati için (bu çalıştırmada) uygun bir yer bulunamadı - "
+                "arama süresi yetmemiş olabilir, 'Oto Ata'yı tekrar çalıştırmayı deneyebilirsiniz."
+            )
+
+    # ---------- 2. aşama: yerleştirme sayısını SABİT tutup (asla düşürmeden)
+    # kalan bütçede blok bütünlüğü/çeşitlilik/gün yayma tercihlerini iyileştir ----------
+    model.Add(sum(placed_terms) >= max_placed)
+    model.Maximize(
+        cp_model.LinearExpr.WeightedSum(
+            adjacency_bonus_terms + spread_bonus_terms + diversity_penalty_terms,
+            [ADJACENCY_WEIGHT] * len(adjacency_bonus_terms)
+            + [SPREAD_WEIGHT] * len(spread_bonus_terms)
+            + [-DIVERSITY_WEIGHT] * len(diversity_penalty_terms),
+        )
+    )
+    # 1. aşamanın bulduğu çözümü "ipucu" olarak veriyoruz - böylece 2.
+    # aşama sıfırdan aramaya başlamıyor, en kötü ihtimalle 1. aşamanın
+    # yerleştirme sayısını hemen garantiliyor (kalite tercihleri için
+    # zaman yetmese bile yerleştirme sayısı asla geriye düşmüyor).
+    for var in x.values():
+        model.AddHint(var, solver1.Value(var))
+
+    report(55, "Program inceltiliyor (blok bütünlüğü/çeşitlilik/gün yayma)...")
+    solver2 = cp_model.CpSolver()
+    solver2.parameters.max_time_in_seconds = quality_time_limit_seconds
+    solver2.parameters.num_search_workers = 8
+    reporter2 = _ProgressReporter(
+        placed_terms, len(units), quality_time_limit_seconds, 55, 40,
+        "Program inceltiliyor (blok bütünlüğü/çeşitlilik/gün yayma)...",
+    )
+    status2 = solver2.Solve(model, reporter2)
+
+    # solver2, kendi süre bütçesi içinde HİÇBİR çözüm bulamamışsa (status
+    # OPTIMAL/FEASIBLE değilse) .Value() çağrısı istisna FIRLATMAZ, rastgele
+    # (uninitialized) değerler döner - bu sessizce yanlış bir program
+    # yazmaya yol açardı. Böyle bir durumda 1. aşamanın zaten doğrulanmış
+    # (tüm sert kısıtları sağlayan) çözümüne geri dönülür - kalite tercihleri
+    # için zaman yetmese bile ASLA çakışmalı/geçersiz bir sonuç yazılmaz.
+    final_solver = solver2 if status2 in (cp_model.OPTIMAL, cp_model.FEASIBLE) else solver1
 
     report(96, "Sonuçlar kaydediliyor...")
 
@@ -836,7 +956,7 @@ def auto_assign(
     for ui, unit in enumerate(units):
         chosen = None
         for (d, p) in domains[ui]:
-            if solver.Value(x[(ui, d, p)]):
+            if final_solver.Value(x[(ui, d, p)]):
                 chosen = (d, p)
                 break
         if chosen is None:
@@ -852,6 +972,54 @@ def auto_assign(
 
     report(100, f"Tamamlandı: {placed} ders yerleştirildi.")
     return AutoAssignResult(placed=placed, warnings=warnings, placed_block_ids=placed_block_ids)
+
+
+def _shortfall_warnings(
+    units: list[list[BlockView]],
+    domains: list[list[tuple[int, int]]],
+    group_units: dict[tuple, list[int]],
+    group_representative: dict[tuple, BlockView],
+    x: dict,
+    solver,
+) -> list[str]:
+    """1. aşama OPTIMAL'i kanıtladığı halde bazı dersler yerleşemediyse,
+    bu GERÇEKTEN matematiksel bir imkansızlıktır - hangi ihtiyacın (ör.
+    '9-A Matematik, Ahmet Yılmaz') kaç saat eksik kaldığını insan-okunur
+    bir uyarıya çevirir."""
+    warnings: list[str] = []
+    for group_key, uis in group_units.items():
+        total = len(uis)
+        placed_count = sum(
+            1 for ui in uis if any(solver.Value(x[(ui, d, p)]) for (d, p) in domains[ui])
+        )
+        if placed_count >= total:
+            continue
+        rep = group_representative[group_key]
+        name_bits = [n for n in (rep.teacher_name, rep.class_name, rep.subject_name) if n]
+        label = " · ".join(name_bits) or rep.pool_label()
+        missing = total - placed_count
+        warnings.append(
+            f"{label}: {total} saat isteniyor, çakışmasız/müsait şekilde en fazla {placed_count} saat "
+            f"yerleştirilebiliyor ({missing} saat matematiksel olarak sığmıyor - öğretmenin/sınıfın "
+            "müsaitlik ya da çakışma durumunu gözden geçirin)."
+        )
+
+    # Zümre grupları (birden fazla bloklu birimler) group_units'e dahil
+    # değil - onlar için de aynı kontrolü ayrıca yap.
+    grouped_uis = {ui for uis in group_units.values() for ui in uis}
+    for ui, unit in enumerate(units):
+        if ui in grouped_uis or len(unit) <= 1:
+            continue
+        placed = any(solver.Value(x[(ui, d, p)]) for (d, p) in domains[ui])
+        if placed:
+            continue
+        rep = unit[0]
+        names = ", ".join(sorted(m.teacher_name or "" for m in unit))
+        warnings.append(
+            f"Zümre toplantısı ({rep.subject_name or '-'}, {names}): tüm öğretmenlerin birlikte "
+            "müsait olduğu çakışmasız bir saat bulunamadı - müsaitlik durumlarını gözden geçirin."
+        )
+    return warnings
 
 
 # ---------- özet / analiz ----------
