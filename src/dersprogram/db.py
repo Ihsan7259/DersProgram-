@@ -244,6 +244,7 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "teachers": [
         ("subject_area", "TEXT DEFAULT ''"),
         ("note", "TEXT DEFAULT ''"),
+        ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "subjects": [("note", "TEXT DEFAULT ''")],
     "class_groups": [("note", "TEXT DEFAULT ''"), ("sort_order", "INTEGER NOT NULL DEFAULT 0")],
@@ -254,6 +255,7 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("total_program_fee", "REAL NOT NULL DEFAULT 0"),
         ("total_one_on_one_fee", "REAL NOT NULL DEFAULT 0"),
         ("note", "TEXT DEFAULT ''"),
+        ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "lesson_blocks": [
         ("teacher_id", "INTEGER REFERENCES teachers(id) ON DELETE CASCADE"),
@@ -444,17 +446,54 @@ class Database:
         )
         self.conn.commit()
 
+    def _resequence(self, table: str, ordered_ids: list[int]) -> None:
+        """Verilen sırayı `table`'ın sort_order sütununa 0..N-1 olarak
+        yazar - yukarı/aşağı oklarıyla ya da alfabetik/branşa göre
+        sıralama sonrası yeni sırayı kalıcı hale getirmek için kullanılır."""
+        self.conn.executemany(
+            f"UPDATE {table} SET sort_order=? WHERE id=?",
+            [(position, row_id) for position, row_id in enumerate(ordered_ids)],
+        )
+        self.conn.commit()
+
     # ---------- öğretmenler ----------
     def list_teachers(self) -> list[sqlite3.Row]:
-        return self.conn.execute("SELECT * FROM teachers ORDER BY name").fetchall()
+        return self.conn.execute("SELECT * FROM teachers ORDER BY sort_order, name").fetchall()
 
     def add_teacher(self, name: str, subject_area: str = "", note: str = "") -> int:
+        row = self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS m FROM teachers").fetchone()
+        next_order = row["m"] + 1
         cur = self.conn.execute(
-            "INSERT INTO teachers(name, subject_area, note) VALUES (?, ?, ?)",
-            (name, subject_area, note),
+            "INSERT INTO teachers(name, subject_area, note, sort_order) VALUES (?, ?, ?, ?)",
+            (name, subject_area, note, next_order),
         )
         self.conn.commit()
         return cur.lastrowid
+
+    def move_teacher(self, teacher_id: int, direction: int) -> None:
+        """direction: -1 (yukarı) ya da +1 (aşağı) - bkz. move_class_group."""
+        ids = [row["id"] for row in self.list_teachers()]
+        if teacher_id not in ids:
+            return
+        idx = ids.index(teacher_id)
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(ids):
+            return
+        ids[idx], ids[new_idx] = ids[new_idx], ids[idx]
+        self._resequence("teachers", ids)
+
+    def sort_teachers_by_name(self) -> None:
+        """Öğretmen listesini isme göre alfabetik sıraya sokar ve bu
+        sırayı kalıcı hale getirir (sonrasında yukarı/aşağı oklarıyla bu
+        yeni sıradan devam edilebilir)."""
+        rows = self.list_teachers()
+        ordered = sorted(rows, key=lambda r: r["name"].lower())
+        self._resequence("teachers", [r["id"] for r in ordered])
+
+    def sort_teachers_by_subject(self) -> None:
+        rows = self.list_teachers()
+        ordered = sorted(rows, key=lambda r: (r["subject_area"] or "").lower())
+        self._resequence("teachers", [r["id"] for r in ordered])
 
     def update_teacher(self, teacher_id: int, name: str, subject_area: str = "", note: str = "") -> None:
         self.conn.execute(
@@ -505,7 +544,7 @@ class Database:
             FROM students st
             LEFT JOIN class_groups cg ON cg.id = st.class_group_id
             LEFT JOIN teachers t ON t.id = st.coach_teacher_id
-            ORDER BY st.name
+            ORDER BY st.sort_order, st.name
             """
         ).fetchall()
 
@@ -521,17 +560,38 @@ class Database:
         total_one_on_one_fee: float = 0,
         note: str = "",
     ) -> int:
+        row = self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS m FROM students").fetchone()
+        next_order = row["m"] + 1
         cur = self.conn.execute(
             """
-            INSERT INTO students(name, class_group_id, coach_teacher_id, total_program_fee, total_one_on_one_fee, note)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO students(name, class_group_id, coach_teacher_id, total_program_fee, total_one_on_one_fee, note, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, class_group_id, coach_teacher_id, total_program_fee, total_one_on_one_fee, note),
+            (name, class_group_id, coach_teacher_id, total_program_fee, total_one_on_one_fee, note, next_order),
         )
         self.conn.commit()
         student_id = cur.lastrowid
         self._ensure_coaching_block(student_id, coach_teacher_id)
         return student_id
+
+    def move_student(self, student_id: int, direction: int) -> None:
+        """direction: -1 (yukarı) ya da +1 (aşağı) - bkz. move_class_group."""
+        ids = [row["id"] for row in self.list_students()]
+        if student_id not in ids:
+            return
+        idx = ids.index(student_id)
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(ids):
+            return
+        ids[idx], ids[new_idx] = ids[new_idx], ids[idx]
+        self._resequence("students", ids)
+
+    def reorder_students(self, ordered_ids: list[int]) -> None:
+        """Öğrenci listesi ekranında bir sütun başlığına (Ad/Sınıf/Ünvan/
+        Koç) tıklanınca hesaplanan yeni sırayı kalıcı hale getirir -
+        Ünvan gibi hesaplanan (tek bir sütunda tutulmayan) alanlara göre
+        sıralama arayüz katmanında yapılır, burada sadece kaydedilir."""
+        self._resequence("students", ordered_ids)
 
     def update_student(
         self,

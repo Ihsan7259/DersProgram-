@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt
 from ..db import Database
 from .. import scheduling
 from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog, section_title as _section_title, divider as _divider
+from . import theme
 
 
 class TeachersTab(QWidget):
@@ -102,10 +103,22 @@ class TeachersTab(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        right_layout.addWidget(_section_title("Öğretmen Listesi"))
-        self.table_widget = QTableWidget(0, 2)
-        self.table_widget.setHorizontalHeaderLabels(["İsim", "Branşlar"])
-        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        list_header_row = QHBoxLayout()
+        list_header_row.addWidget(_section_title("Öğretmen Listesi"))
+        list_header_row.addStretch()
+        list_header_row.addWidget(QLabel("İsim ya da Branşlar başlığına tıklayarak alfabetik sıralayabilirsiniz."))
+        right_layout.addLayout(list_header_row)
+
+        self.table_widget = QTableWidget(0, 4)
+        self.table_widget.setHorizontalHeaderLabels(["İsim", "Branşlar", "", ""])
+        header = self.table_widget.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
+        self.table_widget.setColumnWidth(2, 30)
+        self.table_widget.setColumnWidth(3, 30)
+        header.sectionClicked.connect(self._handle_header_clicked)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
         right_layout.addWidget(self.table_widget, 1)
@@ -159,6 +172,27 @@ class TeachersTab(QWidget):
     def _selected_subject_ids(self) -> list[int]:
         return [sid for sid, cb in self.subject_checks.items() if cb.isChecked()]
 
+    @staticmethod
+    def _move_button(icon_name: str, enabled: bool) -> QPushButton:
+        btn = QPushButton()
+        btn.setIcon(theme.icon(theme.NAV_ICONS[icon_name], theme.INK_MUTED_38, 11))
+        btn.setFixedSize(24, 24)
+        btn.setEnabled(enabled)
+        btn.setStyleSheet(
+            f"QPushButton {{ border:1px solid {theme.BORDER_INPUT}; border-radius:6px; background:{theme.SURFACE}; }}"
+            f"QPushButton:hover {{ background:{theme.APP_BG}; }}"
+            f"QPushButton:disabled {{ border-color:transparent; background:transparent; }}"
+        )
+        return btn
+
+    def _set_cell_widget(self, row: int, col: int, widget) -> None:
+        old_widget = self.table_widget.cellWidget(row, col)
+        if old_widget is not None:
+            self.table_widget.removeCellWidget(row, col)
+            old_widget.setParent(None)
+            old_widget.deleteLater()
+        self.table_widget.setCellWidget(row, col, widget)
+
     def refresh(self) -> None:
         rows = self.db.list_teachers()
         self.table_widget.setRowCount(len(rows))
@@ -167,9 +201,36 @@ class TeachersTab(QWidget):
             item_name.setData(Qt.UserRole, row["id"])
             self.table_widget.setItem(r, 0, item_name)
             self.table_widget.setItem(r, 1, QTableWidgetItem(row["subject_area"] or ""))
+
+            up_btn = self._move_button("up", enabled=r > 0)
+            up_btn.clicked.connect(lambda _checked=False, tid=row["id"]: self.handle_move(tid, -1))
+            self._set_cell_widget(r, 2, up_btn)
+
+            down_btn = self._move_button("down", enabled=r < len(rows) - 1)
+            down_btn.clicked.connect(lambda _checked=False, tid=row["id"]: self.handle_move(tid, 1))
+            self._set_cell_widget(r, 3, down_btn)
         current = set(self._selected_subject_ids())
         self._refresh_subject_choices(checked_ids=current)
         self.refresh_detail()
+
+    def handle_move(self, teacher_id: int, direction: int) -> None:
+        self.db.move_teacher(teacher_id, direction)
+        selected = self.selected_id
+        self.refresh()
+        if selected is not None:
+            self._select_row_by_id(selected)
+
+    def _handle_header_clicked(self, column: int) -> None:
+        if column == 0:
+            self.db.sort_teachers_by_name()
+        elif column == 1:
+            self.db.sort_teachers_by_subject()
+        else:
+            return
+        selected = self.selected_id
+        self.refresh()
+        if selected is not None:
+            self._select_row_by_id(selected)
 
     def refresh_detail(self) -> None:
         self._pending_availability = {}

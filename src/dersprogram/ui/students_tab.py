@@ -24,6 +24,7 @@ from ..db import Database
 from .. import scheduling
 from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog, section_title as _section_title, divider as _divider
 from .import_students_dialog import ImportStudentsDialog
+from . import theme
 
 
 class StudentsTab(QWidget):
@@ -140,9 +141,20 @@ class StudentsTab(QWidget):
         self.search_edit.textChanged.connect(self._apply_search_filter)
         right_layout.addWidget(self.search_edit)
 
-        self.table_widget = QTableWidget(0, 4)
-        self.table_widget.setHorizontalHeaderLabels(["Ad", "Sınıf", "Ünvan", "Koç"])
-        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        sort_hint = QLabel("Başlıklara (Ad/Sınıf/Ünvan/Koç) tıklayarak o alana göre sıralayabilirsiniz.")
+        sort_hint.setWordWrap(True)
+        right_layout.addWidget(sort_hint)
+
+        self.table_widget = QTableWidget(0, 6)
+        self.table_widget.setHorizontalHeaderLabels(["Ad", "Sınıf", "Ünvan", "Koç", "", ""])
+        header = self.table_widget.horizontalHeader()
+        for col in range(4):
+            header.setSectionResizeMode(col, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.Fixed)
+        header.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.table_widget.setColumnWidth(4, 30)
+        self.table_widget.setColumnWidth(5, 30)
+        header.sectionClicked.connect(self._handle_header_clicked)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
         right_layout.addWidget(self.table_widget, 1)
@@ -207,7 +219,32 @@ class StudentsTab(QWidget):
     def _selected_title_ids(self) -> list[int]:
         return [tid for tid, cb in self.title_checks.items() if cb.isChecked()]
 
+    @staticmethod
+    def _move_button(icon_name: str, enabled: bool, tooltip: str = "") -> QPushButton:
+        btn = QPushButton()
+        btn.setIcon(theme.icon(theme.NAV_ICONS[icon_name], theme.INK_MUTED_38, 11))
+        btn.setFixedSize(24, 24)
+        btn.setEnabled(enabled)
+        if tooltip:
+            btn.setToolTip(tooltip)
+        btn.setStyleSheet(
+            f"QPushButton {{ border:1px solid {theme.BORDER_INPUT}; border-radius:6px; background:{theme.SURFACE}; }}"
+            f"QPushButton:hover {{ background:{theme.APP_BG}; }}"
+            f"QPushButton:disabled {{ border-color:transparent; background:transparent; }}"
+        )
+        return btn
+
+    def _set_cell_widget(self, row: int, col: int, widget) -> None:
+        old_widget = self.table_widget.cellWidget(row, col)
+        if old_widget is not None:
+            self.table_widget.removeCellWidget(row, col)
+            old_widget.setParent(None)
+            old_widget.deleteLater()
+        self.table_widget.setCellWidget(row, col, widget)
+
     def _populate_table(self, rows: list) -> None:
+        is_filtered = bool(self.search_edit.text().strip())
+        filter_tip = "Sıralamayı değiştirmek için önce aramayı temizleyin." if is_filtered else ""
         self.table_widget.setRowCount(len(rows))
         for r, row in enumerate(rows):
             item_name = QTableWidgetItem(row["name"])
@@ -219,6 +256,38 @@ class StudentsTab(QWidget):
             titles_item.setToolTip(titles_text)
             self.table_widget.setItem(r, 2, titles_item)
             self.table_widget.setItem(r, 3, QTableWidgetItem(row["coach_name"] or ""))
+
+            up_btn = self._move_button("up", enabled=not is_filtered and r > 0, tooltip=filter_tip)
+            up_btn.clicked.connect(lambda _checked=False, sid=row["id"]: self.handle_move(sid, -1))
+            self._set_cell_widget(r, 4, up_btn)
+
+            down_btn = self._move_button("down", enabled=not is_filtered and r < len(rows) - 1, tooltip=filter_tip)
+            down_btn.clicked.connect(lambda _checked=False, sid=row["id"]: self.handle_move(sid, 1))
+            self._set_cell_widget(r, 5, down_btn)
+
+    def handle_move(self, student_id: int, direction: int) -> None:
+        self.db.move_student(student_id, direction)
+        selected = self.selected_id
+        self.refresh()
+        if selected is not None:
+            self._select_row_by_id(selected)
+
+    def _handle_header_clicked(self, column: int) -> None:
+        key_fns = {
+            0: lambda r: r["name"].lower(),
+            1: lambda r: (r["class_name"] or "").lower(),
+            2: lambda r: self.db.student_titles_summary(r["id"]).lower(),
+            3: lambda r: (r["coach_name"] or "").lower(),
+        }
+        key_fn = key_fns.get(column)
+        if key_fn is None:
+            return
+        ordered_ids = [r["id"] for r in sorted(self._all_rows, key=key_fn)]
+        self.db.reorder_students(ordered_ids)
+        selected = self.selected_id
+        self.refresh()
+        if selected is not None:
+            self._select_row_by_id(selected)
 
     def _apply_search_filter(self, text: str = "") -> None:
         query = self.search_edit.text().strip().lower()
