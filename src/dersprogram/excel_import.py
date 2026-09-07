@@ -115,7 +115,7 @@ def parse_student_workbook(path: str, db: Database) -> list[ImportRow]:
 
         warnings: list[str] = []
         if class_name and class_name.lower() not in existing_classes:
-            warnings.append(f"'{class_name}' sınıfı yok - yeni oluşturulacak")
+            warnings.append(f"'{class_name}' sınıfı yok - oluşturulup oluşturulmayacağını seçebilirsiniz")
         if coach_name and coach_name.lower() not in existing_teachers:
             warnings.append(f"'{coach_name}' adında öğretmen bulunamadı - koç boş bırakılacak")
         for t in title_names:
@@ -137,10 +137,17 @@ def parse_student_workbook(path: str, db: Database) -> list[ImportRow]:
     return results
 
 
-def apply_import(db: Database, rows: list[ImportRow]) -> int:
-    """Ayrıştırılmış satırları veritabanına yazar (eksik sınıf/ünvanları
-    otomatik oluşturur, eksik koç varsa boş bırakır). Kaç öğrenci
-    eklendiğini döner."""
+def apply_import(db: Database, rows: list[ImportRow], create_class_names: set[str] | None = None) -> int:
+    """Ayrıştırılmış satırları veritabanına yazar (eksik ünvanları her
+    zaman otomatik oluşturur, eksik koç varsa boş bırakır). Kaç öğrenci
+    eklendiğini döner.
+
+    `create_class_names`: küçük harfe çevrilmiş sınıf adlarından oluşan
+    bir küme - Excel'de olup sistemde henüz olmayan sınıflardan SADECE bu
+    kümedekiler oluşturulur; kümede olmayanlar için öğrenci sınıfsız
+    (class_id=None) eklenir. None verilirse (varsayılan) eskisi gibi
+    eksik olan TÜM sınıflar oluşturulur - kullanıcı hangi eksik sınıfların
+    oluşturulacağını seçebilsin diye eklendi (bkz. ImportStudentsDialog)."""
     class_cache = {c["name"].strip().lower(): c["id"] for c in db.list_class_groups()}
     teacher_cache = {t["name"].strip().lower(): t["id"] for t in db.list_teachers()}
     title_cache = {t["name"].strip().lower(): t["id"] for t in db.list_rows("titles")}
@@ -150,9 +157,13 @@ def apply_import(db: Database, rows: list[ImportRow]) -> int:
         class_id = None
         if row.class_name:
             key = row.class_name.lower()
-            if key not in class_cache:
+            if key in class_cache:
+                class_id = class_cache[key]
+            elif create_class_names is None or key in create_class_names:
                 class_cache[key] = db.add_class_group(row.class_name)
-            class_id = class_cache[key]
+                class_id = class_cache[key]
+            # else: kullanıcı bu sınıfın oluşturulmasını istemedi - öğrenci
+            # sınıfsız (class_id=None) eklenecek.
 
         coach_id = teacher_cache.get(row.coach_name.lower()) if row.coach_name else None
 

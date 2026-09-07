@@ -35,6 +35,7 @@ class StudentsTab(QWidget):
         self.selected_id: int | None = None
         self._pending_availability: dict[tuple[int, int], str | None] = {}
         self._all_rows: list = []
+        self._checked_student_ids: set[int] = set()
         # None = "ana sıralama" (yukarı/aşağı oklarıyla elle belirlenen
         # kalıcı sıra); "name"/"class"/"title"/"coach" = başlığa
         # tıklanınca geçici alfabetik görünüm - aynı başlığa tekrar
@@ -153,15 +154,29 @@ class StudentsTab(QWidget):
         sort_hint.setWordWrap(True)
         right_layout.addWidget(sort_hint)
 
-        self.table_widget = QTableWidget(0, 6)
-        self.table_widget.setHorizontalHeaderLabels(["Ad", "Sınıf", "Ünvan", "Koç", "", ""])
+        bulk_row = QHBoxLayout()
+        self.select_all_checkbox = QCheckBox("Tümünü Seç")
+        self.select_all_checkbox.toggled.connect(self._handle_select_all_toggled)
+        bulk_row.addWidget(self.select_all_checkbox)
+        bulk_row.addStretch()
+        self.bulk_delete_button = QPushButton("Seçilenleri Sil")
+        self.bulk_delete_button.setObjectName("outlineButton")
+        self.bulk_delete_button.setEnabled(False)
+        self.bulk_delete_button.clicked.connect(self.handle_bulk_delete)
+        bulk_row.addWidget(self.bulk_delete_button)
+        right_layout.addLayout(bulk_row)
+
+        self.table_widget = QTableWidget(0, 7)
+        self.table_widget.setHorizontalHeaderLabels(["", "Ad", "Sınıf", "Ünvan", "Koç", "", ""])
         header = self.table_widget.horizontalHeader()
-        for col in range(4):
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        for col in range(1, 5):
             header.setSectionResizeMode(col, QHeaderView.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
         header.setSectionResizeMode(5, QHeaderView.Fixed)
-        self.table_widget.setColumnWidth(4, 30)
+        header.setSectionResizeMode(6, QHeaderView.Fixed)
+        self.table_widget.setColumnWidth(0, 26)
         self.table_widget.setColumnWidth(5, 30)
+        self.table_widget.setColumnWidth(6, 30)
         header.setSortIndicatorShown(False)
         header.sectionClicked.connect(self._handle_header_clicked)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
@@ -194,7 +209,7 @@ class StudentsTab(QWidget):
 
     def _select_row_by_id(self, row_id: int) -> None:
         for r in range(self.table_widget.rowCount()):
-            item = self.table_widget.item(r, 0)
+            item = self.table_widget.item(r, 1)
             if item is not None and item.data(Qt.UserRole) == row_id:
                 self.table_widget.selectRow(r)
                 self.table_widget.scrollToItem(item)
@@ -273,23 +288,35 @@ class StudentsTab(QWidget):
             tip = ""
         self.table_widget.setRowCount(len(rows))
         for r, row in enumerate(rows):
+            check_container = QWidget()
+            check_layout = QHBoxLayout(check_container)
+            check_layout.setContentsMargins(0, 0, 0, 0)
+            check_layout.setAlignment(Qt.AlignCenter)
+            checkbox = QCheckBox()
+            checkbox.setChecked(row["id"] in self._checked_student_ids)
+            checkbox.toggled.connect(lambda checked, sid=row["id"]: self._handle_row_check_toggled(sid, checked))
+            check_layout.addWidget(checkbox)
+            self._set_cell_widget(r, 0, check_container)
+
             item_name = QTableWidgetItem(row["name"])
             item_name.setData(Qt.UserRole, row["id"])
-            self.table_widget.setItem(r, 0, item_name)
-            self.table_widget.setItem(r, 1, QTableWidgetItem(row["class_name"] or ""))
+            self.table_widget.setItem(r, 1, item_name)
+            self.table_widget.setItem(r, 2, QTableWidgetItem(row["class_name"] or ""))
             titles_text = self.db.student_titles_summary(row["id"])
             titles_item = QTableWidgetItem(titles_text)
             titles_item.setToolTip(titles_text)
-            self.table_widget.setItem(r, 2, titles_item)
-            self.table_widget.setItem(r, 3, QTableWidgetItem(row["coach_name"] or ""))
+            self.table_widget.setItem(r, 3, titles_item)
+            self.table_widget.setItem(r, 4, QTableWidgetItem(row["coach_name"] or ""))
 
             up_btn = self._move_button("up", enabled=not locked and r > 0, tooltip=tip)
             up_btn.clicked.connect(lambda _checked=False, sid=row["id"]: self.handle_move(sid, -1))
-            self._set_cell_widget(r, 4, up_btn)
+            self._set_cell_widget(r, 5, up_btn)
 
             down_btn = self._move_button("down", enabled=not locked and r < len(rows) - 1, tooltip=tip)
             down_btn.clicked.connect(lambda _checked=False, sid=row["id"]: self.handle_move(sid, 1))
-            self._set_cell_widget(r, 5, down_btn)
+            self._set_cell_widget(r, 6, down_btn)
+
+        self._update_bulk_delete_state()
 
     def handle_move(self, student_id: int, direction: int) -> None:
         self.db.move_student(student_id, direction)
@@ -299,7 +326,7 @@ class StudentsTab(QWidget):
             self._select_row_by_id(selected)
 
     def _handle_header_clicked(self, column: int) -> None:
-        target = {0: "name", 1: "class", 2: "title", 3: "coach"}.get(column)
+        target = {1: "name", 2: "class", 3: "title", 4: "coach"}.get(column)
         if target is None:
             return
         self._active_sort = None if self._active_sort == target else target
@@ -373,7 +400,7 @@ class StudentsTab(QWidget):
             self.refresh_detail()
             return
         row = items[0].row()
-        name_item = self.table_widget.item(row, 0)
+        name_item = self.table_widget.item(row, 1)
         self.selected_id = name_item.data(Qt.UserRole)
         student = self.db.get_student(self.selected_id)
         self.name_edit.setText(student["name"])
@@ -458,6 +485,55 @@ class StudentsTab(QWidget):
         if confirm != QMessageBox.Yes:
             return
         self.db.delete_student(self.selected_id)
+        self.clear_form()
+        self.refresh()
+        if self.on_change:
+            self.on_change()
+
+    # ---------- toplu seçim / toplu silme ----------
+    def _handle_row_check_toggled(self, student_id: int, checked: bool) -> None:
+        if checked:
+            self._checked_student_ids.add(student_id)
+        else:
+            self._checked_student_ids.discard(student_id)
+        self._update_bulk_delete_state()
+
+    def _update_bulk_delete_state(self) -> None:
+        count = len(self._checked_student_ids)
+        self.bulk_delete_button.setEnabled(count > 0)
+        self.bulk_delete_button.setText(f"Seçilenleri Sil ({count})" if count else "Seçilenleri Sil")
+
+    def _handle_select_all_toggled(self, checked: bool) -> None:
+        # Sadece o an tabloda GÖRÜNEN (arama/filtre uygulanmış olabilir)
+        # satırları toplu işaretler/kaldırır - her satırın kendi checkbox'ını
+        # tetikleyerek yapar, böylece _checked_student_ids ile senkron kalır.
+        for r in range(self.table_widget.rowCount()):
+            container = self.table_widget.cellWidget(r, 0)
+            if container is None:
+                continue
+            checkbox = container.findChild(QCheckBox)
+            if checkbox is not None:
+                checkbox.setChecked(checked)
+
+    def handle_bulk_delete(self) -> None:
+        ids = list(self._checked_student_ids)
+        if not ids:
+            return
+        names = [r["name"] for r in self._all_rows if r["id"] in self._checked_student_ids]
+        preview = "\n".join(f"- {n}" for n in names[:10])
+        if len(names) > 10:
+            preview += f"\n... ve {len(names) - 10} tane daha"
+        confirm = QMessageBox.question(
+            self, "Toplu Silme Onayı",
+            f"{len(ids)} öğrenci silinsin mi?\nBu öğrencilere ait ders blokları ve ödeme kayıtları da silinir.\n\n"
+            + preview,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        for student_id in ids:
+            self.db.delete_student(student_id)
+        self._checked_student_ids.clear()
+        self.select_all_checkbox.setChecked(False)
         self.clear_form()
         self.refresh()
         if self.on_change:

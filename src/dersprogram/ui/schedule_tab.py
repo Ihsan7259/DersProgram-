@@ -260,7 +260,14 @@ class PoolChip(QFrame):
         self.setFixedSize(66, 40)
         chip_layout = QVBoxLayout(self)
         chip_layout.setContentsMargins(0, 0, 0, 0)
-        chip_layout.addWidget(theme.make_dense_chip(line1, line2, bg))
+        inner = theme.make_dense_chip(line1, line2, bg)
+        # İçteki etiket tüm kartı kapladığı için, fare olaylarını KENDİSİ
+        # yutmasın diye "şeffaf" işaretlenir - aksi halde tıklama/sürükleme
+        # PoolChip'in altındaki mousePressEvent/mouseMoveEvent'e hiç
+        # ulaşmaz (Qt, fare olaylarını en üstteki alt widget'a teslim eder,
+        # ebeveyne otomatik geri düşmez) ve ne seçim ne de sürükleme çalışır.
+        inner.setAttribute(Qt.WA_TransparentForMouseEvents)
+        chip_layout.addWidget(inner)
         self._apply_frame_style()
 
     def _apply_frame_style(self) -> None:
@@ -276,7 +283,16 @@ class PoolChip(QFrame):
             self._drag_start_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
             self.setFocus()
             self.clicked.emit(self.block_id)
-        super().mousePressEvent(event)
+            # KRİTİK: olayı burada KABUL ediyoruz (QFrame'in varsayılan
+            # mousePressEvent'ini - ki her zaman ignore() çağırır - ÇAĞIRMIYORUZ).
+            # Aksi halde Qt bu widget için üstü kapalı bir fare "tutması"
+            # (implicit grab) yapmıyor; kullanıcı sürüklemek için fareyi
+            # hareket ettirir ettirmez sonraki mouseMoveEvent'ler artık bu
+            # kartı değil, o anda imlecin altındaki HANGİ widget varsa onu
+            # hedefliyor - bu yüzden sürükleme hiç başlamıyordu.
+            event.accept()
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag_start_pos is None or not (event.buttons() & Qt.LeftButton):
