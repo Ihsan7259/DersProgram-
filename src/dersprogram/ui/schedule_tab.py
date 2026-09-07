@@ -129,6 +129,17 @@ class _CellDelegate(QStyledItemDelegate):
                 painter.setPen(QColor(theme.LESSON_TYPE_TEXT_MUTED))
                 elided2 = QFontMetrics(font2).elidedText(line2, Qt.ElideRight, bottom.width())
                 painter.drawText(bottom, Qt.AlignHCenter | Qt.AlignTop, elided2)
+
+            # Borca yapılan birebir göstergesi - kalıcı bir işaret değil,
+            # sadece ekranda gösterilir; PDF/Kopyala çıktısında görünmemesi
+            # için option.widget.show_debt_icons geçici olarak kapatılır
+            # (bkz. ScheduleTab._render_grid_pixmap).
+            if payload.get("debt") and getattr(option.widget, "show_debt_icons", True):
+                dot_size = 7
+                dot_rect = QRect(rect.right() - dot_size - 3, rect.top() + 3, dot_size, dot_size)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(theme.CONFLICT_BORDER))
+                painter.drawEllipse(dot_rect)
         painter.restore()
 
 
@@ -377,6 +388,10 @@ class MainGrid(QTableWidget):
         self._day_count = 1
         self._period_count = 1
         self._zoom = 1.0
+        # PDF/Kopyala çıktısında görünmemesi gereken borç göstergesi (bkz.
+        # _CellDelegate.paint, ScheduleTab._render_grid_pixmap) - normalde
+        # açık, sadece dışa aktarma sırasında geçici olarak kapatılır.
+        self.show_debt_icons = True
         self.cellDoubleClicked.connect(self._handle_double_click)
         self._apply_column_sizing()
 
@@ -848,13 +863,19 @@ class ScheduleTab(QWidget):
 
         grid.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         grid.resize(old_width, total_height)
+        # Borca yapılan birebir göstergesi kullanıcı ekranı için - PDF/Kopyala
+        # çıktısında görünmesin diye render sırasında geçici olarak kapatılır.
+        grid.show_debt_icons = False
+        grid.viewport().update()
 
         pixmap = QPixmap(old_width, total_height)
         pixmap.fill(Qt.white)
         grid.render(pixmap)
 
+        grid.show_debt_icons = True
         grid.resize(old_width, old_height)
         grid.setVerticalScrollBarPolicy(old_v_policy)
+        grid.viewport().update()
         return pixmap
 
     def handle_export_pdf(self) -> None:
@@ -1095,10 +1116,26 @@ class ScheduleTab(QWidget):
             return [b for b in blocks if b.type == TYPE_CLASS and b.class_group_id == entity_id]
         return [b for b in blocks if b.teacher_id == entity_id]
 
+    def _debt_student_ids(self) -> set[int]:
+        """Bu haftaki programda birebir dersi olan, paket saati aşılmış
+        (borçlu) öğrencilerin id'leri - Ana Program hücrelerinde küçük
+        kırmızı nokta göstermek için (bkz. _render_grid, _CellDelegate);
+        PDF/Kopyala çıktısında görünmez (bkz. _render_grid_pixmap)."""
+        student_ids: set[int] = set()
+        for blocks in self._schedule.values():
+            for block in blocks:
+                if block.type == TYPE_ONE_ON_ONE and block.student_id is not None:
+                    student_ids.add(block.student_id)
+        return {
+            sid for sid in student_ids
+            if scheduling.compute_one_on_one_ledger(self.db, sid)["debt_hours"] > 0
+        }
+
     def _render_grid(self) -> None:
         day_names = self.db.day_names
         period_count = self.db.period_count
         self.grid._row_entity_ids = [entity_id for entity_id, _name in self._row_entities]
+        debt_student_ids = self._debt_student_ids()
 
         self.grid.setColumnCount(len(day_names) * period_count)
         # Sütun sayısı belli olduktan sonra: başlıklar + gün/saat sayısına
@@ -1137,6 +1174,9 @@ class ScheduleTab(QWidget):
                             line1 = f"{line1} (+{len(blocks) - 1})"
                         payload = {"kind": "chip", "bg": bg, "line1": line1, "line2": line2}
                         tooltip = f"{line1}\n{line2}" if line2 else line1
+                        if blocks[0].type == TYPE_ONE_ON_ONE and blocks[0].student_id in debt_student_ids:
+                            payload["debt"] = True
+                            tooltip += "\n(Borçlu birebir - paket saati aşılmış)"
                     payload["border_state"] = "normal"
 
                     item = self.grid.item(row, col)

@@ -256,6 +256,9 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("total_one_on_one_fee", "REAL NOT NULL DEFAULT 0"),
         ("note", "TEXT DEFAULT ''"),
         ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
+        # Öğrencinin satın aldığı toplam birebir PAKET saati - branştan
+        # bağımsız tek bir havuz (bkz. scheduling.compute_one_on_one_ledger).
+        ("one_on_one_package_hours", "REAL NOT NULL DEFAULT 0"),
     ],
     "lesson_blocks": [
         ("teacher_id", "INTEGER REFERENCES teachers(id) ON DELETE CASCADE"),
@@ -268,6 +271,13 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("template_day", "INTEGER"),
         ("template_period", "INTEGER"),
         ("note", "TEXT DEFAULT ''"),
+        # Birebir paket takibinin referans başlangıcı: bu ders bloğu ilk
+        # programa eklendiğinde bugünün tarihi (bkz. scheduling.
+        # compute_one_on_one_ledger). ALTER TABLE ile eklenen mevcut
+        # (bu güncellemeden ÖNCEKİ) bloklarda bu, güncellemenin kurulduğu
+        # tarih olur - o bloklar için geçmişe dönük sayım yapılamaz, sayaç
+        # o günden itibaren işlemeye başlar.
+        ("created_at", "TEXT NOT NULL DEFAULT CURRENT_DATE"),
     ],
     "payments": [("note", "TEXT DEFAULT ''")],
 }
@@ -596,6 +606,16 @@ class Database:
 
     def delete_student(self, student_id: int) -> None:
         self.conn.execute("DELETE FROM students WHERE id=?", (student_id,))
+        self.conn.commit()
+
+    def update_one_on_one_package(self, student_id: int, hours: float) -> None:
+        """Ödemeler sekmesindeki 'Birebir Paketi' bölümünden çağrılır - bkz.
+        scheduling.compute_one_on_one_ledger (kalan/ödenmiş/borçlu hesabı
+        bu değeri okur)."""
+        self.conn.execute(
+            "UPDATE students SET one_on_one_package_hours=? WHERE id=?",
+            (hours, student_id),
+        )
         self.conn.commit()
 
     def _ensure_coaching_block(self, student_id: int, coach_teacher_id: int | None) -> None:

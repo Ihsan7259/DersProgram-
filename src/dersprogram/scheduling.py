@@ -1191,6 +1191,63 @@ def summarize_student_hours(
     return totals
 
 
+def compute_one_on_one_ledger(db: Database, student_id: int, as_of: _dt.date | None = None) -> dict[str, float]:
+    """Bir öğrencinin birebir PAKET durumunu anlık tarihe göre hesaplar
+    (bkz. db.students.one_on_one_package_hours, lesson_blocks.created_at).
+
+    Öğrencinin programda AN İTİBARIYLE yeri olan (template_day dolu) her
+    birebir ders bloğu için, o blok ilk eklendiği tarihten (created_at)
+    bugüne kadar geçen her hafta gerçekten oluşmuş mu (o hafta için bir
+    istisna bloğu havuza düşürmüş/gizlemiş mi) bakılıp kaç "saat" fiilen
+    yapılmış sayılacağı bulunur. Bu toplam (yapılan) paket saatinden
+    düşülür: karşılığı olan kısım "ödenmiş", aşan kısım "borçlu" olur.
+
+    NOT: Havuzdan branş ayrımı yapılmaz (kullanıcı tercihi: öğrenci
+    başına TEK toplam havuz) ve bu ALTER TABLE ile sonradan eklenen
+    created_at nedeniyle güncellemeden ÖNCE var olan bloklarda geçmişe
+    dönük sayım yapılamaz (o bloklar için sayaç güncellemenin kurulduğu
+    günden itibaren işler)."""
+    today = as_of or _dt.date.today()
+    rows = db.list_lesson_blocks_detailed(
+        where="WHERE lb.type=? AND lb.student_id=?", params=(TYPE_ONE_ON_ONE, student_id)
+    )
+    active = [r for r in rows if r["template_day"] is not None and r["template_period"] is not None]
+
+    occurred = 0
+    if active:
+        start_dates = [_dt.date.fromisoformat(r["created_at"]) for r in active if r["created_at"]]
+        if start_dates:
+            week = monday_of(min(start_dates))
+            last_week = monday_of(today)
+            while week <= last_week:
+                exceptions = db.get_week_exceptions(week_key(week))
+                for r in active:
+                    created = _dt.date.fromisoformat(r["created_at"]) if r["created_at"] else today
+                    if created > week + _dt.timedelta(days=6):
+                        continue  # bu blok o hafta henüz eklenmemişti
+                    if r["id"] in exceptions:
+                        day, period = exceptions[r["id"]]
+                    else:
+                        day, period = r["template_day"], r["template_period"]
+                    if day is None or period is None:
+                        continue  # o hafta istisnayla havuza düşmüş/gizlenmiş
+                    occurrence_date = week + _dt.timedelta(days=day)
+                    if created <= occurrence_date <= today:
+                        occurred += 1
+                week += _dt.timedelta(days=7)
+
+    student = db.get_student(student_id)
+    package = float(student["one_on_one_package_hours"]) if student is not None else 0.0
+    paid = min(occurred, package)
+    return {
+        "package_hours": package,
+        "occurred_hours": float(occurred),
+        "paid_hours": paid,
+        "remaining_hours": max(package - occurred, 0.0),
+        "debt_hours": max(occurred - package, 0.0),
+    }
+
+
 def summarize_hours_range(
     db: Database,
     start_date: _dt.date,
