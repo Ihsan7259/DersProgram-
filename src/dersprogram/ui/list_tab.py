@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..db import Database
+from .widgets import section_title as _section_title, divider as _divider
 
 
 class ListTab(QWidget):
@@ -33,6 +34,8 @@ class ListTab(QWidget):
 
         layout = QVBoxLayout(self)
 
+        layout.addWidget(_section_title(f"{title_singular} Ekle"))
+
         form_row = QHBoxLayout()
         form_row.addWidget(QLabel("Ad:"))
         self.name_edit = QLineEdit()
@@ -44,12 +47,17 @@ class ListTab(QWidget):
 
         button_row = QHBoxLayout()
         self.add_button = QPushButton(f"{title_singular} Ekle")
+        self.add_button.setObjectName("primaryButton")
         self.update_button = QPushButton("Güncelle")
         self.delete_button = QPushButton("Sil")
+        self.delete_button.setObjectName("dangerButton")
         self.clear_button = QPushButton("Temizle")
         for b in (self.add_button, self.update_button, self.delete_button, self.clear_button):
             button_row.addWidget(b)
         layout.addLayout(button_row)
+
+        layout.addWidget(_divider())
+        layout.addWidget(_section_title(f"{title_singular} Listesi"))
 
         self.table_widget = QTableWidget(0, 2)
         self.table_widget.setHorizontalHeaderLabels(["Ad", "Not"])

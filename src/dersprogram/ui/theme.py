@@ -505,6 +505,16 @@ def stylesheet() -> str:
     QPushButton#outlineButton:hover {{
         background: {ACCENT_SOFT_BG};
     }}
+    QPushButton#dangerButton {{
+        background: transparent;
+        border: 1.5px solid {CONFLICT_BORDER};
+        color: {CONFLICT_BORDER};
+        font-weight: 600;
+        padding: 6.5px 15px;
+    }}
+    QPushButton#dangerButton:hover {{
+        background: {CONFLICT_BG};
+    }}
     QPushButton#modeButton {{
         background: {SURFACE};
         border: 1px solid {BORDER_INPUT};

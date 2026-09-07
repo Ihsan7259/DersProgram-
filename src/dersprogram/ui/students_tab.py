@@ -100,8 +100,10 @@ class StudentsTab(QWidget):
 
         button_row = QHBoxLayout()
         self.add_button = QPushButton("Öğrenci Ekle")
+        self.add_button.setObjectName("primaryButton")
         self.update_button = QPushButton("Güncelle")
         self.delete_button = QPushButton("Sil")
+        self.delete_button.setObjectName("dangerButton")
         self.clear_button = QPushButton("Temizle")
         for b in (self.add_button, self.update_button, self.delete_button, self.clear_button):
             button_row.addWidget(b)
@@ -138,6 +140,7 @@ class StudentsTab(QWidget):
         list_header_row.addWidget(_section_title("Öğrenci Listesi"))
         list_header_row.addStretch()
         self.import_excel_button = QPushButton("Excel'den İçe Aktar")
+        self.import_excel_button.setObjectName("outlineButton")
         self.import_excel_button.clicked.connect(self.handle_import_excel)
         list_header_row.addWidget(self.import_excel_button)
         right_layout.addLayout(list_header_row)
@@ -160,7 +163,7 @@ class StudentsTab(QWidget):
         bulk_row.addWidget(self.select_all_checkbox)
         bulk_row.addStretch()
         self.bulk_delete_button = QPushButton("Seçilenleri Sil")
-        self.bulk_delete_button.setObjectName("outlineButton")
+        self.bulk_delete_button.setObjectName("dangerButton")
         self.bulk_delete_button.setEnabled(False)
         self.bulk_delete_button.clicked.connect(self.handle_bulk_delete)
         bulk_row.addWidget(self.bulk_delete_button)

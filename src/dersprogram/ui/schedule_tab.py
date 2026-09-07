@@ -754,7 +754,7 @@ class ScheduleTab(QWidget):
         self.unplaced_report_button.clicked.connect(self.handle_show_unplaced_report)
         pool_header.addWidget(self.unplaced_report_button)
         self.pool_delete_button = QPushButton("Seçili Dersi Sil")
-        self.pool_delete_button.setObjectName("outlineButton")
+        self.pool_delete_button.setObjectName("dangerButton")
         self.pool_delete_button.clicked.connect(self.handle_delete_pool_lesson)
         pool_header.addWidget(self.pool_delete_button)
         pool_layout.addLayout(pool_header)

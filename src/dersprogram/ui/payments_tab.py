@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..db import Database
+from .widgets import section_title as _section_title, divider as _divider
 
 
 class PaymentsTab(QWidget):
@@ -36,13 +37,19 @@ class PaymentsTab(QWidget):
 
         layout = QHBoxLayout(self)
 
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(_section_title("Öğrenci Listesi"))
         self.student_list = QListWidget()
-        self.student_list.setMaximumWidth(260)
-        layout.addWidget(self.student_list)
+        left_layout.addWidget(self.student_list, 1)
+        left.setMaximumWidth(260)
+        layout.addWidget(left)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
 
+        right_layout.addWidget(_section_title("Ödeme Bilgileri"))
         self.fees_label = QLabel("Bir öğrenci seçin.")
         right_layout.addWidget(self.fees_label)
 
@@ -53,6 +60,8 @@ class PaymentsTab(QWidget):
         self.payments_table.setSelectionBehavior(QTableWidget.SelectRows)
         right_layout.addWidget(self.payments_table, 1)
 
+        right_layout.addWidget(_divider())
+        right_layout.addWidget(_section_title("Yeni Ödeme"))
         form = QFormLayout()
         self.amount_spin = QDoubleSpinBox()
         self.amount_spin.setRange(0, 10_000_000)
@@ -67,7 +76,9 @@ class PaymentsTab(QWidget):
 
         button_row = QHBoxLayout()
         self.add_payment_button = QPushButton("Ödeme Ekle")
+        self.add_payment_button.setObjectName("primaryButton")
         self.delete_payment_button = QPushButton("Seçili Ödemeyi Sil")
+        self.delete_payment_button.setObjectName("dangerButton")
         button_row.addWidget(self.add_payment_button)
         button_row.addWidget(self.delete_payment_button)
         right_layout.addLayout(button_row)

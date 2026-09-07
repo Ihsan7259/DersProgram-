@@ -40,6 +40,7 @@ class AnalysisTab(QWidget):
         self.end_edit.setCalendarPopup(True)
         date_row.addWidget(self.end_edit)
         self.refresh_button = QPushButton("Hesapla")
+        self.refresh_button.setObjectName("primaryButton")
         date_row.addWidget(self.refresh_button)
         date_row.addStretch()
         layout.addLayout(date_row)

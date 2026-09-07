@@ -30,6 +30,8 @@ class TeachersTab(QWidget):
         self.on_change = on_change
         self.selected_id: int | None = None
         self._pending_availability: dict[tuple[int, int], str | None] = {}
+        self._all_rows: list = []
+        self._checked_teacher_ids: set[int] = set()
         # None = "ana sıralama" (yukarı/aşağı oklarıyla elle belirlenen
         # kalıcı sıra); "name"/"subject" = başlığa tıklanınca geçici
         # alfabetik görünüm - aynı başlığa tekrar tıklayınca ana sıraya
@@ -73,8 +75,10 @@ class TeachersTab(QWidget):
 
         button_row = QHBoxLayout()
         self.add_button = QPushButton("Öğretmen Ekle")
+        self.add_button.setObjectName("primaryButton")
         self.update_button = QPushButton("Güncelle")
         self.delete_button = QPushButton("Sil")
+        self.delete_button.setObjectName("dangerButton")
         self.clear_button = QPushButton("Temizle")
         for b in (self.add_button, self.update_button, self.delete_button, self.clear_button):
             button_row.addWidget(b)
@@ -111,21 +115,43 @@ class TeachersTab(QWidget):
         list_header_row = QHBoxLayout()
         list_header_row.addWidget(_section_title("Öğretmen Listesi"))
         list_header_row.addStretch()
-        list_header_row.addWidget(QLabel(
-            "İsim ya da Branşlar başlığına tıklayarak alfabetik sıralayabilirsiniz "
-            "(tekrar tıklayınca elle belirlediğiniz ana sıraya döner)."
-        ))
         right_layout.addLayout(list_header_row)
 
-        self.table_widget = QTableWidget(0, 4)
-        self.table_widget.setHorizontalHeaderLabels(["İsim", "Branşlar", "", ""])
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Öğretmen ara...")
+        self.search_edit.textChanged.connect(self._apply_search_filter)
+        right_layout.addWidget(self.search_edit)
+
+        sort_hint = QLabel(
+            "İsim ya da Branşlar başlığına tıklayarak alfabetik sıralayabilirsiniz "
+            "(tekrar tıklayınca elle belirlediğiniz ana sıraya döner)."
+        )
+        sort_hint.setWordWrap(True)
+        right_layout.addWidget(sort_hint)
+
+        bulk_row = QHBoxLayout()
+        self.select_all_checkbox = QCheckBox("Tümünü Seç")
+        self.select_all_checkbox.toggled.connect(self._handle_select_all_toggled)
+        bulk_row.addWidget(self.select_all_checkbox)
+        bulk_row.addStretch()
+        self.bulk_delete_button = QPushButton("Seçilenleri Sil")
+        self.bulk_delete_button.setObjectName("dangerButton")
+        self.bulk_delete_button.setEnabled(False)
+        self.bulk_delete_button.clicked.connect(self.handle_bulk_delete)
+        bulk_row.addWidget(self.bulk_delete_button)
+        right_layout.addLayout(bulk_row)
+
+        self.table_widget = QTableWidget(0, 5)
+        self.table_widget.setHorizontalHeaderLabels(["", "İsim", "Branşlar", "", ""])
         header = self.table_widget.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
-        self.table_widget.setColumnWidth(2, 30)
+        header.setSectionResizeMode(4, QHeaderView.Fixed)
+        self.table_widget.setColumnWidth(0, 26)
         self.table_widget.setColumnWidth(3, 30)
+        self.table_widget.setColumnWidth(4, 30)
         header.setSortIndicatorShown(False)
         header.sectionClicked.connect(self._handle_header_clicked)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
@@ -158,7 +184,7 @@ class TeachersTab(QWidget):
 
     def _select_row_by_id(self, row_id: int) -> None:
         for r in range(self.table_widget.rowCount()):
-            item = self.table_widget.item(r, 0)
+            item = self.table_widget.item(r, 1)
             if item is not None and item.data(Qt.UserRole) == row_id:
                 self.table_widget.selectRow(r)
                 self.table_widget.scrollToItem(item)
@@ -204,31 +230,58 @@ class TeachersTab(QWidget):
             old_widget.deleteLater()
         self.table_widget.setCellWidget(row, col, widget)
 
-    def refresh(self) -> None:
-        rows = self.db.list_teachers()
+    def _populate_table(self, rows: list) -> None:
+        is_filtered = bool(self.search_edit.text().strip())
+        is_sorted = self._active_sort is not None
+        locked = is_filtered or is_sorted
+        if is_filtered:
+            tip = "Sıralamayı değiştirmek için önce aramayı temizleyin."
+        elif is_sorted:
+            tip = "Yeniden sıralamak için önce ana sıraya dönün (başlığa tekrar tıklayın)."
+        else:
+            tip = ""
+
+        self.table_widget.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            check_container = QWidget()
+            check_layout = QHBoxLayout(check_container)
+            check_layout.setContentsMargins(0, 0, 0, 0)
+            check_layout.setAlignment(Qt.AlignCenter)
+            checkbox = QCheckBox()
+            checkbox.setChecked(row["id"] in self._checked_teacher_ids)
+            checkbox.toggled.connect(lambda checked, tid=row["id"]: self._handle_row_check_toggled(tid, checked))
+            check_layout.addWidget(checkbox)
+            self._set_cell_widget(r, 0, check_container)
+
+            item_name = QTableWidgetItem(row["name"])
+            item_name.setData(Qt.UserRole, row["id"])
+            self.table_widget.setItem(r, 1, item_name)
+            self.table_widget.setItem(r, 2, QTableWidgetItem(row["subject_area"] or ""))
+
+            up_btn = self._move_button("up", enabled=not locked and r > 0, tooltip=tip)
+            up_btn.clicked.connect(lambda _checked=False, tid=row["id"]: self.handle_move(tid, -1))
+            self._set_cell_widget(r, 3, up_btn)
+
+            down_btn = self._move_button("down", enabled=not locked and r < len(rows) - 1, tooltip=tip)
+            down_btn.clicked.connect(lambda _checked=False, tid=row["id"]: self.handle_move(tid, 1))
+            self._set_cell_widget(r, 4, down_btn)
+
+        self._update_bulk_delete_state()
+
+    def _apply_search_filter(self, text: str = "") -> None:
+        query = self.search_edit.text().strip().lower()
+        rows = self._all_rows if not query else [r for r in self._all_rows if query in r["name"].lower()]
         if self._active_sort == "name":
             rows = sorted(rows, key=lambda r: r["name"].lower())
         elif self._active_sort == "subject":
             rows = sorted(rows, key=lambda r: (r["subject_area"] or "").lower())
-        is_sorted = self._active_sort is not None
-        tip = "Yeniden sıralamak için önce ana sıraya dönün (başlığa tekrar tıklayın)." if is_sorted else ""
+        self._populate_table(rows)
 
-        self.table_widget.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            item_name = QTableWidgetItem(row["name"])
-            item_name.setData(Qt.UserRole, row["id"])
-            self.table_widget.setItem(r, 0, item_name)
-            self.table_widget.setItem(r, 1, QTableWidgetItem(row["subject_area"] or ""))
-
-            up_btn = self._move_button("up", enabled=not is_sorted and r > 0, tooltip=tip)
-            up_btn.clicked.connect(lambda _checked=False, tid=row["id"]: self.handle_move(tid, -1))
-            self._set_cell_widget(r, 2, up_btn)
-
-            down_btn = self._move_button("down", enabled=not is_sorted and r < len(rows) - 1, tooltip=tip)
-            down_btn.clicked.connect(lambda _checked=False, tid=row["id"]: self.handle_move(tid, 1))
-            self._set_cell_widget(r, 3, down_btn)
+    def refresh(self) -> None:
+        self._all_rows = self.db.list_teachers()
         current = set(self._selected_subject_ids())
         self._refresh_subject_choices(checked_ids=current)
+        self._apply_search_filter()
         self.refresh_detail()
 
     def handle_move(self, teacher_id: int, direction: int) -> None:
@@ -239,7 +292,7 @@ class TeachersTab(QWidget):
             self._select_row_by_id(selected)
 
     def _handle_header_clicked(self, column: int) -> None:
-        target = {0: "name", 1: "subject"}.get(column)
+        target = {1: "name", 2: "subject"}.get(column)
         if target is None:
             return
         self._active_sort = None if self._active_sort == target else target
@@ -250,9 +303,54 @@ class TeachersTab(QWidget):
             header.setSortIndicatorShown(True)
             header.setSortIndicator(column, Qt.AscendingOrder)
         selected = self.selected_id
-        self.refresh()
+        self._apply_search_filter()
         if selected is not None:
             self._select_row_by_id(selected)
+
+    # ---------- toplu seçim / toplu silme ----------
+    def _handle_row_check_toggled(self, teacher_id: int, checked: bool) -> None:
+        if checked:
+            self._checked_teacher_ids.add(teacher_id)
+        else:
+            self._checked_teacher_ids.discard(teacher_id)
+        self._update_bulk_delete_state()
+
+    def _update_bulk_delete_state(self) -> None:
+        count = len(self._checked_teacher_ids)
+        self.bulk_delete_button.setEnabled(count > 0)
+        self.bulk_delete_button.setText(f"Seçilenleri Sil ({count})" if count else "Seçilenleri Sil")
+
+    def _handle_select_all_toggled(self, checked: bool) -> None:
+        for r in range(self.table_widget.rowCount()):
+            container = self.table_widget.cellWidget(r, 0)
+            if container is None:
+                continue
+            checkbox = container.findChild(QCheckBox)
+            if checkbox is not None:
+                checkbox.setChecked(checked)
+
+    def handle_bulk_delete(self) -> None:
+        ids = list(self._checked_teacher_ids)
+        if not ids:
+            return
+        names = [r["name"] for r in self._all_rows if r["id"] in self._checked_teacher_ids]
+        preview = "\n".join(f"- {n}" for n in names[:10])
+        if len(names) > 10:
+            preview += f"\n... ve {len(names) - 10} tane daha"
+        confirm = QMessageBox.question(
+            self, "Toplu Silme Onayı",
+            f"{len(ids)} öğretmen silinsin mi?\nBu öğretmenlere ait ders blokları da silinir.\n\n" + preview,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        for teacher_id in ids:
+            self.db.delete_teacher(teacher_id)
+        self._checked_teacher_ids.clear()
+        self.select_all_checkbox.setChecked(False)
+        self.clear_form()
+        self.refresh()
+        if self.on_change:
+            self.on_change()
 
     def refresh_detail(self) -> None:
         self._pending_availability = {}
@@ -297,7 +395,7 @@ class TeachersTab(QWidget):
             self.refresh_detail()
             return
         row = items[0].row()
-        name_item = self.table_widget.item(row, 0)
+        name_item = self.table_widget.item(row, 1)
         self.selected_id = name_item.data(Qt.UserRole)
         self.name_edit.setText(name_item.text())
         self._refresh_subject_choices(checked_ids=set(self.db.get_teacher_subject_ids(self.selected_id)))
