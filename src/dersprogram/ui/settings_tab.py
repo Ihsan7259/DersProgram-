@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QLabel,
     QFrame,
+    QFileDialog,
 )
 
 from ..db import Database
@@ -44,10 +45,16 @@ def _divider() -> QFrame:
 
 
 class SettingsTab(QWidget):
-    def __init__(self, db: Database, on_change=None):
+    def __init__(self, db: Database, on_change=None, on_restore_requested=None):
         super().__init__()
         self.db = db
         self.on_change = on_change
+        # Yedekten geri yükleme, sadece bu sekmenin kendi self.db'sini değil
+        # TÜM açık sekmeleri (yeni bir Database örneğiyle) yeniden kurmayı
+        # gerektirir - bu yüzden gerçek işlem MainWindow'da yapılır, burası
+        # sadece dosyayı seçtirip callback'i çağırır (bkz. main_window.py
+        # handle_restore_backup).
+        self.on_restore_requested = on_restore_requested
 
         layout = QVBoxLayout(self)
 
@@ -140,7 +147,65 @@ class SettingsTab(QWidget):
         seed_button.clicked.connect(self.handle_seed_demo_data)
         layout.addWidget(seed_button)
 
+        layout.addWidget(_divider())
+
+        # ---------- yedekleme ----------
+        layout.addWidget(_section_label("Yedekleme"))
+        layout.addWidget(QLabel(
+            "Verileriniz program açıkken otomatik olarak (arka planda, hiçbir şey "
+            "yapmanıza gerek kalmadan) periyodik olarak ve program kapanırken yedeklenir. "
+            "Birden fazla bilgisayarda çalışıyorsanız, verinizi bir bilgisayardan diğerine "
+            "taşımak için aşağıdaki düğmeleri kullanabilirsiniz (ör. yedeği bir USB belleğe "
+            "ya da bulut klasörüne kaydedip diğer bilgisayarda geri yükleyerek)."
+        ))
+        backup_row = QHBoxLayout()
+        export_backup_button = QPushButton("Yedeği Dışa Aktar")
+        export_backup_button.setObjectName("outlineButton")
+        export_backup_button.clicked.connect(self.handle_export_backup)
+        backup_row.addWidget(export_backup_button)
+        import_backup_button = QPushButton("Yedekten Geri Yükle")
+        import_backup_button.setObjectName("dangerButton")
+        import_backup_button.clicked.connect(self.handle_import_backup)
+        backup_row.addWidget(import_backup_button)
+        backup_row.addStretch()
+        layout.addLayout(backup_row)
+
         layout.addStretch()
+
+    def handle_export_backup(self) -> None:
+        default_name = f"ders_programi_yedek_{_dt.date.today().isoformat()}.db"
+        path, _ = QFileDialog.getSaveFileName(self, "Yedeği Dışa Aktar", default_name, "Veritabanı Dosyası (*.db)")
+        if not path:
+            return
+        if not path.lower().endswith(".db"):
+            path += ".db"
+        try:
+            self.db.backup_to(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Hata", f"Yedek oluşturulamadı:\n{exc}")
+            return
+        QMessageBox.information(
+            self, "Yedek Kaydedildi",
+            f"Yedek şu konuma kaydedildi:\n{path}\n\n"
+            "Bu dosyayı başka bir bilgisayara taşıyıp Ayarlar'daki "
+            "'Yedekten Geri Yükle' ile açabilirsiniz.",
+        )
+
+    def handle_import_backup(self) -> None:
+        if self.on_restore_requested is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Yedekten Geri Yükle", "", "Veritabanı Dosyası (*.db)")
+        if not path:
+            return
+        confirm = QMessageBox.question(
+            self, "Yedekten Geri Yükle",
+            "Mevcut verileriniz, seçtiğiniz yedek dosyasındaki verilerle DEĞİŞTİRİLECEK "
+            "(mevcut hali önce ayrıca otomatik yedeklenecek, ama bu ekrandaki değişiklikler "
+            "kaybolur). Devam edilsin mi?",
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        self.on_restore_requested(path)
 
     def handle_seed_demo_data(self) -> None:
         confirm = QMessageBox.question(

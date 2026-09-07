@@ -9,7 +9,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .db import Database, default_db_path
-from . import institutions, seed
+from . import backup, institutions, seed
 from .ui import theme
 from .ui.main_window import MainWindow
 
@@ -49,6 +49,7 @@ def main() -> int:
     _install_crash_handler()
     app = QApplication(sys.argv)
     app.setApplicationName("Ders Programı")
+    app.setWindowIcon(theme.app_icon())
     theme.load_fonts()
     app.setFont(QFont(theme.FONT_BODY))
 
@@ -60,6 +61,11 @@ def main() -> int:
     is_default_institution = active_institution["file"] == default_db_path().name
     if is_default_institution and seed.is_empty(db):
         seed.seed_demo_data(db)
+
+    # Sessiz otomatik yedek: açılışta (bu oturumda yapılacak değişikliklerden
+    # ÖNCEKİ hali yakalamak için), sonra MainWindow periyodik olarak ve kurum
+    # değiştirilirken/kapanırken de yedek alır (bkz. ui/main_window.py).
+    backup.backup_now(db, active_institution["file"])
 
     # Fusion stili + kendi paletimiz: Windows'un açık/koyu sistem temasından
     # bağımsız, her zaman tutarlı ve okunaklı bir görünüm sağlar (aksi halde
@@ -74,7 +80,11 @@ def main() -> int:
     window.show()
 
     exit_code = app.exec()
-    db.close()
+    # window.db/current_institution (self, oturum sırasında kurum
+    # değiştirilmiş olabileceğinden başlangıçtaki db/active_institution
+    # yerine ANLIK olanı kullanıyoruz) kapanmadan önce son bir kez yedeklenir.
+    backup.backup_now(window.db, window.current_institution["file"])
+    window.db.close()
     return exit_code
 
 

@@ -23,7 +23,7 @@ jobs:
 
       - name: exe olustur
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "DersProgrami" --paths src --add-data "src\dersprogram\assets;dersprogram\assets" --collect-all ortools src\run_app.py
+          pyinstaller --noconfirm --onefile --windowed --name "DersProgrami" --icon "src\dersprogram\assets\icons\app.ico" --paths src --add-data "src\dersprogram\assets;dersprogram\assets" --collect-all ortools src\run_app.py
 
       - uses: actions/upload-artifact@v4
         with:

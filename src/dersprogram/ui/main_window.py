@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import shutil
+
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QStackedWidget, QMessageBox
 
-from .. import institutions
+from .. import backup, institutions
 from ..db import Database
 from .list_tab import ListTab
 from .schedule_tab import ScheduleTab
@@ -47,6 +50,18 @@ class MainWindow(QMainWindow):
         self.sidebar.set_institution_name(self.current_institution["name"])
         self._build_content(db)
 
+        # Sessiz otomatik yedek: program açık kaldığı sürece periyodik olarak
+        # (kurum değiştirilse bile bu zamanlayıcı hep aynı kalır, her tikte
+        # O AN aktif olan self.db/self.current_institution'ı yedekler).
+        # Kapanırken/kurum değiştirilirken ayrıca yedek alınır (bkz. main.py,
+        # handle_switch_institution).
+        self._backup_timer = QTimer(self)
+        self._backup_timer.timeout.connect(self._run_silent_backup)
+        self._backup_timer.start(15 * 60 * 1000)
+
+    def _run_silent_backup(self) -> None:
+        backup.backup_now(self.db, self.current_institution["file"])
+
     def _build_content(self, db: Database) -> None:
         self.db = db
 
@@ -77,7 +92,7 @@ class MainWindow(QMainWindow):
         self.rooms_tab = ListTab(db, "rooms", "Derslik", on_change=self._on_reference_change)
         self.analysis_tab = AnalysisTab(db)
         self.payments_tab = PaymentsTab(db)
-        self.settings_tab = SettingsTab(db, on_change=self._on_settings_change)
+        self.settings_tab = SettingsTab(db, on_change=self._on_settings_change, on_restore_requested=self.handle_restore_backup)
 
         self.pages = {
             "ana-program": (self.schedule_tab, "Ana Program", "Haftalık ders programını buradan düzenleyin"),
@@ -127,15 +142,39 @@ class MainWindow(QMainWindow):
             return
 
         old_db = self.db
+        # Ayrılınan kurumun son halini yedekle - kullanıcı hiçbir şey
+        # görmeden, tam kurum değiştirmeden önceki bir güvenlik kopyası.
+        backup.backup_now(old_db, self.current_institution["file"])
         new_db = Database(institutions.institution_db_path(entry))
         old_db.close()
 
         institutions.set_active_institution(entry)
         self.current_institution = entry
         self.sidebar.set_institution_name(entry["name"])
+        self._replace_database(new_db)
 
-        # Kurumun kendi tema tercihini uygula (aksi halde önceki kurumun
-        # açık/koyu tema seçimi yeni kurumda da görünmeye devam ederdi).
+    def handle_restore_backup(self, backup_path: str) -> None:
+        """Ayarlar sekmesindeki 'Yedekten Geri Yükle' düğmesinden çağrılır -
+        kullanıcı zaten dosyayı seçip onayladı (bkz. settings_tab.py); burada
+        AKTİF kurumun veritabanı seçilen yedek dosyasıyla değiştirilir."""
+        target_path = institutions.institution_db_path(self.current_institution)
+        old_db = self.db
+        # Geri yüklemeden hemen önce MEVCUT hali de yedekle - yanlış dosya
+        # seçilirse bu son bir güvenlik ağı olur.
+        backup.backup_now(old_db, self.current_institution["file"])
+        old_db.close()
+        shutil.copy2(backup_path, target_path)
+        new_db = Database(target_path)
+        self._replace_database(new_db)
+        QMessageBox.information(self, "Tamamlandı", "Yedek başarıyla geri yüklendi.")
+
+    def _replace_database(self, new_db: Database) -> None:
+        """self.db'yi (ve ona bağlı tüm sekmeleri) yeni bir Database
+        örneğiyle değiştirir - kurum değiştirmede (bkz. handle_switch_
+        institution) ve yedekten geri yüklemede (bkz. handle_restore_backup)
+        ortak kullanılır."""
+        # Kurumun kendi tema tercihini uygula (aksi halde önceki verinin
+        # açık/koyu tema seçimi yeni veride de görünmeye devam ederdi).
         theme.apply_theme(new_db.theme)
         app = QApplication.instance()
         if app is not None:

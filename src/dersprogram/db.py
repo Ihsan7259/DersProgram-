@@ -990,3 +990,17 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    def backup_to(self, dest_path: Path | str) -> None:
+        """Veritabanının tutarlı (yarım kalmış yazma içermeyen) bir kopyasını
+        dest_path'e yazar - SQLite'ın kendi yedekleme API'sini kullanır, bu
+        yüzden dosyayı elle kopyalamaktan farklı olarak bağlantı açıkken/
+        kullanımdayken de güvenlidir (bkz. backup.py - sessiz otomatik
+        yedekleme ve Ayarlar'daki elle dışa/içe aktarma bunu kullanır)."""
+        dest_path = Path(dest_path)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_conn = sqlite3.connect(dest_path)
+        try:
+            self.conn.backup(dest_conn)
+        finally:
+            dest_conn.close()

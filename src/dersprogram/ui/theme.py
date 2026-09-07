@@ -210,6 +210,13 @@ def load_fonts() -> None:
     QFontDatabase.addApplicationFont(str(fonts_dir / "WorkSans.ttf"))
 
 
+def app_icon() -> QIcon:
+    """Uygulama/pencere simgesi (taskbar, pencere başlığı) - .exe'nin kendi
+    simgesi PyInstaller --icon ile ayrıca gömülür (bkz. build-windows-exe.yml),
+    burası SADECE çalışırkenki pencere simgesini ayarlar."""
+    return QIcon(str(_assets_dir() / "icons" / "app.png"))
+
+
 def icon(path_d: str, color: str | None = None, size: int = 18) -> QIcon:
     color = color or INK_MUTED_58
     svg = (

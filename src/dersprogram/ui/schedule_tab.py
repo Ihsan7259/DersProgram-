@@ -11,9 +11,10 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QMimeData, QRect, QSize, QThread, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtCore import QMarginsF, QRectF, Qt, QMimeData, QRect, QSize, QThread, Signal
+from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QFontMetrics, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QLayout,
     QAbstractItemView,
+    QFileDialog,
     QMessageBox,
     QSplitter,
     QButtonGroup,
@@ -684,6 +686,12 @@ class ScheduleTab(QWidget):
         toolbar.addWidget(self.zoom_out_button)
         toolbar.addWidget(self.zoom_label)
         toolbar.addWidget(self.zoom_in_button)
+        self.copy_grid_button = QPushButton("  Kopyala")
+        self.copy_grid_button.setObjectName("outlineButton")
+        self.copy_grid_button.setToolTip("Haftalık programın tamamını görsel olarak panoya kopyalar.")
+        self.export_pdf_button = QPushButton("  PDF")
+        self.export_pdf_button.setObjectName("outlineButton")
+        self.export_pdf_button.setToolTip("Haftalık programın tamamını PDF dosyası olarak kaydeder.")
         self.add_lesson_button = QPushButton("  Ders Ekle")
         self.add_lesson_button.setObjectName("outlineButton")
         self.add_lesson_button.setIcon(theme.icon(theme.NAV_ICONS["plus"], theme.ACCENT_HOVER))
@@ -694,6 +702,8 @@ class ScheduleTab(QWidget):
         self.undo_auto_assign_button.setObjectName("outlineButton")
         self.undo_auto_assign_button.setVisible(False)
         toolbar.addStretch()
+        toolbar.addWidget(self.copy_grid_button)
+        toolbar.addWidget(self.export_pdf_button)
         toolbar.addWidget(self.add_lesson_button)
         toolbar.addWidget(self.auto_assign_button)
         toolbar.addWidget(self.undo_auto_assign_button)
@@ -796,6 +806,8 @@ class ScheduleTab(QWidget):
 
         layout.addWidget(splitter, 1)
 
+        self.copy_grid_button.clicked.connect(self.handle_copy_grid_image)
+        self.export_pdf_button.clicked.connect(self.handle_export_pdf)
         self.add_lesson_button.clicked.connect(self.handle_add_lesson)
         self.auto_assign_button.clicked.connect(self.handle_auto_assign)
         self.undo_auto_assign_button.clicked.connect(self.handle_undo_auto_assign)
@@ -815,6 +827,80 @@ class ScheduleTab(QWidget):
         zoom = round(min(2.2, max(0.7, self.grid._zoom + delta)), 2)
         self.grid.set_zoom(zoom)
         self.zoom_label.setText(f"{round(zoom * 100)}%")
+
+    # ---------- PDF / görsel kopyalama ----------
+    def _render_grid_pixmap(self) -> QPixmap:
+        """Izgaranın TAMAMINI (o an ekranda görünen kısmı değil) tek bir
+        görsele çizer. Sütunlar zaten Stretch modunda oldukları için
+        (bkz. MainGrid._apply_column_sizing) yatayda hep pencereye sığar;
+        asıl sorun dikeyde - satır sayısı fazlaysa dikey kaydırma çubuğu
+        çıkar ve normalde sadece görünen kısım render edilir. Bunu aşmak
+        için ızgarayı geçici olarak tüm satırları kapsayacak yüksekliğe
+        büyütüp öyle render ediyoruz, sonra eski boyutuna geri döndürüyoruz."""
+        grid = self.grid
+        old_width = grid.width()
+        old_height = grid.height()
+        old_v_policy = grid.verticalScrollBarPolicy()
+
+        total_height = grid.horizontalHeader().height() + 2 * grid.frameWidth()
+        for row in range(grid.rowCount()):
+            total_height += grid.rowHeight(row)
+
+        grid.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        grid.resize(old_width, total_height)
+
+        pixmap = QPixmap(old_width, total_height)
+        pixmap.fill(Qt.white)
+        grid.render(pixmap)
+
+        grid.resize(old_width, old_height)
+        grid.setVerticalScrollBarPolicy(old_v_policy)
+        return pixmap
+
+    def handle_export_pdf(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "PDF Olarak Kaydet", "haftalik_program.pdf", "PDF Dosyası (*.pdf)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path += ".pdf"
+
+        pixmap = self._render_grid_pixmap()
+
+        writer = QPdfWriter(path)
+        writer.setPageSize(QPageSize(QPageSize.A4))
+        writer.setPageOrientation(QPageLayout.Landscape)
+        writer.setPageMargins(QMarginsF(10, 10, 10, 10))
+        writer.setResolution(150)
+
+        painter = QPainter(writer)
+        page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
+        scale = min(
+            page_rect.width() / pixmap.width(),
+            page_rect.height() / pixmap.height(),
+        )
+        scaled_w = pixmap.width() * scale
+        scaled_h = pixmap.height() * scale
+        x = page_rect.x() + (page_rect.width() - scaled_w) / 2
+        y = page_rect.y() + (page_rect.height() - scaled_h) / 2
+        target_rect = QRectF(x, y, scaled_w, scaled_h)
+        painter.drawPixmap(target_rect, pixmap, QRectF(pixmap.rect()))
+        painter.end()
+
+        QMessageBox.information(
+            self, "PDF Oluşturuldu", f"Haftalık program PDF olarak kaydedildi:\n{path}"
+        )
+
+    def handle_copy_grid_image(self) -> None:
+        pixmap = self._render_grid_pixmap()
+        QApplication.clipboard().setPixmap(pixmap)
+        QMessageBox.information(
+            self,
+            "Panoya Kopyalandı",
+            "Haftalık program görsel olarak panoya kopyalandı.\n"
+            "Artık başka bir programa (Word, WhatsApp, e-posta vb.) yapıştırabilirsiniz.",
+        )
         # Hücre kartlarını (sabit boyutlu widget'lar) yeni satır/sütun
         # ölçüsüne göre baştan oluştur - sadece boyut değiştirmek eski
         # widget'lardan görsel kalıntı bırakabiliyor.
