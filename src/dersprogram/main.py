@@ -77,7 +77,11 @@ def main() -> int:
     app.setPalette(theme.build_palette(mode))
 
     window = MainWindow(db, institution_entry=active_institution)
-    window.show()
+    # Pencere her zaman ekrana tam sığacak şekilde (maksimize) açılır -
+    # aksi halde küçük/dizüstü ekranlarda pencere ekrandan taşıp kullanıcının
+    # elle büyütmesi/sürüklemesi gerekiyordu (bkz. MainWindow._apply_initial_size
+    # - kullanıcı sonradan tam ekrandan çıkarsa o boyut geçerli olur).
+    window.showMaximized()
 
     exit_code = app.exec()
     # window.db/current_institution (self, oturum sırasında kurum

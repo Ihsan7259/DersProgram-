@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QStackedWidget, QMessageBox
 
 from .. import backup, institutions
@@ -24,7 +25,7 @@ class MainWindow(QMainWindow):
     def __init__(self, db: Database, institution_entry: dict | None = None):
         super().__init__()
         self.setWindowTitle("Ders Programı")
-        self.resize(1400, 880)
+        self._apply_initial_size()
         self.setStyleSheet(theme.stylesheet())
 
         central = QWidget()
@@ -58,6 +59,25 @@ class MainWindow(QMainWindow):
         self._backup_timer = QTimer(self)
         self._backup_timer.timeout.connect(self._run_silent_backup)
         self._backup_timer.start(15 * 60 * 1000)
+
+    def _apply_initial_size(self) -> None:
+        """Sabit 1400x880 yerine ekranın kullanılabilir alanına göre boyut
+        seçer - küçük/dizüstü ekranlarda pencere ekrandan taşıp kullanıcının
+        elle büyütmesini/sürüklemesini gerektirmesin diye (bkz. main.py -
+        pencere ayrıca doğrudan tam ekran/maksimize açılır, bu boyut sadece
+        kullanıcı sonradan tam ekrandan çıkarsa geçerli olur)."""
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(1400, 880)
+            return
+        available = screen.availableGeometry()
+        # ÖNCE ekrana göre sınırla, SONRA 1400x880'i tavan olarak uygula -
+        # tersi (küçük ekranlarda 900/600 gibi bir alt sınır dayatmak)
+        # ekrandan daha büyük bir pencereye yol açabilir, ki asıl önlemeye
+        # çalıştığımız sorun bu.
+        width = min(1400, max(available.width() - 40, 1))
+        height = min(880, max(available.height() - 40, 1))
+        self.resize(width, height)
 
     def _run_silent_backup(self) -> None:
         backup.backup_now(self.db, self.current_institution["file"])

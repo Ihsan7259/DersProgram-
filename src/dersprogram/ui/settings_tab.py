@@ -1,8 +1,12 @@
 """Gün sayısı / ders saati sayısı, görünüm (tema) ve dönem tarihleri gibi
-genel ayarlar."""
+genel ayarlar - ayar tipine göre ayrı sekmelere (Görünüm / Program Günleri
+ve Saatleri / Dönem Tarihleri / Veri Yönetimi) bölünmüştür; her sekme kendi
+kaydırma alanına sahiptir ki içerik pencereden taşarsa (ör. çok sayıda ders
+saati satırı) alt kısımlar erişilemez hale gelmesin."""
 from __future__ import annotations
 
 import datetime as _dt
+from pathlib import Path
 
 from PySide6.QtCore import QDate, QTime
 from PySide6.QtWidgets import (
@@ -20,10 +24,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QFrame,
     QFileDialog,
+    QScrollArea,
+    QTabWidget,
+    QDialog,
+    QDialogButtonBox,
 )
 
 from ..db import Database
-from .. import seed
+from .. import seed, institutions
 
 ALL_DAYS = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
@@ -44,6 +52,64 @@ def _divider() -> QFrame:
     return line
 
 
+def _safe_filename(name: str) -> str:
+    cleaned = "".join(c if (c.isalnum() or c in "-_ ") else "_" for c in name).strip()
+    return cleaned or "kurum"
+
+
+class InstitutionExportDialog(QDialog):
+    """'Yedeği Dışa Aktar'da hangi kurum(lar)ın dışa aktarılacağını seçtirir.
+    Birden fazla kurum işaretlenebilir - ama her biri (birleştirilmeden)
+    kendi ayrı dosyasına yedeklenir (bkz. SettingsTab.handle_export_backup)."""
+
+    def __init__(self, entries: list[dict], active_file: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Yedeği Dışa Aktar - Kurum Seçimi")
+        self.resize(380, 380)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            "Dışa aktarmak istediğiniz kurum(lar)ı seçin - her biri kendi ayrı "
+            "dosyası olarak seçeceğiniz klasöre kaydedilir (kurumlar birleştirilmez)."
+        ))
+
+        self._checks: list[tuple[QCheckBox, dict]] = []
+        for entry in entries:
+            label = entry["name"]
+            if entry["file"] == active_file:
+                label += "  (şu an aktif)"
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(entry["file"] == active_file)
+            self._checks.append((checkbox, entry))
+            layout.addWidget(checkbox)
+        layout.addStretch()
+
+        select_row = QHBoxLayout()
+        all_button = QPushButton("Tümünü Seç")
+        all_button.clicked.connect(lambda: self._set_all(True))
+        select_row.addWidget(all_button)
+        none_button = QPushButton("Hiçbirini Seçme")
+        none_button.clicked.connect(lambda: self._set_all(False))
+        select_row.addWidget(none_button)
+        select_row.addStretch()
+        layout.addLayout(select_row)
+
+        buttons = QDialogButtonBox()
+        export_button = buttons.addButton("Dışa Aktar", QDialogButtonBox.AcceptRole)
+        export_button.setObjectName("primaryButton")
+        buttons.addButton("Vazgeç", QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _set_all(self, checked: bool) -> None:
+        for checkbox, _entry in self._checks:
+            checkbox.setChecked(checked)
+
+    def selected_entries(self) -> list[dict]:
+        return [entry for checkbox, entry in self._checks if checkbox.isChecked()]
+
+
 class SettingsTab(QWidget):
     def __init__(self, db: Database, on_change=None, on_restore_requested=None):
         super().__init__()
@@ -56,9 +122,40 @@ class SettingsTab(QWidget):
         # handle_restore_backup).
         self.on_restore_requested = on_restore_requested
 
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
 
-        # ---------- görünüm ----------
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_appearance_tab(), "Görünüm")
+        self.tabs.addTab(self._build_schedule_tab(), "Program Günleri ve Saatleri")
+        self.tabs.addTab(self._build_term_tab(), "Dönem Tarihleri")
+        self.tabs.addTab(self._build_data_tab(), "Veri Yönetimi")
+        outer_layout.addWidget(self.tabs, 1)
+
+        save_row = QHBoxLayout()
+        save_button = QPushButton("Ayarları Kaydet")
+        save_button.setObjectName("primaryButton")
+        save_button.setToolTip(
+            "Görünüm, Program Günleri ve Saatleri, Dönem Tarihleri sekmelerindeki "
+            "değişiklikleri kaydeder (Veri Yönetimi sekmesindeki işlemler kendi "
+            "düğmelerine basıldığında anında uygulanır)."
+        )
+        save_button.clicked.connect(self.save)
+        save_row.addWidget(save_button)
+        save_row.addStretch()
+        outer_layout.addLayout(save_row)
+
+    @staticmethod
+    def _wrap_scroll(inner: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(inner)
+        return scroll
+
+    # ---------- Görünüm ----------
+    def _build_appearance_tab(self) -> QScrollArea:
+        page = QWidget()
+        layout = QVBoxLayout(page)
         layout.addWidget(_section_label("Görünüm"))
         appearance_form = QFormLayout()
         self.theme_combo = QComboBox()
@@ -68,10 +165,13 @@ class SettingsTab(QWidget):
         self.theme_combo.setCurrentIndex(idx if idx >= 0 else 0)
         appearance_form.addRow("Tema:", self.theme_combo)
         layout.addLayout(appearance_form)
+        layout.addStretch()
+        return self._wrap_scroll(page)
 
-        layout.addWidget(_divider())
-
-        # ---------- program günleri ----------
+    # ---------- Program Günleri ve Saatleri ----------
+    def _build_schedule_tab(self) -> QScrollArea:
+        page = QWidget()
+        layout = QVBoxLayout(page)
         layout.addWidget(_section_label("Program Günleri ve Saatleri"))
         layout.addWidget(QLabel(
             "Not: Ders saati sayısını sonradan azaltırsanız, silinen saatlerdeki "
@@ -105,10 +205,13 @@ class SettingsTab(QWidget):
         layout.addLayout(self.period_times_layout)
         self.period_spin.valueChanged.connect(self._rebuild_period_time_rows)
         self._rebuild_period_time_rows()
+        layout.addStretch()
+        return self._wrap_scroll(page)
 
-        layout.addWidget(_divider())
-
-        # ---------- dönem tarihleri ----------
+    # ---------- Dönem Tarihleri ----------
+    def _build_term_tab(self) -> QScrollArea:
+        page = QWidget()
+        layout = QVBoxLayout(page)
         layout.addWidget(_section_label("Dönem Tarihleri"))
         layout.addWidget(QLabel(
             "Bu tarihler bilgilendirme amaçlıdır; program yerleştirmelerinde "
@@ -128,15 +231,14 @@ class SettingsTab(QWidget):
         self.term_end_edit.setDate(default_end)
         term_form.addRow("Dönem Bitişi:", self.term_end_edit)
         layout.addLayout(term_form)
+        layout.addStretch()
+        return self._wrap_scroll(page)
 
-        save_button = QPushButton("Ayarları Kaydet")
-        save_button.setObjectName("primaryButton")
-        save_button.clicked.connect(self.save)
-        layout.addWidget(save_button)
+    # ---------- Veri Yönetimi (örnek veri + yedekleme) ----------
+    def _build_data_tab(self) -> QScrollArea:
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
-        layout.addWidget(_divider())
-
-        # ---------- örnek veri ----------
         layout.addWidget(_section_label("Örnek Veri"))
         layout.addWidget(QLabel(
             "Programı denemek için tüm sekmelere (öğretmen, öğrenci, sınıf, ders, "
@@ -149,14 +251,14 @@ class SettingsTab(QWidget):
 
         layout.addWidget(_divider())
 
-        # ---------- yedekleme ----------
         layout.addWidget(_section_label("Yedekleme"))
         layout.addWidget(QLabel(
             "Verileriniz program açıkken otomatik olarak (arka planda, hiçbir şey "
             "yapmanıza gerek kalmadan) periyodik olarak ve program kapanırken yedeklenir. "
             "Birden fazla bilgisayarda çalışıyorsanız, verinizi bir bilgisayardan diğerine "
             "taşımak için aşağıdaki düğmeleri kullanabilirsiniz (ör. yedeği bir USB belleğe "
-            "ya da bulut klasörüne kaydedip diğer bilgisayarda geri yükleyerek)."
+            "ya da bulut klasörüne kaydedip diğer bilgisayarda geri yükleyerek). Dışa aktarırken "
+            "birden fazla kurum seçebilirsiniz - her biri kendi ayrı dosyasına kaydedilir."
         ))
         backup_row = QHBoxLayout()
         export_backup_button = QPushButton("Yedeği Dışa Aktar")
@@ -171,25 +273,55 @@ class SettingsTab(QWidget):
         layout.addLayout(backup_row)
 
         layout.addStretch()
+        return self._wrap_scroll(page)
 
     def handle_export_backup(self) -> None:
-        default_name = f"ders_programi_yedek_{_dt.date.today().isoformat()}.db"
-        path, _ = QFileDialog.getSaveFileName(self, "Yedeği Dışa Aktar", default_name, "Veritabanı Dosyası (*.db)")
-        if not path:
+        entries = institutions.list_institutions()
+        if not entries:
+            QMessageBox.information(self, "Kurum Yok", "Dışa aktarılacak bir kurum bulunamadı.")
             return
-        if not path.lower().endswith(".db"):
-            path += ".db"
-        try:
-            self.db.backup_to(path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Hata", f"Yedek oluşturulamadı:\n{exc}")
+        active = institutions.get_active_institution()
+        dialog = InstitutionExportDialog(entries, active["file"], self)
+        if dialog.exec() != QDialog.Accepted:
             return
-        QMessageBox.information(
-            self, "Yedek Kaydedildi",
-            f"Yedek şu konuma kaydedildi:\n{path}\n\n"
-            "Bu dosyayı başka bir bilgisayara taşıyıp Ayarlar'daki "
-            "'Yedekten Geri Yükle' ile açabilirsiniz.",
-        )
+        selected = dialog.selected_entries()
+        if not selected:
+            return
+
+        folder = QFileDialog.getExistingDirectory(self, "Yedeklerin Kaydedileceği Klasör")
+        if not folder:
+            return
+        folder_path = Path(folder)
+
+        saved_names: list[str] = []
+        failed: list[str] = []
+        for entry in selected:
+            src_path = institutions.institution_db_path(entry)
+            if not src_path.exists():
+                failed.append(f"{entry['name']} (henüz hiç kullanılmamış, kaydedilecek verisi yok)")
+                continue
+            dest = folder_path / f"{_safe_filename(entry['name'])}.db"
+            try:
+                source_db = Database(src_path)
+                try:
+                    source_db.backup_to(dest)
+                finally:
+                    source_db.close()
+                saved_names.append(entry["name"])
+            except Exception as exc:
+                failed.append(f"{entry['name']}: {exc}")
+
+        if saved_names:
+            message = "Şu kurumlar ayrı dosyalar olarak dışa aktarıldı:\n- " + "\n- ".join(saved_names)
+            message += f"\n\nKlasör:\n{folder_path}"
+            if failed:
+                message += "\n\nDışa aktarılamayanlar:\n- " + "\n- ".join(failed)
+            QMessageBox.information(self, "Dışa Aktarıldı", message)
+        else:
+            QMessageBox.warning(
+                self, "Dışa Aktarılamadı",
+                "Hiçbir kurum dışa aktarılamadı:\n- " + "\n- ".join(failed),
+            )
 
     def handle_import_backup(self) -> None:
         if self.on_restore_requested is None:
