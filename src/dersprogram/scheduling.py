@@ -982,6 +982,11 @@ def auto_assign(
     return AutoAssignResult(placed=placed, warnings=warnings, placed_block_ids=placed_block_ids)
 
 
+def _lesson_label(rep: BlockView) -> str:
+    name_bits = [n for n in (rep.teacher_name, rep.class_name, rep.subject_name) if n]
+    return " · ".join(name_bits) or rep.pool_label()
+
+
 def _shortfall_warnings(
     units: list[list[BlockView]],
     domains: list[list[tuple[int, int]]],
@@ -1003,8 +1008,7 @@ def _shortfall_warnings(
         if placed_count >= total:
             continue
         rep = group_representative[group_key]
-        name_bits = [n for n in (rep.teacher_name, rep.class_name, rep.subject_name) if n]
-        label = " · ".join(name_bits) or rep.pool_label()
+        label = _lesson_label(rep)
         missing = total - placed_count
         warnings.append(
             f"{label}: {total} saat isteniyor, çakışmasız/müsait şekilde en fazla {placed_count} saat "
@@ -1028,6 +1032,112 @@ def _shortfall_warnings(
             "müsait olduğu çakışmasız bir saat bulunamadı - müsaitlik durumlarını gözden geçirin."
         )
     return warnings
+
+
+def explain_unplaced_lessons(
+    db: Database, week_start: _dt.date, max_consecutive: int = 2,
+) -> list[dict]:
+    """Havuzdaki (atanmamış) HER ihtiyaç için, haftanın her gününün neden
+    uygun/uygun olmadığını tek tek açıklayan bir döküm döner. Oto Ata'nın
+    tek satırlık "X saat sığmıyor" uyarısının aksine, kullanıcının TAM
+    OLARAK hangi günü neyin (çakışma, müsaitlik, ya da günlük sınır/
+    bitişiklik kuralı) engellediğini görüp veriyi buna göre düzeltebilmesi
+    içindir - özellikle manuel olarak bazı günlere kuralı çiğneyip 3 saat
+    yerleştirilmiş durumlarda, o günün ARTIK o ihtiyaç için neden kapalı
+    olduğunu açıkça gösterir.
+
+    CP-SAT çözücüsünü ÇALIŞTIRMAZ (statik/anlık bir analizdir, anında
+    sonuç verir); bu yüzden "hiç uygun saat yok" (gerçek imkansızlık) ile
+    "uygun saat var ama başka derslerle rekabet ediyor olabilir" (Oto
+    Ata'yı tekrar çalıştırmak faydalı olabilir) durumlarını ayırt eder,
+    ama tam nedensellik iddia etmez (birden fazla eşit-iyi çözüm olabilir)."""
+    day_count = len(db.day_names)
+    period_count = db.period_count
+    schedule, pool = get_week_view(db, week_start)
+    unavailable = UnavailableSlots.compute(db, week_start)
+
+    seen_zumre: set[int] = set()
+    zumre_units: list[list[BlockView]] = []
+    grouped: dict[tuple, list[BlockView]] = {}
+    for block in pool:
+        if block.type == TYPE_DEPARTMENT and block.zumre_group_id is not None:
+            if block.zumre_group_id in seen_zumre:
+                continue
+            seen_zumre.add(block.zumre_group_id)
+            zumre_units.append([b for b in pool if b.zumre_group_id == block.zumre_group_id])
+        else:
+            grouped.setdefault(block.group_key(), []).append(block)
+
+    fixed_periods_by_group: dict[tuple, dict[int, set[int]]] = {}
+    for blocks in schedule.values():
+        for b in blocks:
+            if b.type == TYPE_DEPARTMENT or b.day is None or b.period is None:
+                continue
+            fixed_periods_by_group.setdefault(b.group_key(), {}).setdefault(b.day, set()).add(b.period)
+
+    def analyze(unit: list[BlockView], group_key) -> dict:
+        rep = min(unit, key=lambda b: b.id)
+        fixed_days = fixed_periods_by_group.get(group_key, {}) if group_key else {}
+        slot_notes: list[dict] = []
+        open_slots: list[tuple[int, int]] = []
+        for d in range(day_count):
+            existing = fixed_days.get(d, set())
+            for p in range(1, period_count + 1):
+                conflicts = find_group_conflicts(schedule, d, p, unit, unavailable)
+                if conflicts:
+                    slot_notes.append({"day": d, "period": p, "open": False, "reason": conflicts[0]})
+                    continue
+                if group_key and max_consecutive > 0 and p not in existing:
+                    if len(existing) >= max_consecutive:
+                        hours = ", ".join(str(h) for h in sorted(existing))
+                        slot_notes.append({
+                            "day": d, "period": p, "open": False,
+                            "reason": f"o gün için günlük sınır ({max_consecutive} saat) zaten dolu ({hours}. saat kullanılıyor)",
+                        })
+                        continue
+                    if existing:
+                        candidate = existing | {p}
+                        if max(candidate) - min(candidate) + 1 != len(candidate):
+                            hours = ", ".join(str(h) for h in sorted(existing))
+                            slot_notes.append({
+                                "day": d, "period": p, "open": False,
+                                "reason": f"o gün kullanılan {hours}. saat(ler)e bitişik değil",
+                            })
+                            continue
+                slot_notes.append({"day": d, "period": p, "open": True, "reason": ""})
+                open_slots.append((d, p))
+
+        day_summary: list[dict] = []
+        for d in range(day_count):
+            day_notes = [n for n in slot_notes if n["day"] == d]
+            opens = [n["period"] for n in day_notes if n["open"]]
+            if opens:
+                day_summary.append({
+                    "open": True,
+                    "text": f"{len(opens)} saat açık ({', '.join(str(p) for p in opens)}. saat)",
+                })
+            else:
+                reasons = [n["reason"] for n in day_notes if n["reason"]]
+                reason = max(set(reasons), key=reasons.count) if reasons else "uygun saat yok"
+                day_summary.append({"open": False, "text": f"kapalı - {reason}"})
+
+        return {
+            "label": _lesson_label(rep),
+            "hours_needed": 1,
+            "open_slots": open_slots,
+            "day_summary": day_summary,
+        }
+
+    reports: list[dict] = []
+    for group_key, blocks in grouped.items():
+        entry = analyze([blocks[0]], group_key)
+        entry["hours_needed"] = len(blocks)
+        reports.append(entry)
+    for unit in zumre_units:
+        reports.append(analyze(unit, None))
+
+    reports.sort(key=lambda e: (len(e["open_slots"]) > 0, e["label"]))
+    return reports
 
 
 # ---------- özet / analiz ----------

@@ -48,6 +48,7 @@ from ..db import (
 from .. import scheduling
 from .widgets import WeekNavigator, ScopeDialog, MiniScheduleGrid
 from .add_lesson_dialog import AddLessonDialog
+from .unplaced_report_dialog import UnplacedReportDialog
 from . import theme
 
 MIME_PREFIX = "lesson-block:"
@@ -744,6 +745,14 @@ class ScheduleTab(QWidget):
         self.pool_filter_clear_button.clicked.connect(self._clear_row_filter)
         pool_header.addWidget(self.pool_filter_clear_button)
         pool_header.addStretch()
+        self.unplaced_report_button = QPushButton("Neden Yerleşmedi?")
+        self.unplaced_report_button.setObjectName("outlineButton")
+        self.unplaced_report_button.setToolTip(
+            "Havuzdaki her ders için haftanın hangi gününün neden uygun olmadığını "
+            "(çakışma, müsaitlik ya da günlük sınır/bitişiklik kuralı) gün gün gösterir."
+        )
+        self.unplaced_report_button.clicked.connect(self.handle_show_unplaced_report)
+        pool_header.addWidget(self.unplaced_report_button)
         self.pool_delete_button = QPushButton("Seçili Dersi Sil")
         self.pool_delete_button.setObjectName("outlineButton")
         self.pool_delete_button.clicked.connect(self.handle_delete_pool_lesson)
@@ -1260,6 +1269,10 @@ class ScheduleTab(QWidget):
         for member in members:
             scheduling.clear_block(self.db, self.navigator.week_start, member.id, scope)
         self.refresh()
+
+    def handle_show_unplaced_report(self) -> None:
+        dialog = UnplacedReportDialog(self.db, self.navigator.week_start, self)
+        dialog.exec()
 
     def handle_delete_pool_lesson(self) -> None:
         """Havuzdaki seçili dersi tamamen siler (zümre ise tüm grubu).
