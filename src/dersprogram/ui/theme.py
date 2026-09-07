@@ -137,6 +137,8 @@ NAV_ICONS: dict[str, str] = {
     "plus": "M12 5v14M5 12h14",
     "bolt": "M13 3 4 14h6l-1 7 9-11h-6l1-7z",
     "search": "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M21 21l-4.3-4.3",
+    "copy": "M8 8h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1",
+    "document": "M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z M14 2v6h5",
 }
 
 
@@ -298,13 +300,19 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
     öğretmen adı' şeklinde gösterilir; sınıf adı zaten belli olduğu için
     tekrar edilmez. row_mode='teacher' ise (öğretmenin kendi programı/
     önizlemesi) kart 'sınıf ya da öğrenci adı / branş' şeklinde gösterilir
-    ve renk tonu sınıfa göre hafifçe değişir."""
-    bg, dot = lesson_colors_for(block, tinted=row_mode == "teacher")
+    ve renk tonu sınıfa göre hafifçe değişir. row_mode='student' ise
+    (öğrencinin kendi programı/önizlemesi - kişisel + sınıfının ortak
+    dersleri birlikte) kart 'ders/tür adı / öğretmen adı' şeklinde
+    gösterilir."""
+    bg, dot = lesson_colors_for(block, tinted=row_mode in ("teacher", "student"))
     if row_mode == "class":
         primary, secondary = block.class_row_lines()
         tertiary = ""
     elif row_mode == "teacher":
         primary, secondary = block.teacher_row_lines()
+        tertiary = ""
+    elif row_mode == "student":
+        primary, secondary = block.student_row_lines()
         tertiary = ""
     else:
         primary, secondary, tertiary = block.card_lines()
@@ -339,7 +347,7 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
     )
     layout.addWidget(primary_label)
 
-    if secondary and (not compact or row_mode in ("class", "teacher")):
+    if secondary and (not compact or row_mode in ("class", "teacher", "student")):
         secondary_label = QLabel(secondary)
         secondary_label.setWordWrap(True)
         secondary_label.setStyleSheet(

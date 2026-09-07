@@ -57,6 +57,7 @@ MIME_PREFIX = "lesson-block:"
 
 MODE_CLASS = "class"
 MODE_TEACHER = "teacher"
+MODE_STUDENT = "student"
 
 
 class _CellDelegate(QStyledItemDelegate):
@@ -579,10 +580,92 @@ class MainGrid(QTableWidget):
             self.row_header_context_menu_requested.emit(entity_id, global_pos)
 
 
+def _render_table_pixmap(table: QTableWidget) -> QPixmap:
+    """Bir QTableWidget'ın TAMAMINI (o an ekranda görünen/kaydırılan kısmıyla
+    sınırlı kalmadan) tek bir görsele çizer. Dikeyde fazla satır varsa
+    kaydırma çubuğu çıkıp sadece görünen kısmın render edilmesi sorununu
+    aşmak için ızgara geçici olarak tüm satırları kapsayacak yüksekliğe
+    büyütülüp öyle render edilir, sonra eski boyutuna geri döndürülür.
+    show_debt_icons özelliği varsa (bkz. MainGrid) dışa aktarma sırasında
+    geçici olarak kapatılır - borç göstergesi sadece ekranda görünür."""
+    old_width = table.width()
+    old_height = table.height()
+    old_v_policy = table.verticalScrollBarPolicy()
+
+    total_height = table.horizontalHeader().height() + 2 * table.frameWidth()
+    for row in range(table.rowCount()):
+        total_height += table.rowHeight(row)
+
+    table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    table.resize(old_width, total_height)
+    has_debt_flag = hasattr(table, "show_debt_icons")
+    if has_debt_flag:
+        table.show_debt_icons = False
+        table.viewport().update()
+
+    pixmap = QPixmap(old_width, total_height)
+    pixmap.fill(Qt.white)
+    table.render(pixmap)
+
+    if has_debt_flag:
+        table.show_debt_icons = True
+        table.viewport().update()
+    table.resize(old_width, old_height)
+    table.setVerticalScrollBarPolicy(old_v_policy)
+    return pixmap
+
+
+def _export_table_as_pdf(parent: QWidget, table: QTableWidget, default_filename: str) -> None:
+    path, _ = QFileDialog.getSaveFileName(parent, "PDF Olarak Kaydet", default_filename, "PDF Dosyası (*.pdf)")
+    if not path:
+        return
+    if not path.lower().endswith(".pdf"):
+        path += ".pdf"
+
+    pixmap = _render_table_pixmap(table)
+
+    writer = QPdfWriter(path)
+    writer.setPageSize(QPageSize(QPageSize.A4))
+    writer.setPageOrientation(QPageLayout.Landscape)
+    writer.setPageMargins(QMarginsF(10, 10, 10, 10))
+    writer.setResolution(150)
+
+    painter = QPainter(writer)
+    page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
+    scale = min(
+        page_rect.width() / pixmap.width(),
+        page_rect.height() / pixmap.height(),
+    )
+    scaled_w = pixmap.width() * scale
+    scaled_h = pixmap.height() * scale
+    x = page_rect.x() + (page_rect.width() - scaled_w) / 2
+    y = page_rect.y() + (page_rect.height() - scaled_h) / 2
+    painter.drawPixmap(QRectF(x, y, scaled_w, scaled_h), pixmap, QRectF(pixmap.rect()))
+    painter.end()
+
+    QMessageBox.information(parent, "PDF Oluşturuldu", f"PDF olarak kaydedildi:\n{path}")
+
+
+def _copy_table_as_image(parent: QWidget, table: QTableWidget) -> None:
+    pixmap = _render_table_pixmap(table)
+    QApplication.clipboard().setPixmap(pixmap)
+    QMessageBox.information(
+        parent,
+        "Panoya Kopyalandı",
+        "Görsel olarak panoya kopyalandı.\n"
+        "Artık başka bir programa (Word, WhatsApp, e-posta vb.) yapıştırabilirsiniz.",
+    )
+
+
+def _sanitize_filename(name: str) -> str:
+    return "".join(c if (c.isalnum() or c in "-_") else "_" for c in name).strip("_") or "program"
+
+
 class RowPreviewDialog(QDialog):
-    """Ana Program'da bir sınıf/öğretmen adının üstüne çift tıklanınca
-    açılan, sadece o satırın haftalık programını gösteren salt-okunur
-    önizleme penceresi."""
+    """Ana Program'da bir sınıf/öğretmen/öğrenci adının üstüne çift
+    tıklanınca açılan, sadece o satırın haftalık programını gösteren
+    salt-okunur önizleme penceresi - Kopyala/PDF düğmeleri de burada,
+    tek bir kişi/sınıfın programını doğrudan buradan dışa aktarmak için."""
 
     def __init__(self, db: Database, week_start, mode: str, entity_id: int, entity_name: str, parent=None):
         super().__init__(parent)
@@ -597,23 +680,46 @@ class RowPreviewDialog(QDialog):
         subtitle.setStyleSheet(f"font-size:9pt; color:{theme.INK_MUTED_58};")
         layout.addWidget(subtitle)
 
-        schedule, _pool = scheduling.get_week_view(db, week_start)
-        filtered: dict[tuple[int, int], list] = {}
-        for cell, blocks in schedule.items():
-            if mode == MODE_CLASS:
-                matched = [b for b in blocks if b.type == TYPE_CLASS and b.class_group_id == entity_id]
-            else:
-                matched = [b for b in blocks if b.teacher_id == entity_id]
-            if matched:
-                filtered[cell] = matched
+        if mode == MODE_STUDENT:
+            student = db.get_student(entity_id)
+            class_group_id = student["class_group_id"] if student is not None else None
+            filtered = scheduling.student_effective_blocks(db, week_start, entity_id, class_group_id)
+        else:
+            schedule, _pool = scheduling.get_week_view(db, week_start)
+            filtered = {}
+            for cell, blocks in schedule.items():
+                if mode == MODE_CLASS:
+                    matched = [b for b in blocks if b.type == TYPE_CLASS and b.class_group_id == entity_id]
+                else:
+                    matched = [b for b in blocks if b.teacher_id == entity_id]
+                if matched:
+                    filtered[cell] = matched
 
         grid = MiniScheduleGrid()
         grid.render(db, filtered, row_mode=mode)
         layout.addWidget(grid, 1)
 
+        button_row = QHBoxLayout()
+        copy_button = QPushButton("  Kopyala")
+        copy_button.setObjectName("outlineButton")
+        copy_button.setIcon(theme.icon(theme.NAV_ICONS["copy"], theme.ACCENT_HOVER))
+        copy_button.setToolTip("Bu haftalık programı görsel olarak panoya kopyalar.")
+        copy_button.clicked.connect(lambda: _copy_table_as_image(self, grid))
+        button_row.addWidget(copy_button)
+
+        pdf_button = QPushButton("  PDF")
+        pdf_button.setObjectName("outlineButton")
+        pdf_button.setIcon(theme.icon(theme.NAV_ICONS["document"], theme.ACCENT_HOVER))
+        pdf_button.setToolTip("Bu haftalık programı PDF dosyası olarak kaydeder.")
+        default_filename = f"{_sanitize_filename(entity_name)}_haftalik_program.pdf"
+        pdf_button.clicked.connect(lambda: _export_table_as_pdf(self, grid, default_filename))
+        button_row.addWidget(pdf_button)
+        button_row.addStretch()
+
         close_button = QPushButton("Kapat")
         close_button.clicked.connect(self.accept)
-        layout.addWidget(close_button)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
 
 
 class _AutoAssignWorker(QThread):
@@ -654,6 +760,7 @@ class ScheduleTab(QWidget):
         self._pool: list = []
         self._blocks_by_id: dict[int, object] = {}
         self._row_entities: list[tuple[int, str]] = []
+        self._student_class_group_ids: dict[int, int | None] = {}
         self._unavailable = scheduling.UnavailableSlots()
         self._selected_row_entity_id: int | None = None
         self._preview_highlighted: list[tuple[int, int]] = []
@@ -673,7 +780,8 @@ class ScheduleTab(QWidget):
 
         self.class_mode_button = QPushButton("Sınıflara Göre")
         self.teacher_mode_button = QPushButton("Öğretmenlere Göre")
-        for b in (self.class_mode_button, self.teacher_mode_button):
+        self.student_mode_button = QPushButton("Öğrencilere Göre")
+        for b in (self.class_mode_button, self.teacher_mode_button, self.student_mode_button):
             b.setCheckable(True)
             b.setObjectName("modeButton")
         self.class_mode_button.setChecked(True)
@@ -681,8 +789,10 @@ class ScheduleTab(QWidget):
         self.mode_group.setExclusive(True)
         self.mode_group.addButton(self.class_mode_button)
         self.mode_group.addButton(self.teacher_mode_button)
+        self.mode_group.addButton(self.student_mode_button)
         top_row.addWidget(self.class_mode_button)
         top_row.addWidget(self.teacher_mode_button)
+        top_row.addWidget(self.student_mode_button)
         layout.addLayout(top_row)
 
         toolbar = QHBoxLayout()
@@ -703,9 +813,11 @@ class ScheduleTab(QWidget):
         toolbar.addWidget(self.zoom_in_button)
         self.copy_grid_button = QPushButton("  Kopyala")
         self.copy_grid_button.setObjectName("outlineButton")
+        self.copy_grid_button.setIcon(theme.icon(theme.NAV_ICONS["copy"], theme.ACCENT_HOVER))
         self.copy_grid_button.setToolTip("Haftalık programın tamamını görsel olarak panoya kopyalar.")
         self.export_pdf_button = QPushButton("  PDF")
         self.export_pdf_button.setObjectName("outlineButton")
+        self.export_pdf_button.setIcon(theme.icon(theme.NAV_ICONS["document"], theme.ACCENT_HOVER))
         self.export_pdf_button.setToolTip("Haftalık programın tamamını PDF dosyası olarak kaydeder.")
         self.add_lesson_button = QPushButton("  Ders Ekle")
         self.add_lesson_button.setObjectName("outlineButton")
@@ -752,7 +864,7 @@ class ScheduleTab(QWidget):
         )
         splitter.addWidget(self.grid)
 
-        pool_container = QWidget()
+        self.pool_container = pool_container = QWidget()
         pool_layout = QVBoxLayout(pool_container)
         pool_layout.setContentsMargins(0, 0, 0, 0)
         pool_header = QHBoxLayout()
@@ -828,6 +940,8 @@ class ScheduleTab(QWidget):
         self.undo_auto_assign_button.clicked.connect(self.handle_undo_auto_assign)
         self.navigator.week_changed.connect(lambda _w: self.refresh())
         self.class_mode_button.toggled.connect(self._handle_mode_change)
+        self.teacher_mode_button.toggled.connect(self._handle_mode_change)
+        self.student_mode_button.toggled.connect(self._handle_mode_change)
         self.zoom_in_button.clicked.connect(lambda: self._change_zoom(0.15))
         self.zoom_out_button.clicked.connect(lambda: self._change_zoom(-0.15))
         self.grid.row_header_double_clicked.connect(self._show_row_preview)
@@ -842,91 +956,21 @@ class ScheduleTab(QWidget):
         zoom = round(min(2.2, max(0.7, self.grid._zoom + delta)), 2)
         self.grid.set_zoom(zoom)
         self.zoom_label.setText(f"{round(zoom * 100)}%")
-
-    # ---------- PDF / görsel kopyalama ----------
-    def _render_grid_pixmap(self) -> QPixmap:
-        """Izgaranın TAMAMINI (o an ekranda görünen kısmı değil) tek bir
-        görsele çizer. Sütunlar zaten Stretch modunda oldukları için
-        (bkz. MainGrid._apply_column_sizing) yatayda hep pencereye sığar;
-        asıl sorun dikeyde - satır sayısı fazlaysa dikey kaydırma çubuğu
-        çıkar ve normalde sadece görünen kısım render edilir. Bunu aşmak
-        için ızgarayı geçici olarak tüm satırları kapsayacak yüksekliğe
-        büyütüp öyle render ediyoruz, sonra eski boyutuna geri döndürüyoruz."""
-        grid = self.grid
-        old_width = grid.width()
-        old_height = grid.height()
-        old_v_policy = grid.verticalScrollBarPolicy()
-
-        total_height = grid.horizontalHeader().height() + 2 * grid.frameWidth()
-        for row in range(grid.rowCount()):
-            total_height += grid.rowHeight(row)
-
-        grid.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        grid.resize(old_width, total_height)
-        # Borca yapılan birebir göstergesi kullanıcı ekranı için - PDF/Kopyala
-        # çıktısında görünmesin diye render sırasında geçici olarak kapatılır.
-        grid.show_debt_icons = False
-        grid.viewport().update()
-
-        pixmap = QPixmap(old_width, total_height)
-        pixmap.fill(Qt.white)
-        grid.render(pixmap)
-
-        grid.show_debt_icons = True
-        grid.resize(old_width, old_height)
-        grid.setVerticalScrollBarPolicy(old_v_policy)
-        grid.viewport().update()
-        return pixmap
-
-    def handle_export_pdf(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self, "PDF Olarak Kaydet", "haftalik_program.pdf", "PDF Dosyası (*.pdf)"
-        )
-        if not path:
-            return
-        if not path.lower().endswith(".pdf"):
-            path += ".pdf"
-
-        pixmap = self._render_grid_pixmap()
-
-        writer = QPdfWriter(path)
-        writer.setPageSize(QPageSize(QPageSize.A4))
-        writer.setPageOrientation(QPageLayout.Landscape)
-        writer.setPageMargins(QMarginsF(10, 10, 10, 10))
-        writer.setResolution(150)
-
-        painter = QPainter(writer)
-        page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
-        scale = min(
-            page_rect.width() / pixmap.width(),
-            page_rect.height() / pixmap.height(),
-        )
-        scaled_w = pixmap.width() * scale
-        scaled_h = pixmap.height() * scale
-        x = page_rect.x() + (page_rect.width() - scaled_w) / 2
-        y = page_rect.y() + (page_rect.height() - scaled_h) / 2
-        target_rect = QRectF(x, y, scaled_w, scaled_h)
-        painter.drawPixmap(target_rect, pixmap, QRectF(pixmap.rect()))
-        painter.end()
-
-        QMessageBox.information(
-            self, "PDF Oluşturuldu", f"Haftalık program PDF olarak kaydedildi:\n{path}"
-        )
-
-    def handle_copy_grid_image(self) -> None:
-        pixmap = self._render_grid_pixmap()
-        QApplication.clipboard().setPixmap(pixmap)
-        QMessageBox.information(
-            self,
-            "Panoya Kopyalandı",
-            "Haftalık program görsel olarak panoya kopyalandı.\n"
-            "Artık başka bir programa (Word, WhatsApp, e-posta vb.) yapıştırabilirsiniz.",
-        )
         # Hücre kartlarını (sabit boyutlu widget'lar) yeni satır/sütun
         # ölçüsüne göre baştan oluştur - sadece boyut değiştirmek eski
         # widget'lardan görsel kalıntı bırakabiliyor.
         self._render_grid()
         self._reapply_pool_preview()  # aktif önizleme varsa yeniden uygula
+
+    # ---------- PDF / görsel kopyalama ----------
+    def _render_grid_pixmap(self) -> QPixmap:
+        return _render_table_pixmap(self.grid)
+
+    def handle_export_pdf(self) -> None:
+        _export_table_as_pdf(self, self.grid, "haftalik_program.pdf")
+
+    def handle_copy_grid_image(self) -> None:
+        _copy_table_as_image(self, self.grid)
 
     def _render_drag_pixmap(self, block_id: int):
         """Havuzdan bir ders sürüklenirken imleçle birlikte gösterilecek
@@ -961,12 +1005,16 @@ class ScheduleTab(QWidget):
         name = next((n for i, n in self._row_entities if i == entity_id), "")
         menu = QMenu(self)
         preview_action = menu.addAction("Önizleme")
-        menu.addSeparator()
-        clear_action = menu.addAction("Yerleştirilmiş Dersleri Havuza Düşür")
+        clear_action = None
+        if self.mode != MODE_STUDENT:
+            # Öğrenci görünümü salt-okunur bir özet olduğu için (bkz.
+            # _row_matches_block) burada kaldıracak bir "yerleşim" yok.
+            menu.addSeparator()
+            clear_action = menu.addAction("Yerleştirilmiş Dersleri Havuza Düşür")
         chosen = menu.exec(global_pos)
         if chosen == preview_action:
             self._show_row_preview(entity_id)
-        elif chosen == clear_action:
+        elif clear_action is not None and chosen == clear_action:
             self._clear_row_assignments(entity_id, name)
 
     def _clear_row_assignments(self, entity_id: int, name: str) -> None:
@@ -996,7 +1044,31 @@ class ScheduleTab(QWidget):
         self.refresh()
 
     def _handle_mode_change(self, checked: bool) -> None:
-        self.mode = MODE_CLASS if checked else MODE_TEACHER
+        if not checked:
+            # Üç düğmeli özel seçim grubunda her tık İKİ toggled sinyali
+            # üretir (biri kapanan eski seçim, biri açılan yeni seçim) -
+            # burada sadece YENİ açılan düğmenin sinyalini işleriz.
+            return
+        if self.class_mode_button.isChecked():
+            self.mode = MODE_CLASS
+        elif self.teacher_mode_button.isChecked():
+            self.mode = MODE_TEACHER
+        else:
+            self.mode = MODE_STUDENT
+
+        # Öğrenci görünümü salt-okunur bir özet (kişisel + sınıfının ortak
+        # dersleri birlikte) - sürükle-bırak ile yerleştirme buradan
+        # yapılmaz (bkz. _row_matches_block), o yüzden yerleştirmeyle
+        # ilgili havuz/düğmeler karışıklığı önlemek için gizlenir.
+        is_student_mode = self.mode == MODE_STUDENT
+        self.pool_container.setVisible(not is_student_mode)
+        self.add_lesson_button.setVisible(not is_student_mode)
+        self.auto_assign_button.setVisible(not is_student_mode)
+        if is_student_mode:
+            self.undo_auto_assign_button.setVisible(False)
+        elif self._last_auto_assign_block_ids:
+            self.undo_auto_assign_button.setVisible(True)
+
         self._selected_row_entity_id = None
         self._update_hint()
         self.refresh()
@@ -1082,11 +1154,13 @@ class ScheduleTab(QWidget):
                 "Birebir/koçluk/zümre/soru çözümü dersleri için 'Öğretmenlere Göre' görünümüne geçin. "
                 "Kaldırmak için hücreye çift tıklayın."
             )
-        else:
+        elif self.mode == MODE_TEACHER:
             self.hint_label.setText(
                 "Sürükleyip yukarıya bırakın (sadece kendi öğretmeninin satırına). "
                 "Kaldırmak için hücreye çift tıklayın."
             )
+        # MODE_STUDENT: hint_label zaten pool_container ile birlikte gizli
+        # (bkz. _handle_mode_change) - bu görünüm salt-okunur bir özet.
 
     # ---------- veri yenileme ----------
     def refresh(self) -> None:
@@ -1101,11 +1175,20 @@ class ScheduleTab(QWidget):
             # Sınıflar elle sıralanabilir (bkz. ClassesTab yukarı/aşağı
             # okları); Ana Program satırları da bu sırayı yansıtır.
             self._row_entities = [(r["id"], r["name"]) for r in self.db.list_class_groups()]
-        else:
+        elif self.mode == MODE_TEACHER:
             rows = self.db.list_teachers()
             self._row_entities = sorted(
                 ((r["id"], r["name"]) for r in rows), key=lambda pair: scheduling.natural_sort_key(pair[1])
             )
+        else:
+            rows = self.db.list_students()
+            self._row_entities = sorted(
+                ((r["id"], r["name"]) for r in rows), key=lambda pair: scheduling.natural_sort_key(pair[1])
+            )
+            # Öğrencinin satırında kendi kişisel derslerinin YANI SIRA
+            # sınıfının ortak (TYPE_CLASS) dersleri de görünür - bkz.
+            # _cell_blocks. Her yenilemede tek seferde okunur.
+            self._student_class_group_ids = {r["id"]: r["class_group_id"] for r in rows}
 
         self._render_grid()
         self._render_pool()
@@ -1114,6 +1197,13 @@ class ScheduleTab(QWidget):
         blocks = self._schedule.get((day, period), [])
         if self.mode == MODE_CLASS:
             return [b for b in blocks if b.type == TYPE_CLASS and b.class_group_id == entity_id]
+        if self.mode == MODE_STUDENT:
+            class_group_id = self._student_class_group_ids.get(entity_id)
+            return [
+                b for b in blocks
+                if b.student_id == entity_id
+                or (b.type == TYPE_CLASS and class_group_id is not None and b.class_group_id == class_group_id)
+            ]
         return [b for b in blocks if b.teacher_id == entity_id]
 
     def _debt_student_ids(self) -> set[int]:
@@ -1164,12 +1254,15 @@ class ScheduleTab(QWidget):
                         elif self.mode == MODE_CLASS and (entity_id, day, period) in self._unavailable.class_:
                             payload = {"kind": "unavailable", "bg": theme.CONFLICT_BG}
                             tooltip = "Sınıf bu saatte müsait değil olarak işaretlenmiş"
+                        elif self.mode == MODE_STUDENT and (entity_id, day, period) in self._unavailable.student:
+                            payload = {"kind": "unavailable", "bg": theme.CONFLICT_BG}
+                            tooltip = "Öğrenci bu saatte müsait değil olarak işaretlenmiş"
                         else:
                             payload = {"kind": "empty", "bg": theme.APP_BG}
                             tooltip = ""
                     else:
                         line1, line2 = blocks[0].dense_lines(self.mode)
-                        bg, _dot = theme.lesson_colors_for(blocks[0], tinted=self.mode == MODE_TEACHER)
+                        bg, _dot = theme.lesson_colors_for(blocks[0], tinted=self.mode in (MODE_TEACHER, MODE_STUDENT))
                         if len(blocks) > 1:
                             line1 = f"{line1} (+{len(blocks) - 1})"
                         payload = {"kind": "chip", "bg": bg, "line1": line1, "line2": line2}
@@ -1316,6 +1409,11 @@ class ScheduleTab(QWidget):
     def _row_matches_block(self, block, entity_id) -> bool:
         if self.mode == MODE_CLASS:
             return block.type == TYPE_CLASS and block.class_group_id == entity_id
+        if self.mode == MODE_STUDENT:
+            # Öğrenci görünümü salt-okunur bir özet - havuzdaki bir ders
+            # hiçbir zaman bir öğrenci satırına "ait" sayılmaz (yerleştirme
+            # sınıf/öğretmen görünümünden yapılır, bkz. _handle_mode_change).
+            return False
         return any(m.teacher_id == entity_id for m in self._block_group(block))
 
     def _stack_overflow(self, members: list, day: int, period: int) -> str | None:
@@ -1382,6 +1480,12 @@ class ScheduleTab(QWidget):
         self.refresh()
 
     def _handle_remove_request(self, entity_id, day: int, period: int) -> None:
+        if self.mode == MODE_STUDENT:
+            # Öğrenci görünümündeki hücreler kişisel + sınıfının ortak
+            # derslerinin birleşimi olabilir - çift tıklayıp kaldırma
+            # işlemi belirsiz olur, bu yüzden burada devre dışı (kaldırma
+            # işlemi Sınıflara/Öğretmenlere Göre görünümünden yapılır).
+            return
         blocks = self._cell_blocks(entity_id, day, period)
         if not blocks:
             return

@@ -170,11 +170,30 @@ class BlockView:
             return "Zümre", self.subject_name or ""
         return "Soru Çözümü", self.subject_name or ""
 
+    def student_row_lines(self) -> tuple[str, str]:
+        """Öğrencinin kendi haftalık programında (ve önizlemesinde)
+        gösterilecek iki satır: ders/tür adı ve öğretmen adı - öğrenci adı
+        zaten belli olduğu için tekrar edilmez (bkz. scheduling.
+        student_effective_blocks - burada hem öğrencinin kişisel bloğu hem
+        de sınıfının ortak ders bloğu aynı satırda görünebilir)."""
+        if self.type == TYPE_COACHING:
+            return "Öğrenci Koçluk", self.teacher_name or ""
+        if self.type == TYPE_DEPARTMENT:
+            return "Zümre", self.teacher_name or ""
+        label = self.subject_name or LESSON_TYPE_LABELS.get(self.type, self.type)
+        return label, self.teacher_name or ""
+
     def dense_lines(self, row_mode: str) -> tuple[str, str]:
-        """Kurum geneli ızgarada (satır=sınıf ya da öğretmen) hücrede
-        gösterilecek iki kısa satır. Satırın kendisi zaten hangi sınıf/
-        öğretmen olduğunu belli ettiği için o bilgi tekrar edilmez."""
+        """Kurum geneli ızgarada (satır=sınıf/öğretmen/öğrenci) hücrede
+        gösterilecek iki kısa satır. Satırın kendisi zaten kim olduğunu
+        belli ettiği için o bilgi tekrar edilmez."""
         if row_mode == "class":
+            return self.subject_name or "Ders", short_teacher_name(self.teacher_name)
+        if row_mode == "student":
+            if self.type == TYPE_COACHING:
+                return "Koçluk", short_teacher_name(self.teacher_name)
+            if self.type == TYPE_DEPARTMENT:
+                return "Zümre", short_teacher_name(self.teacher_name)
             return self.subject_name or "Ders", short_teacher_name(self.teacher_name)
         if self.type == TYPE_CLASS:
             return self.class_name or "Ders", self.subject_name or ""
