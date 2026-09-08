@@ -772,27 +772,21 @@ def _export_rows_as_multi_page_pdf(
     temp_grid = MiniScheduleGrid()
     temp_grid.setParent(parent)
 
-    # Sayfa boyutu, gün/saat sayısına göre TÜM sayfalarda aynı olacağından
-    # (kurum geneli sabit) bir kez, boş bir ızgarayla ölçülüp önceden
-    # hesaplanır - her sayfa için yeniden hesaplamaya gerek yok (başlık
-    # metninin uzunluğu sayfa boyutunu etkilemez, kutu yüksekliği sabittir).
-    temp_grid.resize(400, 100)
-    temp_grid.populate(db, {}, row_mode=mode)
-    probe_pixmap = _render_row_pixmap(temp_grid, "", "")
-    page_w_px = probe_pixmap.width() + 2 * page_margin
-    page_h_px = probe_pixmap.height() + 2 * page_margin
-
+    # Kullanıcı isteği: her sayfa sadece o kişi/sınıfın DERSİNİN OLDUĞU
+    # günleri/saatleri kapsayan en dar dikdörtgeni göstersin (bkz.
+    # MiniScheduleGrid.populate) - bu da her sayfanın boyutunun FARKLI
+    # olabileceği anlamına gelir (biri 5 saat kullanıyorsa, diğeri 8 saat
+    # kullanabilir). Bu yüzden sayfa boyutu artık TEK SEFER değil, HER
+    # SAYFA için ayrı ayrı, o sayfanın gerçek piksel boyutuna göre
+    # ayarlanıyor (QPdfWriter.setPageSize bir sonraki newPage()'den önce
+    # çağrılmalı).
     writer = QPdfWriter(path)
     writer.setResolution(dpi)
-    writer.setPageSize(QPageSize(QSizeF(page_w_px / dpi, page_h_px / dpi), QPageSize.Unit.Inch))
     writer.setPageMargins(QMarginsF(0, 0, 0, 0))
-    painter = QPainter(writer)
+    painter: QPainter | None = None
 
     try:
         for index, (entity_id, name) in enumerate(row_entities):
-            if index > 0:
-                writer.newPage()
-
             filtered: dict[tuple[int, int], list] = {}
             for day in range(len(day_names)):
                 for period in range(1, period_count + 1):
@@ -803,13 +797,23 @@ def _export_rows_as_multi_page_pdf(
             temp_grid.populate(db, filtered, row_mode=mode)
             pixmap = _render_row_pixmap(temp_grid, name, week_text)
 
+            page_w_px = pixmap.width() + 2 * page_margin
+            page_h_px = pixmap.height() + 2 * page_margin
+            writer.setPageSize(QPageSize(QSizeF(page_w_px / dpi, page_h_px / dpi), QPageSize.Unit.Inch))
+
+            if painter is None:
+                painter = QPainter(writer)
+            else:
+                writer.newPage()
+
             # 1:1 çizim - hiç ölçeklendirme yok, Kopyala'nın ürettiği
             # görselle piksel piksel aynı.
             painter.drawPixmap(
                 QRectF(page_margin, page_margin, pixmap.width(), pixmap.height()), pixmap, QRectF(pixmap.rect()),
             )
     finally:
-        painter.end()
+        if painter is not None:
+            painter.end()
         temp_grid.deleteLater()
 
     QMessageBox.information(

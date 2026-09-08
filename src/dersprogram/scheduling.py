@@ -31,9 +31,23 @@ def week_key(week_start: _dt.date) -> str:
     return week_start.isoformat()
 
 
+_MONTH_ABBREV_TR = {
+    1: "Oca", 2: "Şub", 3: "Mar", 4: "Nis", 5: "May", 6: "Haz",
+    7: "Tem", 8: "Ağu", 9: "Eyl", 10: "Eki", 11: "Kas", 12: "Ara",
+}
+
+
+def _format_date_tr(d: _dt.date) -> str:
+    """strftime('%b') sistem yerel ayarına (locale) bağlı - paketlenmiş
+    Windows .exe'de yerel ayar İngilizce kalabiliyor ve 'Sep' gibi
+    İngilizce ay kısaltmaları çıkabiliyor. Bunun yerine ay adı burada
+    sabit Türkçe kısaltmalarla veriliyor."""
+    return f"{d.day:02d} {_MONTH_ABBREV_TR[d.month]} {d.year}"
+
+
 def week_label(week_start: _dt.date, day_count: int) -> str:
     end = week_start + _dt.timedelta(days=max(day_count - 1, 0))
-    return f"{week_start.strftime('%d %b %Y')} – {end.strftime('%d %b %Y')}"
+    return f"{_format_date_tr(week_start)} – {_format_date_tr(end)}"
 
 
 _DAY_ABBREV = {

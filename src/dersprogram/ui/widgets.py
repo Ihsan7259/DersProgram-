@@ -56,11 +56,14 @@ def divider() -> QFrame:
     return line
 
 
-def _period_header_labels(db: Database, period_count: int) -> list[str]:
+def _period_header_labels(db: Database, periods) -> list[str]:
     """'1.' ya da (Ayarlar'da saat girilmişse) '1.\n08:30-09:20' şeklinde
-    dikey başlık etiketleri üretir."""
+    dikey başlık etiketleri üretir. periods bir int (1..periods) ya da
+    doğrudan bir saat numarası listesi/aralığı olabilir."""
+    if isinstance(periods, int):
+        periods = range(1, periods + 1)
     labels = []
-    for p in range(1, period_count + 1):
+    for p in periods:
         time_label = db.period_time_label(p)
         labels.append(f"{p}.\n{time_label}" if time_label else f"{p}.")
     return labels
@@ -178,20 +181,38 @@ class MiniScheduleGrid(QTableWidget):
         üretmek için kullanılır, bkz. schedule_tab._render_table_pixmap)
         gölgelememesi için. Daha önce burası 'render' adındaydı ve PDF/
         Kopyala düğmeleri tam da bu yüzden (table.render(pixmap) çağrısı
-        QWidget'ınkini değil BUNU çağırdığı için) çöküyordu."""
+        QWidget'ınkini değil BUNU çağırdığı için) çöküyordu.
+
+        Kullanıcı isteği: tüm gün/saat sayısını değil, sadece o kişi/sınıfın
+        DERSİNİN OLDUĞU günleri ve saatleri kapsayan EN DAR (optimal)
+        dikdörtgeni gösterir - ör. kurumda 15 saat tanımlıysa ama bu sınıfın
+        dersleri sadece 1-5. saatlerdeyse, 6-15 arası tamamen boş satırlar
+        hiç eklenmez (kutu/yazı boyutu bundan ETKİLENMEZ, sadece kaç satır/
+        sütun çizileceği değişir). Hiç dersi yoksa (blocks_by_cell boş) tüm
+        hafta gösterilir."""
         day_names = db.day_names
         period_count = db.period_count
-        self._day_count = max(len(day_names), 1)
-        self.setRowCount(period_count)
-        self.setColumnCount(len(day_names))
-        self.setHorizontalHeaderLabels(day_names)
-        self.setVerticalHeaderLabels(_period_header_labels(db, period_count))
+
+        used_days = sorted({day for day, _period in blocks_by_cell.keys()})
+        used_periods = sorted({period for _day, period in blocks_by_cell.keys()})
+        if used_days and used_periods:
+            day_indices = list(range(used_days[0], used_days[-1] + 1))
+            periods = list(range(used_periods[0], used_periods[-1] + 1))
+        else:
+            day_indices = list(range(len(day_names)))
+            periods = list(range(1, period_count + 1))
+
+        self._day_count = max(len(day_indices), 1)
+        self.setRowCount(len(periods))
+        self.setColumnCount(len(day_indices))
+        self.setHorizontalHeaderLabels([day_names[d] for d in day_indices])
+        self.setVerticalHeaderLabels(_period_header_labels(db, periods))
         self.verticalHeader().setMinimumWidth(30)
 
-        for period in range(1, period_count + 1):
-            for day in range(len(day_names)):
+        for row, period in enumerate(periods):
+            for col, day in enumerate(day_indices):
                 blocks = blocks_by_cell.get((day, period), [])
-                _set_cell_widget(self, period - 1, day, theme.make_multi_cell(blocks, compact=True, row_mode=row_mode))
+                _set_cell_widget(self, row, col, theme.make_multi_cell(blocks, compact=True, row_mode=row_mode))
         self._apply_grid_sizing()
 
     def set_fixed_column_width(self, width_px: int | None) -> None:
