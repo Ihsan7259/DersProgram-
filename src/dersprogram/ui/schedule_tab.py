@@ -591,12 +591,17 @@ def _render_table_pixmap(table: QTableWidget) -> QPixmap:
     old_width = table.width()
     old_height = table.height()
     old_v_policy = table.verticalScrollBarPolicy()
+    old_h_policy = table.horizontalScrollBarPolicy()
 
     total_height = table.horizontalHeader().height() + 2 * table.frameWidth()
     for row in range(table.rowCount()):
         total_height += table.rowHeight(row)
 
+    # Her iki kaydırma çubuğu da kapatılır - aksi halde (ör. MiniScheduleGrid
+    # gibi bunu kalıcı olarak kapatmayan ızgaralarda) dışa aktarılan
+    # görselin altında/kenarında ince bir kaydırma çubuğu izi kalabiliyordu.
     table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     table.resize(old_width, total_height)
     has_debt_flag = hasattr(table, "show_debt_icons")
     if has_debt_flag:
@@ -612,6 +617,7 @@ def _render_table_pixmap(table: QTableWidget) -> QPixmap:
         table.viewport().update()
     table.resize(old_width, old_height)
     table.setVerticalScrollBarPolicy(old_v_policy)
+    table.setHorizontalScrollBarPolicy(old_h_policy)
     return pixmap
 
 
@@ -661,6 +667,108 @@ def _sanitize_filename(name: str) -> str:
     return "".join(c if (c.isalnum() or c in "-_") else "_" for c in name).strip("_") or "program"
 
 
+def _export_rows_as_multi_page_pdf(
+    parent: QWidget,
+    db: Database,
+    week_start,
+    mode: str,
+    row_entities: list[tuple[int, str]],
+    cell_blocks_fn,
+    default_filename: str,
+) -> None:
+    """Ana Program'ın TAMAMINI tek dev bir sayfa olarak değil, her satır
+    (sınıf/öğretmen/öğrenci) kendi AYRI sayfasında olacak şekilde tek bir
+    çok sayfalı PDF'e aktarır - kullanıcı isteği: 'Ana programı tek bir
+    büyük sayfada görmeme gerek yok'. Her sayfa RowPreviewDialog'daki tek
+    kişi/sınıf önizlemesiyle aynı içeriği (kişi/sınıf adı + o haftaki
+    programı) gösterir."""
+    if not row_entities:
+        QMessageBox.information(parent, "Veri Yok", "Şu an dışa aktarılacak satır yok.")
+        return
+    path, _ = QFileDialog.getSaveFileName(parent, "PDF Olarak Kaydet", default_filename, "PDF Dosyası (*.pdf)")
+    if not path:
+        return
+    if not path.lower().endswith(".pdf"):
+        path += ".pdf"
+
+    day_names = db.day_names
+    period_count = db.period_count
+    week_text = scheduling.week_label(week_start, len(day_names))
+
+    writer = QPdfWriter(path)
+    writer.setPageSize(QPageSize(QPageSize.A4))
+    writer.setPageOrientation(QPageLayout.Landscape)
+    writer.setPageMargins(QMarginsF(10, 10, 10, 10))
+    writer.setResolution(150)
+    painter = QPainter(writer)
+
+    # Sayfaları render etmek için kullanılan geçici ızgara, ekranda hiç
+    # görünmeden (show() çağrılmadan) tek tek yeniden doldurulup pixmap'e
+    # çizilir - her satır için ayrı widget oluşturmak yerine tek widget
+    # tekrar kullanılır (performans).
+    temp_grid = MiniScheduleGrid()
+    temp_grid.setParent(parent)
+    try:
+        for index, (entity_id, name) in enumerate(row_entities):
+            if index > 0:
+                writer.newPage()
+
+            filtered: dict[tuple[int, int], list] = {}
+            for day in range(len(day_names)):
+                for period in range(1, period_count + 1):
+                    blocks = cell_blocks_fn(entity_id, day, period)
+                    if blocks:
+                        filtered[(day, period)] = blocks
+
+            temp_grid.resize(1000, 100)
+            temp_grid.populate(db, filtered, row_mode=mode)
+            pixmap = _render_table_pixmap(temp_grid)
+
+            page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
+
+            title_font = QFont(painter.font())
+            title_font.setBold(True)
+            title_font.setPointSize(16)
+            painter.setFont(title_font)
+            painter.setPen(QColor(theme.INK))
+            title_height = 34
+            painter.drawText(
+                QRectF(page_rect.x(), page_rect.y(), page_rect.width(), title_height),
+                Qt.AlignLeft | Qt.AlignVCenter, name,
+            )
+
+            subtitle_font = QFont(painter.font())
+            subtitle_font.setBold(False)
+            subtitle_font.setPointSize(10)
+            painter.setFont(subtitle_font)
+            painter.setPen(QColor(theme.INK_MUTED_58))
+            subtitle_height = 22
+            painter.drawText(
+                QRectF(page_rect.x(), page_rect.y() + title_height, page_rect.width(), subtitle_height),
+                Qt.AlignLeft | Qt.AlignVCenter, week_text,
+            )
+
+            header_h = title_height + subtitle_height + 10
+            content_rect = QRectF(
+                page_rect.x(), page_rect.y() + header_h,
+                page_rect.width(), page_rect.height() - header_h,
+            )
+            scale = min(content_rect.width() / pixmap.width(), content_rect.height() / pixmap.height())
+            scaled_w = pixmap.width() * scale
+            scaled_h = pixmap.height() * scale
+            x = content_rect.x() + (content_rect.width() - scaled_w) / 2
+            y = content_rect.y() + (content_rect.height() - scaled_h) / 2
+            painter.drawPixmap(QRectF(x, y, scaled_w, scaled_h), pixmap, QRectF(pixmap.rect()))
+    finally:
+        painter.end()
+        temp_grid.deleteLater()
+
+    QMessageBox.information(
+        parent, "PDF Oluşturuldu",
+        f"{len(row_entities)} sayfalık PDF kaydedildi (her satır kendi sayfasında):\n{path}",
+    )
+
+
 class RowPreviewDialog(QDialog):
     """Ana Program'da bir sınıf/öğretmen/öğrenci adının üstüne çift
     tıklanınca açılan, sadece o satırın haftalık programını gösteren
@@ -696,7 +804,7 @@ class RowPreviewDialog(QDialog):
                     filtered[cell] = matched
 
         grid = MiniScheduleGrid()
-        grid.render(db, filtered, row_mode=mode)
+        grid.populate(db, filtered, row_mode=mode)
         layout.addWidget(grid, 1)
 
         button_row = QHBoxLayout()
@@ -818,7 +926,10 @@ class ScheduleTab(QWidget):
         self.export_pdf_button = QPushButton("  PDF")
         self.export_pdf_button.setObjectName("outlineButton")
         self.export_pdf_button.setIcon(theme.icon(theme.NAV_ICONS["document"], theme.ACCENT_HOVER))
-        self.export_pdf_button.setToolTip("Haftalık programın tamamını PDF dosyası olarak kaydeder.")
+        self.export_pdf_button.setToolTip(
+            "Her sınıf/öğretmen/öğrencinin haftalık programını AYRI bir sayfada içeren "
+            "tek bir PDF dosyası olarak kaydeder."
+        )
         self.add_lesson_button = QPushButton("  Ders Ekle")
         self.add_lesson_button.setObjectName("outlineButton")
         self.add_lesson_button.setIcon(theme.icon(theme.NAV_ICONS["plus"], theme.ACCENT_HOVER))
@@ -966,8 +1077,18 @@ class ScheduleTab(QWidget):
     def _render_grid_pixmap(self) -> QPixmap:
         return _render_table_pixmap(self.grid)
 
+    _PDF_FILENAME_BY_MODE = {MODE_CLASS: "siniflar", MODE_TEACHER: "ogretmenler", MODE_STUDENT: "ogrenciler"}
+
     def handle_export_pdf(self) -> None:
-        _export_table_as_pdf(self, self.grid, "haftalik_program.pdf")
+        # Ana Program'ın tamamı tek dev bir sayfa yerine, her satır
+        # (sınıf/öğretmen/öğrenci) kendi ayrı sayfasında olacak şekilde
+        # TEK bir çok sayfalı PDF olarak dışa aktarılır (bkz.
+        # _export_rows_as_multi_page_pdf) - kullanıcı isteği.
+        stem = self._PDF_FILENAME_BY_MODE.get(self.mode, "program")
+        _export_rows_as_multi_page_pdf(
+            self, self.db, self.navigator.week_start, self.mode, self._row_entities,
+            self._cell_blocks, f"{stem}_haftalik_program.pdf",
+        )
 
     def handle_copy_grid_image(self) -> None:
         _copy_table_as_image(self, self.grid)

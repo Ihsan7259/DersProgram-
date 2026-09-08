@@ -167,7 +167,13 @@ class MiniScheduleGrid(QTableWidget):
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setShowGrid(False)
 
-    def render(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], row_mode: str | None = None) -> None:
+    def populate(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], row_mode: str | None = None) -> None:
+        """Not: bilerek 'render' değil 'populate' adında - QWidget'ın
+        kendi render() metodunu (bir widget'ı QPaintDevice'a çizip pixmap
+        üretmek için kullanılır, bkz. schedule_tab._render_table_pixmap)
+        gölgelememesi için. Daha önce burası 'render' adındaydı ve PDF/
+        Kopyala düğmeleri tam da bu yüzden (table.render(pixmap) çağrısı
+        QWidget'ınkini değil BUNU çağırdığı için) çöküyordu."""
         day_names = db.day_names
         period_count = db.period_count
         self.setRowCount(period_count)
