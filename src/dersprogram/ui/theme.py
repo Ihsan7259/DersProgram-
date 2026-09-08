@@ -319,7 +319,12 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
 
     card = QWidget()
     card.setObjectName("lessonCard")
-    card.setStyleSheet(f"#lessonCard {{ background: {bg}; border-radius: 8px; }}")
+    # Kompakt modda (mini önizleme ızgaraları / PDF / Kopyala) köşeler
+    # KARE tutulur - yuvarlak köşeler bitişik hücrelerin arasında (aynı
+    # renkte bile olsalar) küçük bir "boşluk" izlenimi yaratıyordu, kart
+    # her zaman hücreyi tam dolduracağından burada yuvarlamaya gerek yok.
+    radius = 0 if compact else 8
+    card.setStyleSheet(f"#lessonCard {{ background: {bg}; border-radius: {radius}px; }}")
     layout = QVBoxLayout(card)
     layout.setContentsMargins(7, 5, 7, 4 if compact else 5)
     layout.setSpacing(1)
@@ -349,7 +354,7 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
     primary_label.setWordWrap(True)
     primary_label.setStyleSheet(
         f"font-family: '{FONT_HEADING}'; font-weight: 700; "
-        f"font-size: {'7.8pt' if compact else '9.3pt'}; color: {LESSON_TYPE_TEXT}; background: transparent;"
+        f"font-size: {'8.8pt' if compact else '9.3pt'}; color: {LESSON_TYPE_TEXT}; background: transparent;"
     )
     layout.addWidget(primary_label)
 
@@ -357,7 +362,7 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
         secondary_label = QLabel(secondary)
         secondary_label.setWordWrap(True)
         secondary_label.setStyleSheet(
-            f"font-size: {'7.2pt' if compact else '8.2pt'}; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;"
+            f"font-size: {'7.9pt' if compact else '8.2pt'}; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;"
         )
         layout.addWidget(secondary_label)
 
@@ -439,8 +444,9 @@ def make_dense_unavailable() -> QWidget:
 def make_empty_cell(compact: bool = False) -> QWidget:
     frame = QWidget()
     frame.setObjectName("cellFrame")
+    radius = 0 if compact else 8
     frame.setStyleSheet(
-        f"#cellFrame {{ border: 1.5px dashed {BORDER_INPUT}; border-radius: 8px; background: transparent; }}"
+        f"#cellFrame {{ border: 1.5px dashed {BORDER_INPUT}; border-radius: {radius}px; background: transparent; }}"
     )
     if not compact:
         layout = QVBoxLayout(frame)
@@ -460,7 +466,8 @@ def make_multi_cell(blocks: list, compact: bool = False, row_mode: str | None = 
         return make_empty_cell(compact=compact)
     frame = QWidget()
     frame.setObjectName("cellFrame")
-    frame.setStyleSheet("#cellFrame { border: none; border-radius: 8px; background: transparent; }")
+    radius = 0 if compact else 8
+    frame.setStyleSheet(f"#cellFrame {{ border: none; border-radius: {radius}px; background: transparent; }}")
     layout = QVBoxLayout(frame)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(3)

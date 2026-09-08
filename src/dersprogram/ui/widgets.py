@@ -160,12 +160,17 @@ class WeekNavigator(QWidget):
 
 
 class MiniScheduleGrid(QTableWidget):
-    """Salt okunur, filtrelenmiş (tek kişi/sınıfa ait) haftalık ızgara."""
+    """Salt okunur, filtrelenmiş (tek kişi/sınıfa ait) haftalık ızgara.
+    Hücreler AvailabilityGrid'deki (bkz. aşağıda _apply_grid_sizing) ile
+    AYNI mantıkla ~3:2 (genişlik:yükseklik) oranını korur - isim uzun/kısa
+    olsun her hücre AYNI boyutta kalır."""
 
     def __init__(self):
         super().__init__()
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setShowGrid(False)
+        self._day_count = 1
+        self._fixed_col_width: int | None = None
 
     def populate(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], row_mode: str | None = None) -> None:
         """Not: bilerek 'render' değil 'populate' adında - QWidget'ın
@@ -176,22 +181,58 @@ class MiniScheduleGrid(QTableWidget):
         QWidget'ınkini değil BUNU çağırdığı için) çöküyordu."""
         day_names = db.day_names
         period_count = db.period_count
+        self._day_count = max(len(day_names), 1)
         self.setRowCount(period_count)
         self.setColumnCount(len(day_names))
         self.setHorizontalHeaderLabels(day_names)
         self.setVerticalHeaderLabels(_period_header_labels(db, period_count))
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.verticalHeader().setMinimumWidth(30)
 
         for period in range(1, period_count + 1):
-            # Sabit satır yüksekliği - içerik uzun/kısa olsun her zaman AYNI
-            # (40'tan 52'ye çıkarıldı: iki satıra sarabilen uzun öğretmen/
-            # öğrenci adları için rahat yer bırakır, hiçbir kart diğerinden
-            # "küçük" görünmesin diye).
-            self.setRowHeight(period - 1, 52)
             for day in range(len(day_names)):
                 blocks = blocks_by_cell.get((day, period), [])
                 _set_cell_widget(self, period - 1, day, theme.make_multi_cell(blocks, compact=True, row_mode=row_mode))
+        self._apply_grid_sizing()
+
+    def set_fixed_column_width(self, width_px: int | None) -> None:
+        """Dışa aktarım (PDF/Kopyala) sırasında hücre genişliğini ekran
+        boyutundan BAĞIMSIZ, sabit bir piksel değerine kilitler - böylece
+        her sayfa/görsel AYNI hücre boyutunu (ve dolayısıyla aynı 3:2
+        oranını) kullanır. None verilirse ekrandaki (dialog) normal
+        davranışına, mevcut genişliğe göre otomatik hesaplamaya döner."""
+        self._fixed_col_width = width_px
+        self._apply_grid_sizing()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_grid_sizing()
+
+    def _apply_grid_sizing(self) -> None:
+        """AvailabilityGrid._apply_grid_sizing ile aynı mantık (bkz.
+        aşağıda): sütun genişliği önce belirlenir (ekranda mevcut
+        genişliğe göre, dışa aktarımda sabit hedef değere göre), satır
+        yüksekliği de bu genişliğe göre ~3:2 (genişlik:yükseklik)
+        oranında türetilir."""
+        if self.rowCount() == 0 or self.columnCount() == 0:
+            return
+        if self._fixed_col_width is not None:
+            col_width = self._fixed_col_width
+        else:
+            viewport_w = self.viewport().width()
+            if viewport_w <= 0:
+                return
+            scrollbar_w = self.style().pixelMetric(QStyle.PM_ScrollBarExtent)
+            usable_w = max(viewport_w - scrollbar_w, viewport_w // 2)
+            col_width = max(46, usable_w // self._day_count)
+
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Fixed)
+        for col in range(self.columnCount()):
+            self.setColumnWidth(col, col_width)
+
+        row_height = max(28, int(col_width / 1.5))
+        for row in range(self.rowCount()):
+            self.setRowHeight(row, row_height)
 
 
 class AvailabilityGrid(QTableWidget):

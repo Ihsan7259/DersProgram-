@@ -132,9 +132,9 @@ class _CellDelegate(QStyledItemDelegate):
                 painter.drawText(bottom, Qt.AlignHCenter | Qt.AlignTop, elided2)
 
             # Borca yapılan birebir göstergesi - kalıcı bir işaret değil,
-            # sadece ekranda gösterilir; PDF/Kopyala çıktısında görünmemesi
+            # sadece ekranda gösterilir; PDF çıktısında görünmemesi
             # için option.widget.show_debt_icons geçici olarak kapatılır
-            # (bkz. ScheduleTab._render_grid_pixmap).
+            # (bkz. _render_table_pixmap).
             if payload.get("debt") and getattr(option.widget, "show_debt_icons", True):
                 dot_size = 7
                 dot_rect = QRect(rect.right() - dot_size - 3, rect.top() + 3, dot_size, dot_size)
@@ -389,9 +389,9 @@ class MainGrid(QTableWidget):
         self._day_count = 1
         self._period_count = 1
         self._zoom = 1.0
-        # PDF/Kopyala çıktısında görünmemesi gereken borç göstergesi (bkz.
-        # _CellDelegate.paint, ScheduleTab._render_grid_pixmap) - normalde
-        # açık, sadece dışa aktarma sırasında geçici olarak kapatılır.
+        # PDF çıktısında görünmemesi gereken borç göstergesi (bkz.
+        # _CellDelegate.paint, _render_table_pixmap) - normalde açık,
+        # sadece dışa aktarma sırasında geçici olarak kapatılır.
         self.show_debt_icons = True
         self.cellDoubleClicked.connect(self._handle_double_click)
         self._apply_column_sizing()
@@ -621,33 +621,86 @@ def _render_table_pixmap(table: QTableWidget) -> QPixmap:
     return pixmap
 
 
-def _export_table_as_pdf(parent: QWidget, table: QTableWidget, default_filename: str) -> None:
+# Tek kişi/sınıf önizlemesi (RowPreviewDialog) ve toplu (çok sayfalı Ana
+# Program) PDF, kullanıcı isteği üzerine artık AYNI çözünürlüğü ve AYNI
+# hücre boyutlandırma mantığını (MiniScheduleGrid._apply_grid_sizing,
+# 3:2 oranı) paylaşıyor - "acil çözünürlük artışı" isteği için DPI 200'den
+# 300'e (matbaa kalitesi) çıkarıldı.
+_EXPORT_DPI = 300
+_EXPORT_COL_WIDTH_IN = 1.15  # hücre başına hedef fiziksel genişlik (inç)
+
+
+def _render_row_pixmap(grid: "MiniScheduleGrid", title: str, subtitle: str) -> QPixmap:
+    """Bir MiniScheduleGrid'i (tek kişi/sınıfın haftalık programı) başlık
+    (isim) ve alt başlık (hafta tarihi) ile birlikte TEK bir pixmap'e
+    çizer. Kopyala ve PDF (hem tekli önizleme hem de toplu Ana Program
+    PDF'i) AYNI bu fonksiyonu kullanır - kullanıcı isteği: ikisi BİREBİR
+    aynı formatta olsun, kopyalanan görsele de başlık eklensin. Izgara
+    sabit, yüksek çözünürlüklü (_EXPORT_DPI) hücrelerle ve 3:2 oranıyla
+    render edilir; kompakt kartların köşeleri artık kare olduğundan (bkz.
+    theme.py) hücreler arasında boşluk kalmaz."""
+    dpi = _EXPORT_DPI
+    col_width = int(_EXPORT_COL_WIDTH_IN * dpi)
+
+    old_width, old_height = grid.width(), grid.height()
+    grid.set_fixed_column_width(col_width)
+    content_width = grid.verticalHeader().width() + grid.columnCount() * col_width + 2 * grid.frameWidth()
+    grid.resize(content_width, old_height)
+    grid_pixmap = _render_table_pixmap(grid)
+    grid.set_fixed_column_width(None)
+    grid.resize(old_width, old_height)
+
+    margin = int(0.18 * dpi)
+    title_h = int(0.30 * dpi)
+    subtitle_h = int(0.20 * dpi)
+    gap_h = int(0.06 * dpi)
+    header_h = title_h + subtitle_h + gap_h
+
+    pixmap = QPixmap(grid_pixmap.width() + 2 * margin, margin + header_h + grid_pixmap.height() + margin)
+    pixmap.fill(Qt.white)
+    painter = QPainter(pixmap)
+
+    title_font = QFont(painter.font())
+    title_font.setBold(True)
+    title_font.setPixelSize(max(10, int(title_h * 0.62)))
+    painter.setFont(title_font)
+    painter.setPen(QColor(theme.INK))
+    painter.drawText(
+        QRectF(margin, margin, grid_pixmap.width(), title_h), Qt.AlignLeft | Qt.AlignVCenter, title,
+    )
+
+    subtitle_font = QFont(painter.font())
+    subtitle_font.setBold(False)
+    subtitle_font.setPixelSize(max(8, int(subtitle_h * 0.55)))
+    painter.setFont(subtitle_font)
+    painter.setPen(QColor(theme.INK_MUTED_58))
+    painter.drawText(
+        QRectF(margin, margin + title_h, grid_pixmap.width(), subtitle_h), Qt.AlignLeft | Qt.AlignVCenter, subtitle,
+    )
+
+    painter.drawPixmap(margin, margin + header_h, grid_pixmap)
+    painter.end()
+    return pixmap
+
+
+def _export_table_as_pdf(parent: QWidget, grid: "MiniScheduleGrid", default_filename: str, title: str, subtitle: str) -> None:
     path, _ = QFileDialog.getSaveFileName(parent, "PDF Olarak Kaydet", default_filename, "PDF Dosyası (*.pdf)")
     if not path:
         return
     if not path.lower().endswith(".pdf"):
         path += ".pdf"
 
-    # Kullanıcı isteği: PDF, "Kopyala" ile üretilen görselle BİREBİR aynı
-    # formatta olsun - sabit A4 sayfasına sığdırıp ortalamak (önceki
-    # yaklaşım), içerik sayfadan küçük kaldığında etrafında büyük boş
-    # alanlar bırakıp okunurluğu düşürüyordu. Artık sayfa boyutu, önce
-    # render edilen içeriğin gerçek piksel boyutuna göre ayarlanıyor -
-    # hiç boş alan, hiç ölçeklendirme (1:1 çizim).
-    DPI = 200
-    old_width = table.width()
-    render_width = max(int(9.5 * DPI), old_width)
-    if render_width != old_width:
-        table.resize(render_width, table.height())
-    pixmap = _render_table_pixmap(table)
-    if render_width != old_width:
-        table.resize(old_width, table.height())
-
-    margin = int(0.25 * DPI)
+    # Kullanıcı isteği: PDF, "Kopyala" ile üretilen (artık başlıklı) görselle
+    # BİREBİR aynı formatta olsun - ikisi de aynı _render_row_pixmap'i
+    # kullanır. Sayfa boyutu, önce render edilen içeriğin gerçek piksel
+    # boyutuna göre ayarlanıyor - hiç boş alan, hiç ölçeklendirme (1:1 çizim).
+    pixmap = _render_row_pixmap(grid, title, subtitle)
+    dpi = _EXPORT_DPI
+    margin = int(0.15 * dpi)
     writer = QPdfWriter(path)
-    writer.setResolution(DPI)
+    writer.setResolution(dpi)
     writer.setPageSize(QPageSize(
-        QSizeF((pixmap.width() + 2 * margin) / DPI, (pixmap.height() + 2 * margin) / DPI),
+        QSizeF((pixmap.width() + 2 * margin) / dpi, (pixmap.height() + 2 * margin) / dpi),
         QPageSize.Unit.Inch,
     ))
     writer.setPageMargins(QMarginsF(0, 0, 0, 0))
@@ -659,8 +712,8 @@ def _export_table_as_pdf(parent: QWidget, table: QTableWidget, default_filename:
     QMessageBox.information(parent, "PDF Oluşturuldu", f"PDF olarak kaydedildi:\n{path}")
 
 
-def _copy_table_as_image(parent: QWidget, table: QTableWidget) -> None:
-    pixmap = _render_table_pixmap(table)
+def _copy_table_as_image(parent: QWidget, grid: "MiniScheduleGrid", title: str, subtitle: str) -> None:
+    pixmap = _render_row_pixmap(grid, title, subtitle)
     QApplication.clipboard().setPixmap(pixmap)
     QMessageBox.information(
         parent,
@@ -702,22 +755,15 @@ def _export_rows_as_multi_page_pdf(
     period_count = db.period_count
     week_text = scheduling.week_label(week_start, len(day_names))
 
-    # Kullanıcı isteği: PDF, "Kopyala" düğmesinin ürettiği görselle BİREBİR
-    # aynı formatta olsun. Önceki yaklaşım (sabit A4 sayfasına sığdırıp
-    # ortalamak) içerik sayfadan çok daha küçük kaldığında (ör. az ders
-    # saati olan kurumlarda) görselin etrafında büyük boş alanlar
-    # bırakıyor, bu da OKUNURLUĞU ciddi şekilde düşürüyordu (küçük bir
-    # görsel devasa boş bir sayfada). Artık tam tersi: ÖNCE içerik (aynı
-    # Kopyala'nın kopyaladığı pixmap) render edilir, SONRA sayfa boyutu bu
+    # Kullanıcı isteği: PDF, "Kopyala" düğmesinin ürettiği (başlıklı)
+    # görselle BİREBİR aynı formatta olsun - her sayfa, tek kişi/sınıf
+    # önizlemesindeki ("RowPreviewDialog") Kopyala/PDF ile TAMAMEN aynı
+    # _render_row_pixmap fonksiyonundan geçer (aynı çözünürlük, aynı 3:2
+    # hücre oranı, aynı başlık biçimi). Sayfa boyutu, önce render edilen
     # içeriğin gerçek piksel boyutuna göre ayarlanır - hiç boş alan
     # kalmaz, hiç büyütme/küçültme (bulanıklaştırma) olmaz, ölçek 1:1'dir.
-    DPI = 200
-    RENDER_WIDTH = int(9.5 * DPI)  # ~ A4 eninden biraz dar, kenar boşluğuna yer bırakır
-    MARGIN = int(0.25 * DPI)
-    TITLE_H = int(0.32 * DPI)
-    SUBTITLE_H = int(0.22 * DPI)
-    GAP_H = int(0.08 * DPI)
-    header_h = TITLE_H + SUBTITLE_H + GAP_H
+    dpi = _EXPORT_DPI
+    page_margin = int(0.15 * dpi)
 
     # Sayfaları render etmek için kullanılan geçici ızgara, ekranda hiç
     # görünmeden (show() çağrılmadan) tek tek yeniden doldurulup pixmap'e
@@ -728,16 +774,17 @@ def _export_rows_as_multi_page_pdf(
 
     # Sayfa boyutu, gün/saat sayısına göre TÜM sayfalarda aynı olacağından
     # (kurum geneli sabit) bir kez, boş bir ızgarayla ölçülüp önceden
-    # hesaplanır - her sayfa için yeniden hesaplamaya gerek yok.
-    temp_grid.resize(RENDER_WIDTH, 100)
+    # hesaplanır - her sayfa için yeniden hesaplamaya gerek yok (başlık
+    # metninin uzunluğu sayfa boyutunu etkilemez, kutu yüksekliği sabittir).
+    temp_grid.resize(400, 100)
     temp_grid.populate(db, {}, row_mode=mode)
-    probe_pixmap = _render_table_pixmap(temp_grid)
-    page_w_px = probe_pixmap.width() + 2 * MARGIN
-    page_h_px = MARGIN + header_h + probe_pixmap.height() + MARGIN
+    probe_pixmap = _render_row_pixmap(temp_grid, "", "")
+    page_w_px = probe_pixmap.width() + 2 * page_margin
+    page_h_px = probe_pixmap.height() + 2 * page_margin
 
     writer = QPdfWriter(path)
-    writer.setResolution(DPI)
-    writer.setPageSize(QPageSize(QSizeF(page_w_px / DPI, page_h_px / DPI), QPageSize.Unit.Inch))
+    writer.setResolution(dpi)
+    writer.setPageSize(QPageSize(QSizeF(page_w_px / dpi, page_h_px / dpi), QPageSize.Unit.Inch))
     writer.setPageMargins(QMarginsF(0, 0, 0, 0))
     painter = QPainter(writer)
 
@@ -753,33 +800,14 @@ def _export_rows_as_multi_page_pdf(
                     if blocks:
                         filtered[(day, period)] = blocks
 
-            temp_grid.resize(RENDER_WIDTH, 100)
             temp_grid.populate(db, filtered, row_mode=mode)
-            pixmap = _render_table_pixmap(temp_grid)
-
-            title_font = QFont(painter.font())
-            title_font.setBold(True)
-            title_font.setPointSize(16)
-            painter.setFont(title_font)
-            painter.setPen(QColor(theme.INK))
-            painter.drawText(
-                QRectF(MARGIN, MARGIN, pixmap.width(), TITLE_H),
-                Qt.AlignLeft | Qt.AlignVCenter, name,
-            )
-
-            subtitle_font = QFont(painter.font())
-            subtitle_font.setBold(False)
-            subtitle_font.setPointSize(10)
-            painter.setFont(subtitle_font)
-            painter.setPen(QColor(theme.INK_MUTED_58))
-            painter.drawText(
-                QRectF(MARGIN, MARGIN + TITLE_H, pixmap.width(), SUBTITLE_H),
-                Qt.AlignLeft | Qt.AlignVCenter, week_text,
-            )
+            pixmap = _render_row_pixmap(temp_grid, name, week_text)
 
             # 1:1 çizim - hiç ölçeklendirme yok, Kopyala'nın ürettiği
             # görselle piksel piksel aynı.
-            painter.drawPixmap(QRectF(MARGIN, MARGIN + header_h, pixmap.width(), pixmap.height()), pixmap, QRectF(pixmap.rect()))
+            painter.drawPixmap(
+                QRectF(page_margin, page_margin, pixmap.width(), pixmap.height()), pixmap, QRectF(pixmap.rect()),
+            )
     finally:
         painter.end()
         temp_grid.deleteLater()
@@ -801,11 +829,13 @@ class RowPreviewDialog(QDialog):
         self.setWindowTitle(f"{entity_name} - Haftalık Program (Önizleme)")
         self.resize(760, 560)
 
+        week_text = scheduling.week_label(week_start, len(db.day_names))
+
         layout = QVBoxLayout(self)
         title = QLabel(entity_name)
         title.setStyleSheet(f"font-family:'{theme.FONT_HEADING}'; font-weight:700; font-size:13pt;")
         layout.addWidget(title)
-        subtitle = QLabel(scheduling.week_label(week_start, len(db.day_names)))
+        subtitle = QLabel(week_text)
         subtitle.setStyleSheet(f"font-size:9pt; color:{theme.INK_MUTED_58};")
         layout.addWidget(subtitle)
 
@@ -832,8 +862,8 @@ class RowPreviewDialog(QDialog):
         copy_button = QPushButton("  Kopyala")
         copy_button.setObjectName("outlineButton")
         copy_button.setIcon(theme.icon(theme.NAV_ICONS["copy"], theme.ACCENT_HOVER))
-        copy_button.setToolTip("Bu haftalık programı görsel olarak panoya kopyalar.")
-        copy_button.clicked.connect(lambda: _copy_table_as_image(self, grid))
+        copy_button.setToolTip("Bu haftalık programı, başlığıyla birlikte görsel olarak panoya kopyalar.")
+        copy_button.clicked.connect(lambda: _copy_table_as_image(self, grid, entity_name, week_text))
         button_row.addWidget(copy_button)
 
         pdf_button = QPushButton("  PDF")
@@ -841,7 +871,7 @@ class RowPreviewDialog(QDialog):
         pdf_button.setIcon(theme.icon(theme.NAV_ICONS["document"], theme.ACCENT_HOVER))
         pdf_button.setToolTip("Bu haftalık programı PDF dosyası olarak kaydeder.")
         default_filename = f"{_sanitize_filename(entity_name)}_haftalik_program.pdf"
-        pdf_button.clicked.connect(lambda: _export_table_as_pdf(self, grid, default_filename))
+        pdf_button.clicked.connect(lambda: _export_table_as_pdf(self, grid, default_filename, entity_name, week_text))
         button_row.addWidget(pdf_button)
         button_row.addStretch()
 
@@ -940,10 +970,6 @@ class ScheduleTab(QWidget):
         toolbar.addWidget(self.zoom_out_button)
         toolbar.addWidget(self.zoom_label)
         toolbar.addWidget(self.zoom_in_button)
-        self.copy_grid_button = QPushButton("  Kopyala")
-        self.copy_grid_button.setObjectName("outlineButton")
-        self.copy_grid_button.setIcon(theme.icon(theme.NAV_ICONS["copy"], theme.ACCENT_HOVER))
-        self.copy_grid_button.setToolTip("Haftalık programın tamamını görsel olarak panoya kopyalar.")
         self.export_pdf_button = QPushButton("  PDF")
         self.export_pdf_button.setObjectName("outlineButton")
         self.export_pdf_button.setIcon(theme.icon(theme.NAV_ICONS["document"], theme.ACCENT_HOVER))
@@ -961,7 +987,6 @@ class ScheduleTab(QWidget):
         self.undo_auto_assign_button.setObjectName("outlineButton")
         self.undo_auto_assign_button.setVisible(False)
         toolbar.addStretch()
-        toolbar.addWidget(self.copy_grid_button)
         toolbar.addWidget(self.export_pdf_button)
         toolbar.addWidget(self.add_lesson_button)
         toolbar.addWidget(self.auto_assign_button)
@@ -1067,7 +1092,6 @@ class ScheduleTab(QWidget):
 
         layout.addWidget(splitter, 1)
 
-        self.copy_grid_button.clicked.connect(self.handle_copy_grid_image)
         self.export_pdf_button.clicked.connect(self.handle_export_pdf)
         self.add_lesson_button.clicked.connect(self.handle_add_lesson)
         self.auto_assign_button.clicked.connect(self.handle_auto_assign)
@@ -1096,10 +1120,7 @@ class ScheduleTab(QWidget):
         self._render_grid()
         self._reapply_pool_preview()  # aktif önizleme varsa yeniden uygula
 
-    # ---------- PDF / görsel kopyalama ----------
-    def _render_grid_pixmap(self) -> QPixmap:
-        return _render_table_pixmap(self.grid)
-
+    # ---------- PDF dışa aktarma ----------
     _PDF_FILENAME_BY_MODE = {MODE_CLASS: "siniflar", MODE_TEACHER: "ogretmenler", MODE_STUDENT: "ogrenciler"}
 
     def handle_export_pdf(self) -> None:
@@ -1112,9 +1133,6 @@ class ScheduleTab(QWidget):
             self, self.db, self.navigator.week_start, self.mode, self._row_entities,
             self._cell_blocks, f"{stem}_haftalik_program.pdf",
         )
-
-    def handle_copy_grid_image(self) -> None:
-        _copy_table_as_image(self, self.grid)
 
     def _render_drag_pixmap(self, block_id: int):
         """Havuzdan bir ders sürüklenirken imleçle birlikte gösterilecek
@@ -1354,7 +1372,7 @@ class ScheduleTab(QWidget):
         """Bu haftaki programda birebir dersi olan, paket saati aşılmış
         (borçlu) öğrencilerin id'leri - Ana Program hücrelerinde küçük
         kırmızı nokta göstermek için (bkz. _render_grid, _CellDelegate);
-        PDF/Kopyala çıktısında görünmez (bkz. _render_grid_pixmap)."""
+        PDF çıktısında görünmez (bkz. _render_table_pixmap)."""
         student_ids: set[int] = set()
         for blocks in self._schedule.values():
             for block in blocks:
