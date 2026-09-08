@@ -251,6 +251,15 @@ class MiniScheduleGrid(QTableWidget):
         for col in range(self.columnCount()):
             self.setColumnWidth(col, col_width)
 
+        # DİKKAT: yatay başlıkta olduğu gibi dikey başlık da açıkça Fixed
+        # yapılmazsa, Qt bir hücredeki widget'ın (ör. uzun bir öğretmen adı
+        # yüzünden) minimum boyutu bizim verdiğimiz satır yüksekliğinden
+        # büyükse O SATIRI SESSİZCE BÜYÜTÜYOR - böylece aynı hafta içinde
+        # bazı satırlar diğerlerinden çok daha uzun/orantısız görünüyordu
+        # (kullanıcı ekran görüntüsüyle bildirdi). Fixed ile satır yüksekliği
+        # her koşulda bizim belirlediğimiz değerde SABİT kalır.
+        v_header = self.verticalHeader()
+        v_header.setSectionResizeMode(QHeaderView.Fixed)
         row_height = max(28, int(col_width / 1.5))
         for row in range(self.rowCount()):
             self.setRowHeight(row, row_height)
@@ -350,6 +359,15 @@ class AvailabilityGrid(QTableWidget):
         for col in range(self.columnCount()):
             self.setColumnWidth(col, col_width)
 
+        # DİKKAT: yatay başlıkta olduğu gibi dikey başlık da açıkça Fixed
+        # yapılmazsa, Qt bir hücredeki widget'ın (ör. uzun bir öğretmen adı
+        # yüzünden) minimum boyutu bizim verdiğimiz satır yüksekliğinden
+        # büyükse O SATIRI SESSİZCE BÜYÜTÜYOR - böylece aynı hafta içinde
+        # bazı satırlar diğerlerinden çok daha uzun/orantısız görünüyordu
+        # (kullanıcı ekran görüntüsüyle bildirdi). Fixed ile satır yüksekliği
+        # her koşulda bizim belirlediğimiz değerde SABİT kalır.
+        v_header = self.verticalHeader()
+        v_header.setSectionResizeMode(QHeaderView.Fixed)
         row_height = max(28, int(col_width / 1.5))
         for row in range(self.rowCount()):
             self.setRowHeight(row, row_height)
