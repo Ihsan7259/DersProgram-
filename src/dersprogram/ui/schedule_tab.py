@@ -11,7 +11,7 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QMarginsF, QRectF, Qt, QMimeData, QRect, QSize, QThread, Signal
+from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QMimeData, QRect, QSize, QThread, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QFontMetrics, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -628,34 +628,32 @@ def _export_table_as_pdf(parent: QWidget, table: QTableWidget, default_filename:
     if not path.lower().endswith(".pdf"):
         path += ".pdf"
 
-    writer = QPdfWriter(path)
-    writer.setPageSize(QPageSize(QPageSize.A4))
-    writer.setPageOrientation(QPageLayout.Landscape)
-    writer.setPageMargins(QMarginsF(10, 10, 10, 10))
-    writer.setResolution(200)
-    page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
-
-    # Kaynak görseli (mümkünse) sayfa genişliğiyle BİREBİR piksel eninde
-    # render eder - aksi halde (widget'ın o an ekrandaki dar genişliğiyle
-    # yetinilse) yazdırırken büyütme gerekip görüntü bulanıklaşırdı.
+    # Kullanıcı isteği: PDF, "Kopyala" ile üretilen görselle BİREBİR aynı
+    # formatta olsun - sabit A4 sayfasına sığdırıp ortalamak (önceki
+    # yaklaşım), içerik sayfadan küçük kaldığında etrafında büyük boş
+    # alanlar bırakıp okunurluğu düşürüyordu. Artık sayfa boyutu, önce
+    # render edilen içeriğin gerçek piksel boyutuna göre ayarlanıyor -
+    # hiç boş alan, hiç ölçeklendirme (1:1 çizim).
+    DPI = 200
     old_width = table.width()
-    render_width = max(int(page_rect.width()), old_width)
+    render_width = max(int(9.5 * DPI), old_width)
     if render_width != old_width:
         table.resize(render_width, table.height())
     pixmap = _render_table_pixmap(table)
     if render_width != old_width:
         table.resize(old_width, table.height())
 
+    margin = int(0.25 * DPI)
+    writer = QPdfWriter(path)
+    writer.setResolution(DPI)
+    writer.setPageSize(QPageSize(
+        QSizeF((pixmap.width() + 2 * margin) / DPI, (pixmap.height() + 2 * margin) / DPI),
+        QPageSize.Unit.Inch,
+    ))
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0))
+
     painter = QPainter(writer)
-    scale = min(
-        page_rect.width() / pixmap.width(),
-        page_rect.height() / pixmap.height(),
-    )
-    scaled_w = pixmap.width() * scale
-    scaled_h = pixmap.height() * scale
-    x = page_rect.x() + (page_rect.width() - scaled_w) / 2
-    y = page_rect.y() + (page_rect.height() - scaled_h) / 2
-    painter.drawPixmap(QRectF(x, y, scaled_w, scaled_h), pixmap, QRectF(pixmap.rect()))
+    painter.drawPixmap(QRectF(margin, margin, pixmap.width(), pixmap.height()), pixmap, QRectF(pixmap.rect()))
     painter.end()
 
     QMessageBox.information(parent, "PDF Oluşturuldu", f"PDF olarak kaydedildi:\n{path}")
@@ -704,36 +702,45 @@ def _export_rows_as_multi_page_pdf(
     period_count = db.period_count
     week_text = scheduling.week_label(week_start, len(day_names))
 
-    writer = QPdfWriter(path)
-    writer.setPageSize(QPageSize(QPageSize.A4))
-    writer.setPageOrientation(QPageLayout.Landscape)
-    writer.setPageMargins(QMarginsF(10, 10, 10, 10))
-    # 150 -> 200 DPI: daha net (kullanıcı geri bildirimi: "çözünürlükler
-    # çok hoşuma gitmedi"). Asıl netliği belirleyen ise kaynak pixmap'in
-    # piksel boyutu - aşağıda content_rect genişliğiyle BİREBİR eşleşecek
-    # şekilde render edilip büyütme (bulanıklaştıran) yerine gerekirse
-    # hafifçe küçültülüyor.
-    writer.setResolution(200)
-    painter = QPainter(writer)
-
-    page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
-    title_height = 34
-    subtitle_height = 22
-    header_h = title_height + subtitle_height + 10
-    content_rect = QRectF(
-        page_rect.x(), page_rect.y() + header_h,
-        page_rect.width(), page_rect.height() - header_h,
-    )
+    # Kullanıcı isteği: PDF, "Kopyala" düğmesinin ürettiği görselle BİREBİR
+    # aynı formatta olsun. Önceki yaklaşım (sabit A4 sayfasına sığdırıp
+    # ortalamak) içerik sayfadan çok daha küçük kaldığında (ör. az ders
+    # saati olan kurumlarda) görselin etrafında büyük boş alanlar
+    # bırakıyor, bu da OKUNURLUĞU ciddi şekilde düşürüyordu (küçük bir
+    # görsel devasa boş bir sayfada). Artık tam tersi: ÖNCE içerik (aynı
+    # Kopyala'nın kopyaladığı pixmap) render edilir, SONRA sayfa boyutu bu
+    # içeriğin gerçek piksel boyutuna göre ayarlanır - hiç boş alan
+    # kalmaz, hiç büyütme/küçültme (bulanıklaştırma) olmaz, ölçek 1:1'dir.
+    DPI = 200
+    RENDER_WIDTH = int(9.5 * DPI)  # ~ A4 eninden biraz dar, kenar boşluğuna yer bırakır
+    MARGIN = int(0.25 * DPI)
+    TITLE_H = int(0.32 * DPI)
+    SUBTITLE_H = int(0.22 * DPI)
+    GAP_H = int(0.08 * DPI)
+    header_h = TITLE_H + SUBTITLE_H + GAP_H
 
     # Sayfaları render etmek için kullanılan geçici ızgara, ekranda hiç
     # görünmeden (show() çağrılmadan) tek tek yeniden doldurulup pixmap'e
     # çizilir - her satır için ayrı widget oluşturmak yerine tek widget
-    # tekrar kullanılır (performans). Genişliği content_rect ile BİREBİR
-    # eşleştirilir ki yazdırırken büyütme (upscale) gerekmesin - büyütme,
-    # bulanık/düşük çözünürlüklü görünüme yol açan asıl sebepti.
-    render_width = max(int(content_rect.width()), 1)
+    # tekrar kullanılır (performans).
     temp_grid = MiniScheduleGrid()
     temp_grid.setParent(parent)
+
+    # Sayfa boyutu, gün/saat sayısına göre TÜM sayfalarda aynı olacağından
+    # (kurum geneli sabit) bir kez, boş bir ızgarayla ölçülüp önceden
+    # hesaplanır - her sayfa için yeniden hesaplamaya gerek yok.
+    temp_grid.resize(RENDER_WIDTH, 100)
+    temp_grid.populate(db, {}, row_mode=mode)
+    probe_pixmap = _render_table_pixmap(temp_grid)
+    page_w_px = probe_pixmap.width() + 2 * MARGIN
+    page_h_px = MARGIN + header_h + probe_pixmap.height() + MARGIN
+
+    writer = QPdfWriter(path)
+    writer.setResolution(DPI)
+    writer.setPageSize(QPageSize(QSizeF(page_w_px / DPI, page_h_px / DPI), QPageSize.Unit.Inch))
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0))
+    painter = QPainter(writer)
+
     try:
         for index, (entity_id, name) in enumerate(row_entities):
             if index > 0:
@@ -746,7 +753,7 @@ def _export_rows_as_multi_page_pdf(
                     if blocks:
                         filtered[(day, period)] = blocks
 
-            temp_grid.resize(render_width, 100)
+            temp_grid.resize(RENDER_WIDTH, 100)
             temp_grid.populate(db, filtered, row_mode=mode)
             pixmap = _render_table_pixmap(temp_grid)
 
@@ -756,7 +763,7 @@ def _export_rows_as_multi_page_pdf(
             painter.setFont(title_font)
             painter.setPen(QColor(theme.INK))
             painter.drawText(
-                QRectF(page_rect.x(), page_rect.y(), page_rect.width(), title_height),
+                QRectF(MARGIN, MARGIN, pixmap.width(), TITLE_H),
                 Qt.AlignLeft | Qt.AlignVCenter, name,
             )
 
@@ -766,19 +773,13 @@ def _export_rows_as_multi_page_pdf(
             painter.setFont(subtitle_font)
             painter.setPen(QColor(theme.INK_MUTED_58))
             painter.drawText(
-                QRectF(page_rect.x(), page_rect.y() + title_height, page_rect.width(), subtitle_height),
+                QRectF(MARGIN, MARGIN + TITLE_H, pixmap.width(), SUBTITLE_H),
                 Qt.AlignLeft | Qt.AlignVCenter, week_text,
             )
 
-            # scale <= 1 olacak şekilde tasarlandı (genişlik zaten birebir
-            # eşleşiyor, yükseklik de sığdırmak için gerekirse küçültülür) -
-            # hiçbir zaman büyütme (blur) olmaz.
-            scale = min(content_rect.width() / pixmap.width(), content_rect.height() / pixmap.height())
-            scaled_w = pixmap.width() * scale
-            scaled_h = pixmap.height() * scale
-            x = content_rect.x() + (content_rect.width() - scaled_w) / 2
-            y = content_rect.y() + (content_rect.height() - scaled_h) / 2
-            painter.drawPixmap(QRectF(x, y, scaled_w, scaled_h), pixmap, QRectF(pixmap.rect()))
+            # 1:1 çizim - hiç ölçeklendirme yok, Kopyala'nın ürettiği
+            # görselle piksel piksel aynı.
+            painter.drawPixmap(QRectF(MARGIN, MARGIN + header_h, pixmap.width(), pixmap.height()), pixmap, QRectF(pixmap.rect()))
     finally:
         painter.end()
         temp_grid.deleteLater()
