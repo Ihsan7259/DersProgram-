@@ -29,8 +29,16 @@ from ..db import (
     LESSON_TYPE_LABELS,
 )
 
-FONT_HEADING = "Manrope"
+FONT_HEADING = "Segoe UI"
 FONT_BODY = "Work Sans"
+# NOT: FONT_HEADING kalın (weight 700/800) yerlerde kullanılıyor. Manrope.ttf
+# değişken (variable) bir font ve Qt'nin bu dosyadan varsayılan olarak
+# gösterdiği ağırlık "ExtraLight" (200) - kalın (700) istenince Qt bunu
+# GERÇEK bir kalın yazı tipiyle değil, ince (200) glifleri kabaca
+# şişirerek (sahte/synthetic bold) çiziyordu. Büyük piksel boyutlarında
+# (PDF/Kopyala dışa aktarımı) bu, harflerin "orantısız", çizgilerin
+# düzensiz görünmesine yol açıyordu. Windows'ta her zaman bulunan, gerçek
+# kalın ağırlığı olan sistem fontuna (Segoe UI) geçildi.
 
 MODE = "light"
 

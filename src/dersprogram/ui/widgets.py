@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QHBoxLayout,
@@ -176,6 +176,7 @@ class MiniScheduleGrid(QTableWidget):
         self._fixed_col_width: int | None = None
         self._last_populate_args: tuple | None = None
         self._applied_sizing: tuple | None = None
+        self._sizing_pending = False
 
     def populate(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], row_mode: str | None = None) -> None:
         """Not: bilerek 'render' değil 'populate' adında - QWidget'ın
@@ -274,7 +275,31 @@ class MiniScheduleGrid(QTableWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._apply_grid_sizing()
+        # Kullanıcı bildirimi: özellikle bir önizleme diyaloğu YENİ
+        # AÇILIRKEN hücreler "büyüyüp küçülüyor" gibi titriyordu. Pencere
+        # ilk gösterilirken Qt/pencere yöneticisi genellikle TEK bir
+        # mantıksal boyutlandırma için ard arda birkaç resizeEvent
+        # gönderir (her biri farklı ara bir genişlikte); her birinde
+        # senkron olarak yeniden boyutlandırmak, ızgaranın o kısa sürede
+        # birkaç kez farklı boyuta sıçramasına (görsel titremeye) yol
+        # açıyordu. Bunun yerine gerçek uygulama bir sonraki olay
+        # döngüsü turuna ERTELENİR - böylece art arda gelen resizeEvent'ler
+        # TEK bir (son, kararlı) boyutlandırmada birleşir.
+        if not self._sizing_pending:
+            self._sizing_pending = True
+            QTimer.singleShot(0, self._apply_pending_grid_sizing)
+
+    def _apply_pending_grid_sizing(self) -> None:
+        # Ertelenmiş (bir sonraki olay döngüsü turuna atılmış) çağrı
+        # çalıştığında widget zaten silinmiş olabilir (ör. toplu PDF
+        # dışa aktarımının kullanıp attığı geçici ızgara - deleteLater()
+        # bu zamanlayıcıdan önce ya da sonra işlenebilir) - PySide bu
+        # durumda RuntimeError fırlatır, sessizce yok sayılır.
+        try:
+            self._sizing_pending = False
+            self._apply_grid_sizing()
+        except RuntimeError:
+            pass
 
     def _resolve_col_width(self) -> int | None:
         if self._fixed_col_width is not None:
