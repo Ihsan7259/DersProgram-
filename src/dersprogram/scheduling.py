@@ -1275,14 +1275,28 @@ def summarize_hours_range(
     teacher_id: int | None = None,
     student_id: int | None = None,
 ) -> dict[str, int]:
-    """start_date - end_date arasındaki HER HAFTA için o haftanın efektif
-    programını hesaplayıp toplar (şablon + istisnalar dahil)."""
+    """start_date - end_date arasını (İKİSİ DE DAHİL) GÜN BAZINDA hassas
+    hesaplar - haftanın tamamını değil, sadece aralığa denk düşen günleri
+    sayar (ör. başlangıç haftanın ortasında bir günse, o haftanın önceki
+    günleri sayılmaz). Her hafta kendi efektif programıyla (şablon + o
+    haftaya özel istisnalar/küçük değişiklikler dahil, bkz. get_week_view)
+    hesaba katılır - dönem boyunca bir haftada yapılan tekil bir değişiklik
+    (ör. bir dersin o hafta başka güne alınması) da doğru hafta/güne göre
+    sayılır."""
     totals: dict[str, int] = {t: 0 for t in LESSON_TYPE_LABELS}
     week = monday_of(start_date)
     last_week = monday_of(end_date)
     while week <= last_week:
-        week_totals = summarize_hours(db, week, teacher_id=teacher_id, student_id=student_id)
-        for k, v in week_totals.items():
-            totals[k] += v
+        schedule, _pool = get_week_view(db, week)
+        for (day, _period), blocks in schedule.items():
+            cell_date = week + _dt.timedelta(days=day)
+            if not (start_date <= cell_date <= end_date):
+                continue
+            for block in blocks:
+                if teacher_id is not None and block.teacher_id != teacher_id:
+                    continue
+                if student_id is not None and block.student_id != student_id:
+                    continue
+                totals[block.type] = totals.get(block.type, 0) + 1
         week += _dt.timedelta(days=7)
     return totals

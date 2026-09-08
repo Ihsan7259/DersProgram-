@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QDateEdit,
     QLineEdit,
+    QComboBox,
     QMessageBox,
     QFormLayout,
 )
@@ -43,6 +44,20 @@ class PaymentsTab(QWidget):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.addWidget(_section_title("Öğrenci Listesi"))
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Öğrenci ara...")
+        left_layout.addWidget(self.search_edit)
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("İsme Göre (A-Z)", "name_asc")
+        self.sort_combo.addItem("İsme Göre (Z-A)", "name_desc")
+        self.sort_combo.addItem("Son Ödeme Tarihine Göre (Yeniden Eskiye)", "last_payment_desc")
+        self.sort_combo.addItem("Son Ödeme Tarihine Göre (Eskiden Yeniye)", "last_payment_asc")
+        self.sort_combo.addItem("İlk Ödeme Tarihine Göre (Yeniden Eskiye)", "first_payment_desc")
+        self.sort_combo.addItem("İlk Ödeme Tarihine Göre (Eskiden Yeniye)", "first_payment_asc")
+        left_layout.addWidget(self.sort_combo)
+
         self.student_list = QListWidget()
         left_layout.addWidget(self.student_list, 1)
         left.setMaximumWidth(260)
@@ -63,6 +78,7 @@ class PaymentsTab(QWidget):
         package_row.addWidget(QLabel("Paket Saati:"))
         self.package_spin = QDoubleSpinBox()
         self.package_spin.setRange(0, 10_000)
+        self.package_spin.setDecimals(0)  # saat tam sayı olsun - virgüllü (ondalıklı) görünmesin
         self.package_spin.setSuffix(" saat")
         package_row.addWidget(self.package_spin)
         self.save_package_button = QPushButton("Kaydet")
@@ -119,15 +135,56 @@ class PaymentsTab(QWidget):
         self.add_payment_button.clicked.connect(self.handle_add_payment)
         self.delete_payment_button.clicked.connect(self.handle_delete_payment)
         self.save_package_button.clicked.connect(self.handle_save_package)
+        self.search_edit.textChanged.connect(self.refresh_students)
+        self.sort_combo.currentIndexChanged.connect(self.refresh_students)
 
         self.refresh_students()
 
+    def _sorted_filtered_students(self) -> list:
+        """Arama kutusuna ve sıralama seçimine göre süzülmüş/sıralanmış
+        öğrenci listesi - isme göre (A-Z/Z-A) ya da ilk/son ödeme
+        tarihine göre (eskiden yeniye/yeniden eskiye). Hiç ödemesi
+        olmayan öğrenciler, tarih bazlı sıralamalarda seçilen yönden
+        bağımsız olarak her zaman listenin sonunda kalır."""
+        students = list(self.db.list_students())
+
+        query = self.search_edit.text().strip().lower()
+        if query:
+            students = [s for s in students if query in s["name"].lower()]
+
+        sort_key = self.sort_combo.currentData()
+        if sort_key == "name_desc":
+            students.sort(key=lambda s: s["name"].lower(), reverse=True)
+        elif sort_key in ("last_payment_desc", "last_payment_asc", "first_payment_desc", "first_payment_asc"):
+            want_first = sort_key.startswith("first_payment")
+            reverse = sort_key.endswith("_desc")
+            dates: dict[int, str] = {}
+            for s in students:
+                payments = self.db.list_payments(s["id"])
+                dates[s["id"]] = (payments[0]["payment_date"] if want_first else payments[-1]["payment_date"]) if payments else ""
+            with_date = sorted((s for s in students if dates[s["id"]]), key=lambda s: dates[s["id"]], reverse=reverse)
+            without_date = [s for s in students if not dates[s["id"]]]
+            students = with_date + without_date
+        else:
+            students.sort(key=lambda s: s["name"].lower())
+        return students
+
     def refresh_students(self) -> None:
+        previously_selected = self.selected_student_id
+        self.student_list.blockSignals(True)
         self.student_list.clear()
-        for student in self.db.list_students():
+        select_item = None
+        for student in self._sorted_filtered_students():
             item = QListWidgetItem(student["name"])
             item.setData(Qt.UserRole, student["id"])
             self.student_list.addItem(item)
+            if student["id"] == previously_selected:
+                select_item = item
+        if select_item is not None:
+            select_item.setSelected(True)
+        else:
+            self.selected_student_id = None
+        self.student_list.blockSignals(False)
         self.refresh_detail()
 
     def handle_student_selected(self) -> None:
