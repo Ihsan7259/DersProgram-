@@ -174,6 +174,7 @@ class MiniScheduleGrid(QTableWidget):
         self.setShowGrid(False)
         self._day_count = 1
         self._fixed_col_width: int | None = None
+        self._last_populate_args: tuple | None = None
 
     def populate(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], row_mode: str | None = None) -> None:
         """Not: bilerek 'render' değil 'populate' adında - QWidget'ın
@@ -190,6 +191,7 @@ class MiniScheduleGrid(QTableWidget):
         hiç eklenmez (kutu/yazı boyutu bundan ETKİLENMEZ, sadece kaç satır/
         sütun çizileceği değişir). Hiç dersi yoksa (blocks_by_cell boş) tüm
         hafta gösterilir."""
+        self._last_populate_args = (db, blocks_by_cell, row_mode)
         day_names = db.day_names
         period_count = db.period_count
 
@@ -209,10 +211,24 @@ class MiniScheduleGrid(QTableWidget):
         self.setVerticalHeaderLabels(_period_header_labels(db, periods))
         self.verticalHeader().setMinimumWidth(30)
 
+        # Kullanıcı isteği: "önce gridin oranı bozulmayacak şekilde sayfaya
+        # yerleştir, sonra ... fontu büyüt ... en büyük alandan en fazla
+        # verimi almak istiyorum." - yazı tipi boyutu SABİT bir "pt" değeri
+        # değil, hücrenin GERÇEK piksel genişliğine ORANTILI hesaplanır.
+        # Böylece dışa aktarımda (yüksek çözünürlük, büyük hücreler) yazı
+        # da BÜYÜK ve okunaklı olur; ekranda (küçük pencere) hücreler küçükse
+        # yazı da orantılı küçük kalır - hiçbir zaman "kocaman kutu, minik
+        # yazı" durumu oluşmaz.
+        col_width = self._resolve_col_width() or 150
+        primary_px = max(11, min(40, round(col_width * 0.10)))
+        secondary_px = max(9, min(32, round(col_width * 0.082)))
+
         for row, period in enumerate(periods):
             for col, day in enumerate(day_indices):
                 blocks = blocks_by_cell.get((day, period), [])
-                _set_cell_widget(self, row, col, theme.make_multi_cell(blocks, compact=True, row_mode=row_mode))
+                _set_cell_widget(self, row, col, theme.make_multi_cell(
+                    blocks, compact=True, row_mode=row_mode, primary_px=primary_px, secondary_px=secondary_px,
+                ))
         self._apply_grid_sizing()
 
     def set_fixed_column_width(self, width_px: int | None) -> None:
@@ -220,13 +236,34 @@ class MiniScheduleGrid(QTableWidget):
         boyutundan BAĞIMSIZ, sabit bir piksel değerine kilitler - böylece
         her sayfa/görsel AYNI hücre boyutunu (ve dolayısıyla aynı 3:2
         oranını) kullanır. None verilirse ekrandaki (dialog) normal
-        davranışına, mevcut genişliğe göre otomatik hesaplamaya döner."""
+        davranışına, mevcut genişliğe göre otomatik hesaplamaya döner.
+
+        Genişlik gerçekten değiştiğinde hücreleri (ve içindeki yazı tipi
+        boyutunu, bkz. populate) son doldurulan verilerle YENİDEN kurar -
+        aksi halde kartlar eski (yanlış) genişliğe göre hesaplanmış sabit
+        piksel yazı tipiyle kalırdı."""
+        if width_px == self._fixed_col_width:
+            return
         self._fixed_col_width = width_px
-        self._apply_grid_sizing()
+        if self._last_populate_args is not None:
+            db, blocks_by_cell, row_mode = self._last_populate_args
+            self.populate(db, blocks_by_cell, row_mode=row_mode)
+        else:
+            self._apply_grid_sizing()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_grid_sizing()
+
+    def _resolve_col_width(self) -> int | None:
+        if self._fixed_col_width is not None:
+            return self._fixed_col_width
+        viewport_w = self.viewport().width()
+        if viewport_w <= 0:
+            return None
+        scrollbar_w = self.style().pixelMetric(QStyle.PM_ScrollBarExtent)
+        usable_w = max(viewport_w - scrollbar_w, viewport_w // 2)
+        return max(46, usable_w // self._day_count)
 
     def _apply_grid_sizing(self) -> None:
         """AvailabilityGrid._apply_grid_sizing ile aynı mantık (bkz.
@@ -236,15 +273,9 @@ class MiniScheduleGrid(QTableWidget):
         oranında türetilir."""
         if self.rowCount() == 0 or self.columnCount() == 0:
             return
-        if self._fixed_col_width is not None:
-            col_width = self._fixed_col_width
-        else:
-            viewport_w = self.viewport().width()
-            if viewport_w <= 0:
-                return
-            scrollbar_w = self.style().pixelMetric(QStyle.PM_ScrollBarExtent)
-            usable_w = max(viewport_w - scrollbar_w, viewport_w // 2)
-            col_width = max(46, usable_w // self._day_count)
+        col_width = self._resolve_col_width()
+        if col_width is None:
+            return
 
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Fixed)

@@ -18,7 +18,7 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QColor, QFontDatabase, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy
 
 from ..db import (
     TYPE_CLASS,
@@ -292,7 +292,10 @@ def lesson_colors_for(block, tinted: bool = False) -> tuple[str, str]:
     return _tone_shift(bg, shift), _tone_shift(dot, shift // 2)
 
 
-def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) -> QWidget:
+def make_lesson_card(
+    block, compact: bool = False, row_mode: str | None = None,
+    primary_px: int | None = None, secondary_px: int | None = None,
+) -> QWidget:
     """Bir ders bloğunu (block: scheduling.BlockView) küçük renkli bir
     kart olarak gösterir - tipe göre pastel arkaplan + nokta işareti.
 
@@ -325,6 +328,10 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
     # her zaman hücreyi tam dolduracağından burada yuvarlamaya gerek yok.
     radius = 0 if compact else 8
     card.setStyleSheet(f"#lessonCard {{ background: {bg}; border-radius: {radius}px; }}")
+    # Kart HER ZAMAN hücreyi tam doldurmalı, metnin genişliği/uzunluğu
+    # NE olursa olsun - "bloklar isimlerin genişliği kadar küçük kalıyor"
+    # şikayetine karşı açıkça garanti altına alınıyor.
+    card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
     layout = QVBoxLayout(card)
     layout.setContentsMargins(7, 5, 7, 4 if compact else 5)
     layout.setSpacing(1)
@@ -350,19 +357,30 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
         # bu da kartların "farklı boyuttaymış" gibi görünmesine yol açıyordu.
         layout.addStretch()
 
+    # Kompakt kartlarda (mini önizleme/PDF/Kopyala) yazı tipi boyutu sabit
+    # bir "pt" değeri DEĞİL - hücrenin GERÇEK piksel genişliğine (col_width,
+    # bkz. MiniScheduleGrid) ORANTILI olarak dışarıdan (primary_px/
+    # secondary_px) verilir. Aksi halde dışa aktarımda hücreler yüksek
+    # çözünürlükte çok büyürken yazı sabit kalıp "kutunun içinde kaybolmuş
+    # küçücük bir yazı" görünümüne yol açıyordu - kullanıcı bunu "en büyük
+    # alandan en fazla verim" isteğiyle bildirdi. primary_px/secondary_px
+    # verilmezse (ör. Ana Program'ın kendi hücreleri gibi başka bir
+    # kullanım) eski sabit pt değerlerine geri dönülür.
+    primary_size_css = f"{primary_px}px" if primary_px else ("8.8pt" if compact else "9.3pt")
     primary_label = QLabel(primary)
     primary_label.setWordWrap(True)
     primary_label.setStyleSheet(
         f"font-family: '{FONT_HEADING}'; font-weight: 700; "
-        f"font-size: {'8.8pt' if compact else '9.3pt'}; color: {LESSON_TYPE_TEXT}; background: transparent;"
+        f"font-size: {primary_size_css}; color: {LESSON_TYPE_TEXT}; background: transparent;"
     )
     layout.addWidget(primary_label)
 
     if secondary and (not compact or row_mode in ("class", "teacher", "student")):
+        secondary_size_css = f"{secondary_px}px" if secondary_px else ("7.9pt" if compact else "8.2pt")
         secondary_label = QLabel(secondary)
         secondary_label.setWordWrap(True)
         secondary_label.setStyleSheet(
-            f"font-size: {'7.9pt' if compact else '8.2pt'}; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;"
+            f"font-size: {secondary_size_css}; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;"
         )
         layout.addWidget(secondary_label)
 
@@ -458,7 +476,10 @@ def make_empty_cell(compact: bool = False) -> QWidget:
     return frame
 
 
-def make_multi_cell(blocks: list, compact: bool = False, row_mode: str | None = None) -> QWidget:
+def make_multi_cell(
+    blocks: list, compact: bool = False, row_mode: str | None = None,
+    primary_px: int | None = None, secondary_px: int | None = None,
+) -> QWidget:
     """Bir (gün, saat) hücresindeki tüm ders bloklarını üst üste dizer.
     Ana Program hücresinde birden fazla ders (farklı sınıflar) aynı
     saatte olabilir; filtrelenmiş mini programlarda genelde tek olur."""
@@ -472,7 +493,9 @@ def make_multi_cell(blocks: list, compact: bool = False, row_mode: str | None = 
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(3)
     for block in blocks:
-        layout.addWidget(make_lesson_card(block, compact=compact, row_mode=row_mode))
+        layout.addWidget(make_lesson_card(
+            block, compact=compact, row_mode=row_mode, primary_px=primary_px, secondary_px=secondary_px,
+        ))
     return frame
 
 
