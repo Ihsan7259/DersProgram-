@@ -6,6 +6,7 @@ scheduling.py (bu modül sadece ham veri okuma/yazmadan sorumlu).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import sqlite3
 from pathlib import Path
@@ -273,11 +274,16 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("note", "TEXT DEFAULT ''"),
         # Birebir paket takibinin referans başlangıcı: bu ders bloğu ilk
         # programa eklendiğinde bugünün tarihi (bkz. scheduling.
-        # compute_one_on_one_ledger). ALTER TABLE ile eklenen mevcut
-        # (bu güncellemeden ÖNCEKİ) bloklarda bu, güncellemenin kurulduğu
+        # compute_one_on_one_ledger). SQLite'ın ALTER TABLE ADD COLUMN'u
+        # CURRENT_DATE gibi sabit-olmayan varsayılanları kabul etmediği
+        # için ("Cannot add a column with non-constant default" hatası)
+        # burada NULL bırakılır, gerçek değer _migrate_schema() içinde
+        # ayrı bir UPDATE ile (ve yeni INSERT'lerde add_lesson_blocks vb.
+        # tarafından) doldurulur - ALTER TABLE ile eklenen mevcut (bu
+        # güncellemeden ÖNCEKİ) bloklarda bu, güncellemenin kurulduğu
         # tarih olur - o bloklar için geçmişe dönük sayım yapılamaz, sayaç
         # o günden itibaren işlemeye başlar.
-        ("created_at", "TEXT NOT NULL DEFAULT CURRENT_DATE"),
+        ("created_at", "TEXT"),
     ],
     "payments": [("note", "TEXT DEFAULT ''")],
 }
@@ -305,6 +311,15 @@ class Database:
             for column_name, column_def in columns:
                 if column_name not in existing:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_def}")
+        # lesson_blocks.created_at ALTER TABLE ile NULL varsayılanla eklenir
+        # (bkz. MIGRATION_COLUMNS - SQLite ADD COLUMN'da CURRENT_DATE gibi
+        # sabit-olmayan varsayılanları kabul etmiyor); hâlâ NULL olan (bu
+        # güncellemeden ÖNCE var olan) satırlar burada bugünün tarihiyle
+        # doldurulur - bkz. scheduling.compute_one_on_one_ledger.
+        self.conn.execute(
+            "UPDATE lesson_blocks SET created_at=? WHERE created_at IS NULL",
+            (_dt.date.today().isoformat(),),
+        )
         self.conn.commit()
 
     # ---------- ayarlar ----------
@@ -656,13 +671,18 @@ class Database:
         note: str = "",
     ) -> list[int]:
         ids = []
+        # created_at burada açıkça bugünün tarihiyle set edilir (bkz.
+        # scheduling.compute_one_on_one_ledger) - birebir paket takibinin
+        # referans başlangıcı, bu bloğun app yeniden başlatılmasını
+        # beklemeden hemen bugünden itibaren işlemeye başlaması için.
+        created_at = _dt.date.today().isoformat()
         for _ in range(count):
             cur = self.conn.execute(
                 """
-                INSERT INTO lesson_blocks(type, teacher_id, subject_id, class_group_id, student_id, room_id, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO lesson_blocks(type, teacher_id, subject_id, class_group_id, student_id, room_id, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (type_, teacher_id, subject_id, class_group_id, student_id, room_id, note),
+                (type_, teacher_id, subject_id, class_group_id, student_id, room_id, note, created_at),
             )
             ids.append(cur.lastrowid)
         self.conn.commit()
