@@ -184,7 +184,11 @@ class MiniScheduleGrid(QTableWidget):
         self.verticalHeader().setMinimumWidth(30)
 
         for period in range(1, period_count + 1):
-            self.setRowHeight(period - 1, 40)
+            # Sabit satır yüksekliği - içerik uzun/kısa olsun her zaman AYNI
+            # (40'tan 52'ye çıkarıldı: iki satıra sarabilen uzun öğretmen/
+            # öğrenci adları için rahat yer bırakır, hiçbir kart diğerinden
+            # "küçük" görünmesin diye).
+            self.setRowHeight(period - 1, 52)
             for day in range(len(day_names)):
                 blocks = blocks_by_cell.get((day, period), [])
                 _set_cell_widget(self, period - 1, day, theme.make_multi_cell(blocks, compact=True, row_mode=row_mode))

@@ -628,16 +628,25 @@ def _export_table_as_pdf(parent: QWidget, table: QTableWidget, default_filename:
     if not path.lower().endswith(".pdf"):
         path += ".pdf"
 
-    pixmap = _render_table_pixmap(table)
-
     writer = QPdfWriter(path)
     writer.setPageSize(QPageSize(QPageSize.A4))
     writer.setPageOrientation(QPageLayout.Landscape)
     writer.setPageMargins(QMarginsF(10, 10, 10, 10))
-    writer.setResolution(150)
+    writer.setResolution(200)
+    page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
+
+    # Kaynak görseli (mümkünse) sayfa genişliğiyle BİREBİR piksel eninde
+    # render eder - aksi halde (widget'ın o an ekrandaki dar genişliğiyle
+    # yetinilse) yazdırırken büyütme gerekip görüntü bulanıklaşırdı.
+    old_width = table.width()
+    render_width = max(int(page_rect.width()), old_width)
+    if render_width != old_width:
+        table.resize(render_width, table.height())
+    pixmap = _render_table_pixmap(table)
+    if render_width != old_width:
+        table.resize(old_width, table.height())
 
     painter = QPainter(writer)
-    page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
     scale = min(
         page_rect.width() / pixmap.width(),
         page_rect.height() / pixmap.height(),
@@ -699,13 +708,30 @@ def _export_rows_as_multi_page_pdf(
     writer.setPageSize(QPageSize(QPageSize.A4))
     writer.setPageOrientation(QPageLayout.Landscape)
     writer.setPageMargins(QMarginsF(10, 10, 10, 10))
-    writer.setResolution(150)
+    # 150 -> 200 DPI: daha net (kullanıcı geri bildirimi: "çözünürlükler
+    # çok hoşuma gitmedi"). Asıl netliği belirleyen ise kaynak pixmap'in
+    # piksel boyutu - aşağıda content_rect genişliğiyle BİREBİR eşleşecek
+    # şekilde render edilip büyütme (bulanıklaştıran) yerine gerekirse
+    # hafifçe küçültülüyor.
+    writer.setResolution(200)
     painter = QPainter(writer)
+
+    page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
+    title_height = 34
+    subtitle_height = 22
+    header_h = title_height + subtitle_height + 10
+    content_rect = QRectF(
+        page_rect.x(), page_rect.y() + header_h,
+        page_rect.width(), page_rect.height() - header_h,
+    )
 
     # Sayfaları render etmek için kullanılan geçici ızgara, ekranda hiç
     # görünmeden (show() çağrılmadan) tek tek yeniden doldurulup pixmap'e
     # çizilir - her satır için ayrı widget oluşturmak yerine tek widget
-    # tekrar kullanılır (performans).
+    # tekrar kullanılır (performans). Genişliği content_rect ile BİREBİR
+    # eşleştirilir ki yazdırırken büyütme (upscale) gerekmesin - büyütme,
+    # bulanık/düşük çözünürlüklü görünüme yol açan asıl sebepti.
+    render_width = max(int(content_rect.width()), 1)
     temp_grid = MiniScheduleGrid()
     temp_grid.setParent(parent)
     try:
@@ -720,18 +746,15 @@ def _export_rows_as_multi_page_pdf(
                     if blocks:
                         filtered[(day, period)] = blocks
 
-            temp_grid.resize(1000, 100)
+            temp_grid.resize(render_width, 100)
             temp_grid.populate(db, filtered, row_mode=mode)
             pixmap = _render_table_pixmap(temp_grid)
-
-            page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
 
             title_font = QFont(painter.font())
             title_font.setBold(True)
             title_font.setPointSize(16)
             painter.setFont(title_font)
             painter.setPen(QColor(theme.INK))
-            title_height = 34
             painter.drawText(
                 QRectF(page_rect.x(), page_rect.y(), page_rect.width(), title_height),
                 Qt.AlignLeft | Qt.AlignVCenter, name,
@@ -742,17 +765,14 @@ def _export_rows_as_multi_page_pdf(
             subtitle_font.setPointSize(10)
             painter.setFont(subtitle_font)
             painter.setPen(QColor(theme.INK_MUTED_58))
-            subtitle_height = 22
             painter.drawText(
                 QRectF(page_rect.x(), page_rect.y() + title_height, page_rect.width(), subtitle_height),
                 Qt.AlignLeft | Qt.AlignVCenter, week_text,
             )
 
-            header_h = title_height + subtitle_height + 10
-            content_rect = QRectF(
-                page_rect.x(), page_rect.y() + header_h,
-                page_rect.width(), page_rect.height() - header_h,
-            )
+            # scale <= 1 olacak şekilde tasarlandı (genişlik zaten birebir
+            # eşleşiyor, yükseklik de sığdırmak için gerekirse küçültülür) -
+            # hiçbir zaman büyütme (blur) olmaz.
             scale = min(content_rect.width() / pixmap.width(), content_rect.height() / pixmap.height())
             scaled_w = pixmap.width() * scale
             scaled_h = pixmap.height() * scale
@@ -1011,9 +1031,10 @@ class ScheduleTab(QWidget):
         pool_layout.addWidget(self.hint_label)
 
         # Oto Ata'nın hangi ders kategorilerini işleyeceğini seçmek için -
-        # havuzdaki kartların kendisi hep tüm kategorileri gösterir, bu
-        # onay kutuları sadece "Oto Ata" tıklanınca neyin işleneceğini
-        # daraltır (bkz. handle_auto_assign).
+        # "Oto Ata" tıklanınca neyin işleneceğini daraltır (bkz.
+        # handle_auto_assign) VE aşağıdaki Atanmamış Dersler havuzunun
+        # kendisini de aynı seçime göre filtreler (bkz. _render_pool) -
+        # ikisi aynı onay kutularını paylaşır.
         category_row = QHBoxLayout()
         category_row.setSpacing(14)
         category_label = QLabel("Oto Ata kategorileri:")
@@ -1023,6 +1044,7 @@ class ScheduleTab(QWidget):
         for lesson_type in LESSON_TYPES:
             checkbox = QCheckBox(theme.lesson_type_label(lesson_type))
             checkbox.setChecked(True)
+            checkbox.toggled.connect(self._render_pool)
             self.category_checks[lesson_type] = checkbox
             category_row.addWidget(checkbox)
         category_row.addStretch()
@@ -1457,6 +1479,13 @@ class ScheduleTab(QWidget):
         else:
             self.pool_filter_label.setText("")
             self.pool_filter_clear_button.setVisible(False)
+
+        # Havuz da "Oto Ata kategorileri" onay kutularına göre filtrelenir -
+        # bir kategori işaretini kaldırınca o kategorideki dersler hem
+        # Oto Ata'dan hem de bu listeden çıkar (kullanıcı isteği).
+        checked_types = {t for t, cb in self.category_checks.items() if cb.isChecked()}
+        pool_items = [(rep, members) for rep, members in pool_items if rep.type in checked_types]
+
         self.pool_label.setText(f"Atanmamış Dersler ({len(pool_items)})")
 
         # Seçili kart artık (yerleştirildi/silindi/filtrelendi diye)
@@ -1468,10 +1497,12 @@ class ScheduleTab(QWidget):
         self._clear_pool_content()
 
         if not pool_items:
-            empty_text = (
-                "Bu satır için atanmamış ders yok." if self._selected_row_entity_id is not None
-                else "Atanmamış ders yok."
-            )
+            if not checked_types:
+                empty_text = "Hiçbir kategori seçili değil - Oto Ata kategorilerinden en az birini işaretleyin."
+            elif self._selected_row_entity_id is not None:
+                empty_text = "Bu satır için (seçili kategorilerde) atanmamış ders yok."
+            else:
+                empty_text = "Atanmamış ders yok."
             empty_label = QLabel(empty_text)
             empty_label.setStyleSheet(f"font-size:9pt; color:{theme.INK_MUTED_58}; padding:4px 0;")
             self._pool_content_layout.addWidget(empty_label)

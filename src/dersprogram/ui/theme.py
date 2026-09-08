@@ -338,6 +338,12 @@ def make_lesson_card(block, compact: bool = False, row_mode: str | None = None) 
         head.addWidget(type_label)
         head.addStretch()
         layout.addLayout(head)
+    else:
+        # Kartın kendisi hep hücre boyutunda (sabit) kalır; içerik az ya da
+        # çok olsun (kısa/uzun isim) her zaman DİKEY OLARAK ORTALANIR - aksi
+        # halde kısa metinli kartlar üstte sıkışıp altında boşluk kalıyor,
+        # bu da kartların "farklı boyuttaymış" gibi görünmesine yol açıyordu.
+        layout.addStretch()
 
     primary_label = QLabel(primary)
     primary_label.setWordWrap(True)
