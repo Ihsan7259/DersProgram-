@@ -630,7 +630,7 @@ _EXPORT_DPI = 300
 _EXPORT_COL_WIDTH_IN = 1.15  # hücre başına hedef fiziksel genişlik (inç)
 
 
-def _render_row_pixmap(grid: "MiniScheduleGrid", title: str, subtitle: str) -> QPixmap:
+def _render_row_pixmap(grid: "MiniScheduleGrid", title: str, subtitle: str, revert: bool = True) -> QPixmap:
     """Bir MiniScheduleGrid'i (tek kişi/sınıfın haftalık programı) başlık
     (isim) ve alt başlık (hafta tarihi) ile birlikte TEK bir pixmap'e
     çizer. Kopyala ve PDF (hem tekli önizleme hem de toplu Ana Program
@@ -638,7 +638,18 @@ def _render_row_pixmap(grid: "MiniScheduleGrid", title: str, subtitle: str) -> Q
     aynı formatta olsun, kopyalanan görsele de başlık eklensin. Izgara
     sabit, yüksek çözünürlüklü (_EXPORT_DPI) hücrelerle ve 3:2 oranıyla
     render edilir; kompakt kartların köşeleri artık kare olduğundan (bkz.
-    theme.py) hücreler arasında boşluk kalmaz."""
+    theme.py) hücreler arasında boşluk kalmaz.
+
+    revert=True (RowPreviewDialog'daki EKRANDA GÖRÜNEN, tekrar kullanılan
+    grid için): çizim bitince ızgara eski (ekrana özgü, dinamik) boyutuna
+    geri döndürülür - kullanıcı dialogda gezinmeye devam ettiğinde normal
+    görünümüne dönsün diye. revert=False (toplu PDF'in hiç ekranda
+    gösterilmeyen, atılacak geçici ızgarası için): sabit dışa aktarım
+    boyutunda KALIR - aksi halde (eski hatada olduğu gibi) her sayfadan
+    sonra sabit genişlik None'a dönüp bir sonraki sayfa hazırlanırken
+    ızgaranın o anki (küçülmüş/tutarsız) piksel genişliğinden YANLIŞ,
+    küçük bir genişlik hesaplanıyor, bu da 2. sayfadan itibaren hücrelerin
+    küçük/kontrolsüz görünmesine yol açıyordu."""
     dpi = _EXPORT_DPI
     col_width = int(_EXPORT_COL_WIDTH_IN * dpi)
 
@@ -647,8 +658,9 @@ def _render_row_pixmap(grid: "MiniScheduleGrid", title: str, subtitle: str) -> Q
     content_width = grid.verticalHeader().width() + grid.columnCount() * col_width + 2 * grid.frameWidth()
     grid.resize(content_width, old_height)
     grid_pixmap = _render_table_pixmap(grid)
-    grid.set_fixed_column_width(None)
-    grid.resize(old_width, old_height)
+    if revert:
+        grid.set_fixed_column_width(None)
+        grid.resize(old_width, old_height)
 
     margin = int(0.18 * dpi)
     title_h = int(0.30 * dpi)
@@ -771,6 +783,11 @@ def _export_rows_as_multi_page_pdf(
     # tekrar kullanılır (performans).
     temp_grid = MiniScheduleGrid()
     temp_grid.setParent(parent)
+    # Sabit dışa aktarım genişliği DAHA İLK populate() çağrısından ÖNCE
+    # kilitleniyor - böylece hiçbir sayfa, henüz hiç boyutlandırılmamış
+    # (ekrana hiç gösterilmemiş) widget'ın anlamsız/küçük "viewport"
+    # genişliğinden hesaplanan yanlış bir hücre boyutuyla başlamıyor.
+    temp_grid.set_fixed_column_width(int(_EXPORT_COL_WIDTH_IN * dpi))
 
     # Kullanıcı isteği: her sayfa sadece o kişi/sınıfın DERSİNİN OLDUĞU
     # günleri/saatleri kapsayan en dar dikdörtgeni göstersin (bkz.
@@ -795,7 +812,11 @@ def _export_rows_as_multi_page_pdf(
                         filtered[(day, period)] = blocks
 
             temp_grid.populate(db, filtered, row_mode=mode)
-            pixmap = _render_row_pixmap(temp_grid, name, week_text)
+            # revert=False: bu geçici ızgara hiç ekranda gösterilmiyor,
+            # sayfalar arasında sabit dışa aktarım genişliğinde KALMALI
+            # (bkz. _render_row_pixmap'in docstring'i - aksi halde 2.
+            # sayfadan itibaren hücreler küçük/kontrolsüz görünüyordu).
+            pixmap = _render_row_pixmap(temp_grid, name, week_text, revert=False)
 
             page_w_px = pixmap.width() + 2 * page_margin
             page_h_px = pixmap.height() + 2 * page_margin

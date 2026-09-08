@@ -175,6 +175,7 @@ class MiniScheduleGrid(QTableWidget):
         self._day_count = 1
         self._fixed_col_width: int | None = None
         self._last_populate_args: tuple | None = None
+        self._applied_sizing: tuple | None = None
 
     def populate(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], row_mode: str | None = None) -> None:
         """Not: bilerek 'render' değil 'populate' adında - QWidget'ın
@@ -192,6 +193,11 @@ class MiniScheduleGrid(QTableWidget):
         sütun çizileceği değişir). Hiç dersi yoksa (blocks_by_cell boş) tüm
         hafta gösterilir."""
         self._last_populate_args = (db, blocks_by_cell, row_mode)
+        # Hücreler bu çağrıda BAŞTAN oluşturuluyor - _apply_grid_sizing'in
+        # "zaten bu boyuttaydı" önbelleği (bkz. aşağıda, titreme önleme
+        # amaçlı) burada geçersiz kılınmalı, aksi halde yeni hücreler Qt'nin
+        # varsayılan (yanlış) genişliğinde kalabilir.
+        self._applied_sizing = None
         day_names = db.day_names
         period_count = db.period_count
 
@@ -213,15 +219,30 @@ class MiniScheduleGrid(QTableWidget):
 
         # Kullanıcı isteği: "önce gridin oranı bozulmayacak şekilde sayfaya
         # yerleştir, sonra ... fontu büyüt ... en büyük alandan en fazla
-        # verimi almak istiyorum." - yazı tipi boyutu SABİT bir "pt" değeri
-        # değil, hücrenin GERÇEK piksel genişliğine ORANTILI hesaplanır.
-        # Böylece dışa aktarımda (yüksek çözünürlük, büyük hücreler) yazı
-        # da BÜYÜK ve okunaklı olur; ekranda (küçük pencere) hücreler küçükse
-        # yazı da orantılı küçük kalır - hiçbir zaman "kocaman kutu, minik
-        # yazı" durumu oluşmaz.
-        col_width = self._resolve_col_width() or 150
-        primary_px = max(11, min(40, round(col_width * 0.10)))
-        secondary_px = max(9, min(32, round(col_width * 0.082)))
+        # verimi almak istiyorum." - dışa aktarımda (self._fixed_col_width
+        # SABİT bir değere kilitliyken - bkz. set_fixed_column_width) yazı
+        # tipi boyutu bu SABİT piksel genişliğe ORANTILI hesaplanır, böylece
+        # yüksek çözünürlüklü büyük hücrelerde yazı da BÜYÜK ve okunaklı olur.
+        #
+        # Ekranda (dialog içinde, fixed_col_width YOK) ise bilerek TERSİ
+        # yapılır: font viewport genişliğine göre DEĞİL, SABİT (pt) bir
+        # değerde tutulur. Aksi halde "sekmeler arasında gidip gelince font
+        # değişiyor" şikayetine yol açan bir kararsızlık oluşuyordu - dialog
+        # ilk açıldığında henüz layout oturmadan (viewport genişliği 0/hazır
+        # değilken) populate() çağrılabiliyor, bu da her seferinde FARKLI bir
+        # varsayılan genişlikten hesaplanan farklı bir font boyutu demekti.
+        # Hücre GENİŞLİĞİ (kutu boyutu) yine de ekrana göre dinamik kalır
+        # (bkz. _apply_grid_sizing/resizeEvent) - sadece YAZI TİPİ sabitlendi.
+        if self._fixed_col_width is not None:
+            col_width = self._fixed_col_width
+            primary_px = max(11, min(40, round(col_width * 0.10)))
+            secondary_px = max(9, min(32, round(col_width * 0.082)))
+            header_px = max(10, min(30, round(col_width * 0.075)))
+            self.setStyleSheet(f"QHeaderView::section {{ font-size: {header_px}px; padding: 4px 2px; }}")
+        else:
+            primary_px = None
+            secondary_px = None
+            self.setStyleSheet("")
 
         for row, period in enumerate(periods):
             for col, day in enumerate(day_indices):
@@ -270,12 +291,26 @@ class MiniScheduleGrid(QTableWidget):
         aşağıda): sütun genişliği önce belirlenir (ekranda mevcut
         genişliğe göre, dışa aktarımda sabit hedef değere göre), satır
         yüksekliği de bu genişliğe göre ~3:2 (genişlik:yükseklik)
-        oranında türetilir."""
+        oranında türetilir.
+
+        Kullanıcı bildirimi: önizlemede hücreler bazen "büyüyüp
+        küçülüyor" gibi bir titreme gösteriyordu. Qt bazen tek bir
+        mantıksal pencere yeniden boyutlandırmasında resizeEvent'i art
+        arda birkaç kez tetikleyebiliyor; her seferinde AYNI col_width
+        için setColumnWidth/setRowHeight'ı (ve setSectionResizeMode'u)
+        yeniden çağırmak gereksiz yeniden düzenlemelere (ve görsel
+        titremeye) yol açabiliyordu. Sonuç GERÇEKTEN değişmediyse
+        (aynı col_width + aynı satır/sütun sayısı) hiçbir şey yapmadan
+        çıkılır."""
         if self.rowCount() == 0 or self.columnCount() == 0:
             return
         col_width = self._resolve_col_width()
         if col_width is None:
             return
+        cache_key = (col_width, self.rowCount(), self.columnCount())
+        if cache_key == self._applied_sizing:
+            return
+        self._applied_sizing = cache_key
 
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Fixed)
