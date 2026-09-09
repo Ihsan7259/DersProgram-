@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QComboBox,
     QDoubleSpinBox,
+    QSpinBox,
     QCheckBox,
     QScrollArea,
     QLabel,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QDialog,
 )
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtCore import Qt
 
 from ..db import Database
@@ -187,6 +189,71 @@ class StudentsTab(QWidget):
         right_layout.addWidget(self.table_widget, 1)
 
         right_layout.addWidget(_divider())
+
+        # ---------- birebir ders hedefleri (Sınıflar sekmesindeki "Hedef
+        # Ders Saatleri" ile aynı desen - kullanıcı isteği: "Birebir ders
+        # saatlerinin de daha kolay takibi için sınıflar sekmesine
+        # eklediğimiz hoca atama menüsünün aynısını öğrenciler sekmesine
+        # birebir ders için ekleyelim") ----------
+        right_layout.addWidget(_section_title("Hedef Birebir Ders Saatleri"))
+
+        curriculum_form = QHBoxLayout()
+        curriculum_form.addWidget(QLabel("Ders:"))
+        self.curriculum_subject_combo = QComboBox()
+        curriculum_form.addWidget(self.curriculum_subject_combo, 2)
+        curriculum_form.addWidget(QLabel("Öğretmen:"))
+        self.curriculum_teacher_combo = QComboBox()
+        curriculum_form.addWidget(self.curriculum_teacher_combo, 2)
+        curriculum_form.addWidget(QLabel("Derslik:"))
+        self.curriculum_room_combo = QComboBox()
+        curriculum_form.addWidget(self.curriculum_room_combo, 2)
+        curriculum_form.addWidget(QLabel("Saat:"))
+        self.curriculum_hours_spin = QSpinBox()
+        self.curriculum_hours_spin.setRange(1, 40)
+        self.curriculum_hours_spin.setValue(1)
+        curriculum_form.addWidget(self.curriculum_hours_spin)
+        self.curriculum_add_button = QPushButton("Ekle")
+        self.curriculum_add_button.setObjectName("primaryButton")
+        self.curriculum_add_button.clicked.connect(self.handle_add_curriculum)
+        curriculum_form.addWidget(self.curriculum_add_button)
+        self.curriculum_update_button = QPushButton("Güncelle")
+        self.curriculum_update_button.setObjectName("outlineButton")
+        self.curriculum_update_button.clicked.connect(self.handle_update_curriculum)
+        curriculum_form.addWidget(self.curriculum_update_button)
+        right_layout.addLayout(curriculum_form)
+
+        self.curriculum_table = QTableWidget(0, 6)
+        self.curriculum_table.setHorizontalHeaderLabels(
+            ["Ders", "Öğretmen", "Derslik", "Hedef", "Programda", "Durum"]
+        )
+        curriculum_header = self.curriculum_table.horizontalHeader()
+        curriculum_header.setSectionResizeMode(0, QHeaderView.Stretch)
+        curriculum_header.setSectionResizeMode(1, QHeaderView.Stretch)
+        curriculum_header.setSectionResizeMode(2, QHeaderView.Stretch)
+        curriculum_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        curriculum_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        curriculum_header.setSectionResizeMode(5, QHeaderView.Stretch)
+        self.curriculum_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.curriculum_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.curriculum_table.setMaximumHeight(150)
+        right_layout.addWidget(self.curriculum_table)
+
+        curriculum_buttons = QHBoxLayout()
+        self.curriculum_restore_button = QPushButton("Eksikleri Geri Ekle")
+        self.curriculum_restore_button.setObjectName("outlineButton")
+        self.curriculum_restore_button.clicked.connect(self.handle_restore_curriculum)
+        curriculum_buttons.addWidget(self.curriculum_restore_button)
+        self.curriculum_delete_button = QPushButton("Seçili Hedefi Sil")
+        self.curriculum_delete_button.setObjectName("dangerButton")
+        self.curriculum_delete_button.clicked.connect(self.handle_delete_curriculum)
+        curriculum_buttons.addWidget(self.curriculum_delete_button)
+        right_layout.addLayout(curriculum_buttons)
+        self.curriculum_status_label = QLabel()
+        self.curriculum_status_label.setStyleSheet("font-weight:700;")
+        self.curriculum_status_label.setWordWrap(True)
+        right_layout.addWidget(self.curriculum_status_label)
+
+        right_layout.addWidget(_divider())
         right_layout.addWidget(_section_title("Haftalık özet"))
         self.summary_table = SummaryTable()
         self.summary_table.setMaximumHeight(160)
@@ -202,6 +269,7 @@ class StudentsTab(QWidget):
         self.delete_button.clicked.connect(self.handle_delete)
         self.clear_button.clicked.connect(self.clear_form)
         self.table_widget.itemSelectionChanged.connect(self.handle_selection)
+        self.curriculum_table.itemSelectionChanged.connect(self._handle_curriculum_selection)
         self.navigator.week_changed.connect(lambda _w: self.refresh_detail())
         self.name_edit.returnPressed.connect(self._handle_return_pressed)
 
@@ -353,11 +421,13 @@ class StudentsTab(QWidget):
 
     def refresh(self) -> None:
         self._reload_combos()
+        self._reload_curriculum_subjects()
         current = set(self._selected_title_ids())
         self._refresh_title_choices(checked_ids=current)
         self._all_rows = self.db.list_students()
         self._apply_search_filter()
         self.refresh_detail()
+        self.refresh_curriculum()
 
     def refresh_detail(self) -> None:
         self._pending_availability = {}
@@ -401,6 +471,7 @@ class StudentsTab(QWidget):
             self.selected_id = None
             self._refresh_title_choices()
             self.refresh_detail()
+            self.refresh_curriculum()
             return
         row = items[0].row()
         name_item = self.table_widget.item(row, 1)
@@ -413,6 +484,7 @@ class StudentsTab(QWidget):
         self.one_on_one_fee_spin.setValue(student["total_one_on_one_fee"])
         self._refresh_title_choices(checked_ids=set(self.db.get_student_title_ids(self.selected_id)))
         self.refresh_detail()
+        self.refresh_curriculum()
 
     def _select_combo(self, combo: QComboBox, value) -> None:
         idx = combo.findData(value)
@@ -428,6 +500,7 @@ class StudentsTab(QWidget):
         self._refresh_title_choices()
         self.table_widget.clearSelection()
         self.refresh_detail()
+        self.refresh_curriculum()
 
     def handle_add(self) -> None:
         name = self.name_edit.text().strip()
@@ -490,6 +563,200 @@ class StudentsTab(QWidget):
         self.db.delete_student(self.selected_id)
         self.clear_form()
         self.refresh()
+        if self.on_change:
+            self.on_change()
+
+    # ---------- birebir ders hedefleri (Sınıflar sekmesindeki ders
+    # hedefleri ile birebir aynı desen, bkz. classes_tab.py) ----------
+    def _reload_curriculum_subjects(self) -> None:
+        previous = self.curriculum_subject_combo.currentData()
+        self.curriculum_subject_combo.blockSignals(True)
+        self.curriculum_subject_combo.clear()
+        for row in self.db.list_rows("subjects"):
+            self.curriculum_subject_combo.addItem(row["name"], row["id"])
+        if previous is not None:
+            idx = self.curriculum_subject_combo.findData(previous)
+            if idx >= 0:
+                self.curriculum_subject_combo.setCurrentIndex(idx)
+        self.curriculum_subject_combo.blockSignals(False)
+        self._reload_curriculum_teachers()
+        self._reload_curriculum_rooms()
+
+    def _reload_curriculum_teachers(self) -> None:
+        subject_name = self.curriculum_subject_combo.currentText()
+        self.curriculum_teacher_combo.clear()
+        teachers = self.db.list_teachers_by_subject_area(subject_name) if subject_name else []
+        if not teachers:
+            teachers = self.db.list_teachers()
+        for teacher in teachers:
+            self.curriculum_teacher_combo.addItem(teacher["name"], teacher["id"])
+
+    def _reload_curriculum_rooms(self) -> None:
+        previous = self.curriculum_room_combo.currentData()
+        self.curriculum_room_combo.blockSignals(True)
+        self.curriculum_room_combo.clear()
+        self.curriculum_room_combo.addItem("—", None)
+        for row in self.db.list_rows("rooms"):
+            self.curriculum_room_combo.addItem(row["name"], row["id"])
+        if previous is not None:
+            idx = self.curriculum_room_combo.findData(previous)
+            if idx >= 0:
+                self.curriculum_room_combo.setCurrentIndex(idx)
+        self.curriculum_room_combo.blockSignals(False)
+
+    def refresh_curriculum(self) -> None:
+        self.curriculum_table.setRowCount(0)
+        self.curriculum_status_label.setText("")
+        if self.selected_id is None:
+            return
+        rows = self.db.list_student_curriculum(self.selected_id)
+        self.curriculum_table.setRowCount(len(rows))
+        total_target = 0
+        total_planned = 0
+        for r, row in enumerate(rows):
+            target = row["weekly_hours"]
+            planned = row["planned_hours"]
+            placed = row["placed_hours"]
+            total_target += target
+            total_planned += planned
+            if planned < target:
+                status = f"⚠ {target - planned} saat eksik (havuzdan silinmiş)"
+            elif placed < planned:
+                status = f"{planned - placed} saat henüz yerleştirilmedi"
+            else:
+                status = "✓ tamam"
+
+            item_subject = QTableWidgetItem(row["subject_name"] or "-")
+            item_subject.setData(Qt.UserRole, row["id"])
+            cells = [
+                item_subject,
+                QTableWidgetItem(row["teacher_name"] or "-"),
+                QTableWidgetItem(row["room_name"] or "-"),
+                QTableWidgetItem(str(target)),
+                QTableWidgetItem(f"{planned} ({placed} yerleşti)"),
+                QTableWidgetItem(status),
+            ]
+            for column, item in enumerate(cells):
+                if planned < target:
+                    item.setForeground(QBrush(QColor(theme.CONFLICT_BORDER)))
+                self.curriculum_table.setItem(r, column, item)
+
+        if total_target and total_planned < total_target:
+            self.curriculum_status_label.setText(
+                f"Toplam hedef {total_target} saat, programda {total_planned} saat "
+                f"({total_target - total_planned} saat eksik)"
+            )
+            self.curriculum_status_label.setStyleSheet(f"font-weight:700; color:{theme.CONFLICT_BORDER};")
+        elif total_target:
+            self.curriculum_status_label.setText(f"Toplam hedef {total_target} saat - tamam")
+            self.curriculum_status_label.setStyleSheet(f"font-weight:700; color:{theme.VALID_BORDER};")
+
+    def _selected_curriculum_id(self) -> int | None:
+        items = self.curriculum_table.selectedItems()
+        if not items:
+            return None
+        return self.curriculum_table.item(items[0].row(), 0).data(Qt.UserRole)
+
+    def _handle_curriculum_selection(self) -> None:
+        curriculum_id = self._selected_curriculum_id()
+        if curriculum_id is None or self.selected_id is None:
+            return
+        row = next((r for r in self.db.list_student_curriculum(self.selected_id) if r["id"] == curriculum_id), None)
+        if row is None:
+            return
+
+        idx_subject = self.curriculum_subject_combo.findData(row["subject_id"])
+        if idx_subject >= 0:
+            self.curriculum_subject_combo.setCurrentIndex(idx_subject)  # _reload_curriculum_teachers'i tetikler
+
+        idx_teacher = self.curriculum_teacher_combo.findData(row["teacher_id"])
+        if idx_teacher < 0 and row["teacher_id"] is not None and row["teacher_name"]:
+            self.curriculum_teacher_combo.addItem(row["teacher_name"], row["teacher_id"])
+            idx_teacher = self.curriculum_teacher_combo.count() - 1
+        if idx_teacher >= 0:
+            self.curriculum_teacher_combo.setCurrentIndex(idx_teacher)
+
+        idx_room = self.curriculum_room_combo.findData(row["room_id"])
+        self.curriculum_room_combo.setCurrentIndex(idx_room if idx_room >= 0 else 0)
+
+        self.curriculum_hours_spin.setValue(row["weekly_hours"])
+
+    def handle_add_curriculum(self) -> None:
+        if self.selected_id is None:
+            QMessageBox.information(self, "Seçim yok", "Önce listeden bir öğrenci seçin.")
+            return
+        subject_id = self.curriculum_subject_combo.currentData()
+        teacher_id = self.curriculum_teacher_combo.currentData()
+        if subject_id is None:
+            QMessageBox.warning(self, "Eksik bilgi", "Önce Dersler sekmesinden en az bir ders tanımlayın.")
+            return
+        if teacher_id is None:
+            QMessageBox.warning(self, "Eksik bilgi", "Önce Öğretmenler sekmesinden en az bir öğretmen ekleyin.")
+            return
+        hours = self.curriculum_hours_spin.value()
+        room_id = self.curriculum_room_combo.currentData()
+        self.db.add_student_curriculum(self.selected_id, subject_id, teacher_id, hours, room_id=room_id)
+        self.refresh_curriculum()
+        QMessageBox.information(
+            self, "Eklendi",
+            f"{hours} saat birebir ders 'Atanmamış Dersler' havuzuna eklendi. "
+            "Ana Program'dan sürükleyerek ya da 'Oto Ata' ile yerleştirebilirsiniz.",
+        )
+        if self.on_change:
+            self.on_change()
+
+    def handle_update_curriculum(self) -> None:
+        curriculum_id = self._selected_curriculum_id()
+        if curriculum_id is None:
+            QMessageBox.information(self, "Seçim yok", "Önce tablodan güncellenecek hedefi seçin.")
+            return
+        subject_id = self.curriculum_subject_combo.currentData()
+        teacher_id = self.curriculum_teacher_combo.currentData()
+        if subject_id is None:
+            QMessageBox.warning(self, "Eksik bilgi", "Önce Dersler sekmesinden en az bir ders tanımlayın.")
+            return
+        if teacher_id is None:
+            QMessageBox.warning(self, "Eksik bilgi", "Önce Öğretmenler sekmesinden en az bir öğretmen ekleyin.")
+            return
+        hours = self.curriculum_hours_spin.value()
+        room_id = self.curriculum_room_combo.currentData()
+        self.db.update_student_curriculum(curriculum_id, subject_id, teacher_id, hours, room_id=room_id)
+        self.refresh_curriculum()
+        QMessageBox.information(self, "Güncellendi", "Birebir ders hedefi güncellendi.")
+        if self.on_change:
+            self.on_change()
+
+    def handle_delete_curriculum(self) -> None:
+        curriculum_id = self._selected_curriculum_id()
+        if curriculum_id is None:
+            QMessageBox.information(self, "Seçim yok", "Önce tablodan bir hedef seçin.")
+            return
+        confirm = QMessageBox.question(
+            self, "Silme Onayı",
+            "Bu birebir ders hedefi ve ona ait tüm ders saatleri (yerleştirilmiş olanlar dahil) silinecek. "
+            "Devam edilsin mi?",
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        self.db.delete_student_curriculum(curriculum_id)
+        self.refresh_curriculum()
+        if self.on_change:
+            self.on_change()
+
+    def handle_restore_curriculum(self) -> None:
+        if self.selected_id is None:
+            QMessageBox.information(self, "Seçim yok", "Önce listeden bir öğrenci seçin.")
+            return
+        restored = 0
+        for row in self.db.list_student_curriculum(self.selected_id):
+            restored += self.db.restore_student_curriculum_blocks(row["id"])
+        self.refresh_curriculum()
+        if restored:
+            QMessageBox.information(
+                self, "Tamamlandı", f"{restored} saat havuza geri eklendi.",
+            )
+        else:
+            QMessageBox.information(self, "Eksik yok", "Tüm hedef saatler zaten programda/havuzda mevcut.")
         if self.on_change:
             self.on_change()
 

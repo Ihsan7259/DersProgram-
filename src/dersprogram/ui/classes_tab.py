@@ -166,6 +166,10 @@ class ClassesTab(QWidget):
         self.curriculum_add_button.setObjectName("primaryButton")
         self.curriculum_add_button.clicked.connect(self.handle_add_curriculum)
         curriculum_form.addWidget(self.curriculum_add_button)
+        self.curriculum_update_button = QPushButton("Güncelle")
+        self.curriculum_update_button.setObjectName("outlineButton")
+        self.curriculum_update_button.clicked.connect(self.handle_update_curriculum)
+        curriculum_form.addWidget(self.curriculum_update_button)
         right_layout.addLayout(curriculum_form)
 
         self.curriculum_table = QTableWidget(0, 6)
@@ -215,6 +219,7 @@ class ClassesTab(QWidget):
         self.delete_button.clicked.connect(self.handle_delete)
         self.clear_button.clicked.connect(self.clear_form)
         self.table_widget.itemSelectionChanged.connect(self.handle_selection)
+        self.curriculum_table.itemSelectionChanged.connect(self._handle_curriculum_selection)
         self.navigator.week_changed.connect(lambda _w: self.refresh_detail())
         self.name_edit.returnPressed.connect(self._handle_return_pressed)
 
@@ -361,6 +366,57 @@ class ClassesTab(QWidget):
         if not items:
             return None
         return self.curriculum_table.item(items[0].row(), 0).data(Qt.UserRole)
+
+    def _handle_curriculum_selection(self) -> None:
+        """Tablodan bir ders hedefi seçilince formu o hedefin mevcut
+        değerleriyle doldurur - 'Güncelle' düğmesi bu değerleri düzenleyip
+        kaydetmek için kullanılır (bkz. handle_update_curriculum)."""
+        curriculum_id = self._selected_curriculum_id()
+        if curriculum_id is None or self.selected_id is None:
+            return
+        row = next((r for r in self.db.list_class_curriculum(self.selected_id) if r["id"] == curriculum_id), None)
+        if row is None:
+            return
+
+        idx_subject = self.curriculum_subject_combo.findData(row["subject_id"])
+        if idx_subject >= 0:
+            self.curriculum_subject_combo.setCurrentIndex(idx_subject)  # _reload_curriculum_teachers'i tetikler
+
+        idx_teacher = self.curriculum_teacher_combo.findData(row["teacher_id"])
+        if idx_teacher < 0 and row["teacher_id"] is not None and row["teacher_name"]:
+            # Seçili dersin branşında listelenmeyen bir öğretmen atanmış
+            # olabilir (branş filtresi dışında) - yine de seçilebilmesi
+            # için combo'ya ekleyelim, aksi halde güncellerken kaybolur.
+            self.curriculum_teacher_combo.addItem(row["teacher_name"], row["teacher_id"])
+            idx_teacher = self.curriculum_teacher_combo.count() - 1
+        if idx_teacher >= 0:
+            self.curriculum_teacher_combo.setCurrentIndex(idx_teacher)
+
+        idx_room = self.curriculum_room_combo.findData(row["room_id"])
+        self.curriculum_room_combo.setCurrentIndex(idx_room if idx_room >= 0 else 0)
+
+        self.curriculum_hours_spin.setValue(row["weekly_hours"])
+
+    def handle_update_curriculum(self) -> None:
+        curriculum_id = self._selected_curriculum_id()
+        if curriculum_id is None:
+            QMessageBox.information(self, "Seçim yok", "Önce tablodan güncellenecek ders hedefini seçin.")
+            return
+        subject_id = self.curriculum_subject_combo.currentData()
+        teacher_id = self.curriculum_teacher_combo.currentData()
+        if subject_id is None:
+            QMessageBox.warning(self, "Eksik bilgi", "Önce Dersler sekmesinden en az bir ders tanımlayın.")
+            return
+        if teacher_id is None:
+            QMessageBox.warning(self, "Eksik bilgi", "Önce Öğretmenler sekmesinden en az bir öğretmen ekleyin.")
+            return
+        hours = self.curriculum_hours_spin.value()
+        room_id = self.curriculum_room_combo.currentData()
+        self.db.update_class_curriculum(curriculum_id, subject_id, teacher_id, hours, room_id=room_id)
+        self.refresh_curriculum()
+        QMessageBox.information(self, "Güncellendi", "Ders hedefi güncellendi.")
+        if self.on_change:
+            self.on_change()
 
     def handle_delete_curriculum(self) -> None:
         curriculum_id = self._selected_curriculum_id()
