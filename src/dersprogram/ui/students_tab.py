@@ -200,6 +200,7 @@ class StudentsTab(QWidget):
         curriculum_form = QHBoxLayout()
         curriculum_form.addWidget(QLabel("Ders:"))
         self.curriculum_subject_combo = QComboBox()
+        self.curriculum_subject_combo.currentIndexChanged.connect(self._reload_curriculum_teachers)
         curriculum_form.addWidget(self.curriculum_subject_combo, 2)
         curriculum_form.addWidget(QLabel("Öğretmen:"))
         self.curriculum_teacher_combo = QComboBox()
