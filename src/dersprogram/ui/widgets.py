@@ -172,7 +172,7 @@ class MiniScheduleGrid(QTableWidget):
         super().__init__()
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setShowGrid(False)
-        self._day_count = 1
+        self._col_count = 1
         self._fixed_col_width: int | None = None
         self._last_populate_args: tuple | None = None
         self._applied_sizing: tuple | None = None
@@ -211,12 +211,14 @@ class MiniScheduleGrid(QTableWidget):
             day_indices = list(range(len(day_names)))
             periods = list(range(1, period_count + 1))
 
-        self._day_count = max(len(day_indices), 1)
-        self.setRowCount(len(periods))
-        self.setColumnCount(len(day_indices))
-        self.setHorizontalHeaderLabels([day_names[d] for d in day_indices])
-        self.setVerticalHeaderLabels(_period_header_labels(db, periods))
-        self.verticalHeader().setMinimumWidth(30)
+        # Kullanıcı isteği: dikey eksen haftanın günleri, yatay eksen ders
+        # saatleri olsun (önceden tersiydi - satır=saat, sütun=gün).
+        self._col_count = max(len(periods), 1)
+        self.setRowCount(len(day_indices))
+        self.setColumnCount(len(periods))
+        self.setHorizontalHeaderLabels(_period_header_labels(db, periods))
+        self.setVerticalHeaderLabels([day_names[d] for d in day_indices])
+        self.verticalHeader().setMinimumWidth(70)
 
         # Kullanıcı isteği: "önce gridin oranı bozulmayacak şekilde sayfaya
         # yerleştir, sonra ... fontu büyüt ... en büyük alandan en fazla
@@ -238,18 +240,21 @@ class MiniScheduleGrid(QTableWidget):
             col_width = self._fixed_col_width
             primary_px = max(11, min(40, round(col_width * 0.10)))
             secondary_px = max(9, min(32, round(col_width * 0.082)))
+            tertiary_px = max(8, min(26, round(col_width * 0.068)))
             header_px = max(10, min(30, round(col_width * 0.075)))
             self.setStyleSheet(f"QHeaderView::section {{ font-size: {header_px}px; padding: 4px 2px; }}")
         else:
             primary_px = None
             secondary_px = None
+            tertiary_px = None
             self.setStyleSheet("")
 
-        for row, period in enumerate(periods):
-            for col, day in enumerate(day_indices):
+        for row, day in enumerate(day_indices):
+            for col, period in enumerate(periods):
                 blocks = blocks_by_cell.get((day, period), [])
                 _set_cell_widget(self, row, col, theme.make_multi_cell(
-                    blocks, compact=True, row_mode=row_mode, primary_px=primary_px, secondary_px=secondary_px,
+                    blocks, compact=True, row_mode=row_mode,
+                    primary_px=primary_px, secondary_px=secondary_px, tertiary_px=tertiary_px,
                 ))
         self._apply_grid_sizing()
 
@@ -309,7 +314,7 @@ class MiniScheduleGrid(QTableWidget):
             return None
         scrollbar_w = self.style().pixelMetric(QStyle.PM_ScrollBarExtent)
         usable_w = max(viewport_w - scrollbar_w, viewport_w // 2)
-        return max(46, usable_w // self._day_count)
+        return max(46, usable_w // self._col_count)
 
     def _apply_grid_sizing(self) -> None:
         """AvailabilityGrid._apply_grid_sizing ile aynı mantık (bkz.

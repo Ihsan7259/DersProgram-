@@ -154,6 +154,9 @@ class ClassesTab(QWidget):
         curriculum_form.addWidget(QLabel("Öğretmen:"))
         self.curriculum_teacher_combo = QComboBox()
         curriculum_form.addWidget(self.curriculum_teacher_combo, 2)
+        curriculum_form.addWidget(QLabel("Derslik:"))
+        self.curriculum_room_combo = QComboBox()
+        curriculum_form.addWidget(self.curriculum_room_combo, 2)
         curriculum_form.addWidget(QLabel("Saat:"))
         self.curriculum_hours_spin = QSpinBox()
         self.curriculum_hours_spin.setRange(1, 40)
@@ -165,16 +168,17 @@ class ClassesTab(QWidget):
         curriculum_form.addWidget(self.curriculum_add_button)
         right_layout.addLayout(curriculum_form)
 
-        self.curriculum_table = QTableWidget(0, 5)
+        self.curriculum_table = QTableWidget(0, 6)
         self.curriculum_table.setHorizontalHeaderLabels(
-            ["Ders", "Öğretmen", "Hedef", "Programda", "Durum"]
+            ["Ders", "Öğretmen", "Derslik", "Hedef", "Programda", "Durum"]
         )
         curriculum_header = self.curriculum_table.horizontalHeader()
         curriculum_header.setSectionResizeMode(0, QHeaderView.Stretch)
         curriculum_header.setSectionResizeMode(1, QHeaderView.Stretch)
-        curriculum_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        curriculum_header.setSectionResizeMode(2, QHeaderView.Stretch)
         curriculum_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        curriculum_header.setSectionResizeMode(4, QHeaderView.Stretch)
+        curriculum_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        curriculum_header.setSectionResizeMode(5, QHeaderView.Stretch)
         self.curriculum_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.curriculum_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.curriculum_table.setMaximumHeight(150)
@@ -255,6 +259,20 @@ class ClassesTab(QWidget):
                 self.curriculum_subject_combo.setCurrentIndex(idx)
         self.curriculum_subject_combo.blockSignals(False)
         self._reload_curriculum_teachers()
+        self._reload_curriculum_rooms()
+
+    def _reload_curriculum_rooms(self) -> None:
+        previous = self.curriculum_room_combo.currentData()
+        self.curriculum_room_combo.blockSignals(True)
+        self.curriculum_room_combo.clear()
+        self.curriculum_room_combo.addItem("—", None)
+        for row in self.db.list_rows("rooms"):
+            self.curriculum_room_combo.addItem(row["name"], row["id"])
+        if previous is not None:
+            idx = self.curriculum_room_combo.findData(previous)
+            if idx >= 0:
+                self.curriculum_room_combo.setCurrentIndex(idx)
+        self.curriculum_room_combo.blockSignals(False)
 
     def _reload_curriculum_teachers(self) -> None:
         """Seçilen dersin branşına sahip öğretmenleri listeler; o branşta
@@ -294,6 +312,7 @@ class ClassesTab(QWidget):
             cells = [
                 item_subject,
                 QTableWidgetItem(row["teacher_name"] or "-"),
+                QTableWidgetItem(row["room_name"] or "-"),
                 QTableWidgetItem(str(target)),
                 QTableWidgetItem(f"{planned} ({placed} yerleşti)"),
                 QTableWidgetItem(status),
@@ -326,7 +345,8 @@ class ClassesTab(QWidget):
             QMessageBox.warning(self, "Eksik bilgi", "Önce Öğretmenler sekmesinden en az bir öğretmen ekleyin.")
             return
         hours = self.curriculum_hours_spin.value()
-        self.db.add_class_curriculum(self.selected_id, subject_id, teacher_id, hours)
+        room_id = self.curriculum_room_combo.currentData()
+        self.db.add_class_curriculum(self.selected_id, subject_id, teacher_id, hours, room_id=room_id)
         self.refresh_curriculum()
         QMessageBox.information(
             self, "Eklendi",

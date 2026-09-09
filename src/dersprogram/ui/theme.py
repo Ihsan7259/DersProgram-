@@ -302,7 +302,7 @@ def lesson_colors_for(block, tinted: bool = False) -> tuple[str, str]:
 
 def make_lesson_card(
     block, compact: bool = False, row_mode: str | None = None,
-    primary_px: int | None = None, secondary_px: int | None = None,
+    primary_px: int | None = None, secondary_px: int | None = None, tertiary_px: int | None = None,
 ) -> QWidget:
     """Bir ders bloğunu (block: scheduling.BlockView) küçük renkli bir
     kart olarak gösterir - tipe göre pastel arkaplan + nokta işareti.
@@ -317,14 +317,11 @@ def make_lesson_card(
     gösterilir."""
     bg, dot = lesson_colors_for(block, tinted=row_mode in ("teacher", "student"))
     if row_mode == "class":
-        primary, secondary = block.class_row_lines()
-        tertiary = ""
+        primary, secondary, tertiary = block.class_row_lines()
     elif row_mode == "teacher":
-        primary, secondary = block.teacher_row_lines()
-        tertiary = ""
+        primary, secondary, tertiary = block.teacher_row_lines()
     elif row_mode == "student":
-        primary, secondary = block.student_row_lines()
-        tertiary = ""
+        primary, secondary, tertiary = block.student_row_lines()
     else:
         primary, secondary, tertiary = block.card_lines()
 
@@ -392,10 +389,11 @@ def make_lesson_card(
         )
         layout.addWidget(secondary_label)
 
-    if tertiary and not compact:
+    if tertiary:
+        tertiary_size_css = f"{tertiary_px}px" if tertiary_px else "7.8pt"
         tertiary_label = QLabel(tertiary)
         tertiary_label.setWordWrap(True)
-        tertiary_label.setStyleSheet(f"font-size: 7.8pt; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;")
+        tertiary_label.setStyleSheet(f"font-size: {tertiary_size_css}; color: {LESSON_TYPE_TEXT_MUTED}; background: transparent;")
         layout.addWidget(tertiary_label)
 
     layout.addStretch()
@@ -486,7 +484,7 @@ def make_empty_cell(compact: bool = False) -> QWidget:
 
 def make_multi_cell(
     blocks: list, compact: bool = False, row_mode: str | None = None,
-    primary_px: int | None = None, secondary_px: int | None = None,
+    primary_px: int | None = None, secondary_px: int | None = None, tertiary_px: int | None = None,
 ) -> QWidget:
     """Bir (gün, saat) hücresindeki tüm ders bloklarını üst üste dizer.
     Ana Program hücresinde birden fazla ders (farklı sınıflar) aynı
@@ -502,7 +500,8 @@ def make_multi_cell(
     layout.setSpacing(3)
     for block in blocks:
         layout.addWidget(make_lesson_card(
-            block, compact=compact, row_mode=row_mode, primary_px=primary_px, secondary_px=secondary_px,
+            block, compact=compact, row_mode=row_mode,
+            primary_px=primary_px, secondary_px=secondary_px, tertiary_px=tertiary_px,
         ))
     return frame
 

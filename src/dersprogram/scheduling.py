@@ -160,42 +160,54 @@ class BlockView:
             return "Zümre", self.subject_name or "", self.teacher_name or ""
         return "Soru Çözümü", self.subject_name or "", self.teacher_name or ""
 
-    def class_row_lines(self) -> tuple[str, str]:
-        """Sınıfın kendi haftalık programında gösterilecek iki satır:
-        ders adı ve öğretmen adı (sınıf adı zaten belli, tekrar edilmez)."""
+    def room_line(self) -> str:
+        """Kart üçüncü satırı: '<ders türü etiketi>(<atanan derslik>)' -
+        ör. 'Sınıf Dersi(Derslik 101)'. Bu blok için bir derslik
+        atanmamışsa boş döner (satır hiç gösterilmez)."""
+        if not self.room_name:
+            return ""
+        type_label = LESSON_TYPE_LABELS.get(self.type, self.type)
+        return f"{type_label}({self.room_name})"
+
+    def class_row_lines(self) -> tuple[str, str, str]:
+        """Sınıfın kendi haftalık programında gösterilecek satırlar:
+        ders adı, öğretmen adı (sınıf adı zaten belli, tekrar edilmez) ve
+        varsa üçüncü satırda atanan derslik."""
         if self.type == TYPE_CLASS:
-            return self.subject_name or "Sınıf Dersi", self.teacher_name or ""
+            return self.subject_name or "Sınıf Dersi", self.teacher_name or "", self.room_line()
         label = LESSON_TYPE_LABELS.get(self.type, self.type)
         if self.subject_name:
             label = f"{label} · {self.subject_name}"
-        return label, self.teacher_name or ""
+        return label, self.teacher_name or "", self.room_line()
 
-    def teacher_row_lines(self) -> tuple[str, str]:
+    def teacher_row_lines(self) -> tuple[str, str, str]:
         """Öğretmenin kendi haftalık programında (ve önizlemesinde)
-        gösterilecek iki satır: sınıf/öğrenci adı ve branş - öğretmen adı
-        zaten belli olduğu için branş yerine kiminle olduğu öne çıkar."""
+        gösterilecek satırlar: sınıf/öğrenci adı ve branş - öğretmen adı
+        zaten belli olduğu için branş yerine kiminle olduğu öne çıkar;
+        varsa üçüncü satırda atanan derslik."""
         if self.type == TYPE_CLASS:
-            return self.class_name or "Sınıf Dersi", self.subject_name or ""
+            return self.class_name or "Sınıf Dersi", self.subject_name or "", self.room_line()
         if self.type == TYPE_ONE_ON_ONE:
-            return self.student_name or "Birebir", self.subject_name or ""
+            return self.student_name or "Birebir", self.subject_name or "", self.room_line()
         if self.type == TYPE_COACHING:
-            return "Öğrenci Koçluk", self.student_name or ""
+            return "Öğrenci Koçluk", self.student_name or "", self.room_line()
         if self.type == TYPE_DEPARTMENT:
-            return "Zümre", self.subject_name or ""
-        return "Soru Çözümü", self.subject_name or ""
+            return "Zümre", self.subject_name or "", self.room_line()
+        return "Soru Çözümü", self.subject_name or "", self.room_line()
 
-    def student_row_lines(self) -> tuple[str, str]:
+    def student_row_lines(self) -> tuple[str, str, str]:
         """Öğrencinin kendi haftalık programında (ve önizlemesinde)
-        gösterilecek iki satır: ders/tür adı ve öğretmen adı - öğrenci adı
+        gösterilecek satırlar: ders/tür adı ve öğretmen adı - öğrenci adı
         zaten belli olduğu için tekrar edilmez (bkz. scheduling.
         student_effective_blocks - burada hem öğrencinin kişisel bloğu hem
-        de sınıfının ortak ders bloğu aynı satırda görünebilir)."""
+        de sınıfının ortak ders bloğu aynı satırda görünebilir); varsa
+        üçüncü satırda atanan derslik."""
         if self.type == TYPE_COACHING:
-            return "Öğrenci Koçluk", self.teacher_name or ""
+            return "Öğrenci Koçluk", self.teacher_name or "", self.room_line()
         if self.type == TYPE_DEPARTMENT:
-            return "Zümre", self.teacher_name or ""
+            return "Zümre", self.teacher_name or "", self.room_line()
         label = self.subject_name or LESSON_TYPE_LABELS.get(self.type, self.type)
-        return label, self.teacher_name or ""
+        return label, self.teacher_name or "", self.room_line()
 
     def dense_lines(self, row_mode: str) -> tuple[str, str]:
         """Kurum geneli ızgarada (satır=sınıf/öğretmen/öğrenci) hücrede
