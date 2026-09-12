@@ -74,6 +74,16 @@ def natural_sort_key(text: str):
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]
 
 
+def _name_steps(name: str | None) -> list[str]:
+    """Bir adın, hücre daraldıkça denenecek kademeli kırpmaları
+    ("Matematik" -> ["Matema", "Mate", "Mat"]). Sonuna "…" konmaz:
+    amaç, dar hücrede de hangi ders/sınıf olduğunu tahmin edilebilir
+    kılmak (bkz. BlockView.dense_keywords)."""
+    if not name:
+        return []
+    return [name[:limit] for limit in (6, 4, 3) if len(name) > limit]
+
+
 def short_teacher_name(name: str | None) -> str:
     """'Ahmet Yılmaz' -> 'A. Yılmaz' (dar hücrelerde yer kazanmak için)."""
     if not name:
@@ -263,29 +273,37 @@ class BlockView:
 
     def dense_keywords(self, row_mode: str) -> list[str]:
         """Kurum geneli ızgarada hücre metninin, EN UZUNDAN EN KISAYA
-        adayları. Sütunlar ne kadar daralırsa daralsın hücrede dersin
-        türünü/kimle olduğunu anlatan BİR ŞEY kalsın diye: delegate
-        (bkz. schedule_tab._CellDelegate) sığan ilk adayı çizer, hiçbiri
-        sığmazsa en kısası ("Koç", "BB", "Den"... gibi tür kısaltması)
-        kullanılır. Önceden tek bir uzun metin verilip sonu '…' ile
-        kesiliyordu - dar sütunlarda hücrede hiçbir okunur bilgi
-        kalmıyordu (kullanıcı isteği)."""
+        adayları; delegate (bkz. schedule_tab._CellDelegate) okunur bir
+        boyutta sığan ilk adayı çizer.
+
+        Adaylar, hücre daraldıkça ADI KIRPARAK ilerler - tür kısaltmasına
+        ("SD", "BB") düşmez: kullanıcı isteği "sınıfa göre bastığımda her
+        zaman SD gibi bir kısaltma olmasın, branş yazsın; öğretmene
+        bastığımda sınıf dersinde sınıfın adı (12-A), birebirde öğrencinin
+        adı yazsın". Tür kısaltması yalnızca kırpılacak bir ad HİÇ yoksa
+        (ör. zümre) ya da en kısa kırpma bile sığmazsa son çare olarak
+        kalır."""
         primary, _secondary = self.dense_lines(row_mode)
         candidates = [primary]
         if row_mode == "class":
-            # Satır zaten sınıfı belli ediyor: ders adı > kısaltması > tür
-            if self.type == TYPE_CLASS and self.subject_name:
-                candidates.append(self.subject_name[:4])
+            # Satır zaten sınıfı belli ediyor: kalan ayırt edici bilgi DERSİN
+            # ADI - "Matematik" -> "Matema" -> "Mate" -> "Mat".
+            candidates += _name_steps(self.subject_name if self.type == TYPE_CLASS else "")
+        elif row_mode == "student":
+            candidates += _name_steps(self.subject_name)
         elif self.type == TYPE_ONE_ON_ONE and self.student_name:
+            # "Berranur Ekin" -> "B. Ekin" -> "Berran" -> "Berr" -> "Ber"
             candidates.append(short_teacher_name(self.student_name))
             candidates.append(self.student_name.split()[0])
+            candidates += _name_steps(self.student_name.split()[0])
         elif self.type == TYPE_COACHING:
             if self.student_name:
                 candidates.append(f"Koç {self.student_name.split()[0]}")
             candidates.append("Koç")
         elif self.type == TYPE_CLASS and self.class_name:
-            # "12-Say B" -> "12-Say" -> "SD"
+            # "12-Say B" -> "12-Say" -> "12-S" -> "12-"
             candidates.append(self.class_name.split()[0])
+            candidates += _name_steps(self.class_name.split()[0])
         candidates.append(self.type_abbrev())
         # Aynı metni iki kez denemenin anlamı yok; sıra (uzun -> kısa) korunur.
         seen: set[str] = set()

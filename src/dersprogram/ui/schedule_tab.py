@@ -1305,40 +1305,69 @@ class ScheduleTab(QWidget):
         dialog = RowPreviewDialog(self.db, self.navigator.week_start, self.mode, entity_id, name, self)
         dialog.exec()
 
-    def _show_row_context_menu(self, entity_id: int, global_pos) -> None:
-        """Bir sınıf/öğretmen adına sağ tıklanınca: önizleme ya da o
-        satırın yerleştirilmiş TÜM derslerini tek seferde 'Atanmamış
-        Dersler' havuzuna düşürme seçeneği (müsaitlik ayarlarına dokunmaz,
-        sadece ders yerleşimlerini kaldırır)."""
+    def _row_placed_blocks(self, entity_id: int, lesson_type: str | None = None) -> list:
+        """Bu satıra (sınıf/öğretmen) ait, o hafta PROGRAMDA YERLEŞMİŞ
+        bloklar; lesson_type verilirse sadece o türdekiler."""
+        return [
+            b for blocks in self._schedule.values() for b in blocks
+            if self._row_matches_block(b, entity_id) and (lesson_type is None or b.type == lesson_type)
+        ]
+
+    def build_row_menu(self, entity_id: int) -> QMenu:
+        """Bir sınıf/öğretmen adına sağ tıklanınca açılan menüyü kurar:
+        önizleme, o satırın yerleştirilmiş TÜM derslerini havuza düşürme
+        ve (kullanıcı isteği) SADECE BELİRLİ BİR DERS TÜRÜNÜ (ör. o
+        hocanın birebirlerini ya da koçluklarını) havuza düşürme.
+        Müsaitlik ayarlarına dokunulmaz, sadece ders yerleşimleri
+        kaldırılır. Her eylem kendi işini `triggered`'a bağlı taşır."""
         name = next((n for i, n in self._row_entities if i == entity_id), "")
         menu = QMenu(self)
-        preview_action = menu.addAction("Önizleme")
-        clear_action = None
+        menu.addAction("Önizleme").triggered.connect(lambda: self._show_row_preview(entity_id))
         if self.mode != MODE_STUDENT:
             # Öğrenci görünümü salt-okunur bir özet olduğu için (bkz.
             # _row_matches_block) burada kaldıracak bir "yerleşim" yok.
             menu.addSeparator()
-            clear_action = menu.addAction("Yerleştirilmiş Dersleri Havuza Düşür")
-        chosen = menu.exec(global_pos)
-        if chosen == preview_action:
-            self._show_row_preview(entity_id)
-        elif clear_action is not None and chosen == clear_action:
-            self._clear_row_assignments(entity_id, name)
+            menu.addAction("Yerleştirilmiş Dersleri Havuza Düşür").triggered.connect(
+                lambda: self._clear_row_assignments(entity_id, name)
+            )
+            # Tür bazlı seçenekler, SADECE o satırda gerçekten yerleşmiş
+            # ders bulunan türler için gösterilir - boş seçeneklerle menüyü
+            # kalabalıklaştırmamak için (yanında kaç saat olduğu da yazar).
+            counts: dict[str, int] = {}
+            for block in self._row_placed_blocks(entity_id):
+                counts[block.type] = counts.get(block.type, 0) + 1
+            available = [t for t in LESSON_TYPES if counts.get(t)]
+            if available:
+                type_menu = menu.addMenu("Ders Türüne Göre Havuza Düşür")
+                for lesson_type in available:
+                    label = f"{theme.lesson_type_label(lesson_type)} ({counts[lesson_type]} saat)"
+                    type_menu.addAction(label).triggered.connect(
+                        lambda _checked=False, t=lesson_type: self._clear_row_assignments(
+                            entity_id, name, lesson_type=t
+                        )
+                    )
+        return menu
 
-    def _clear_row_assignments(self, entity_id: int, name: str) -> None:
-        matching_blocks = [
-            b for blocks in self._schedule.values() for b in blocks if self._row_matches_block(b, entity_id)
-        ]
+    def _show_row_context_menu(self, entity_id: int, global_pos) -> None:
+        menu = self.build_row_menu(entity_id)
+        menu.exec(global_pos)
+        menu.deleteLater()
+
+    def _clear_row_assignments(self, entity_id: int, name: str, lesson_type: str | None = None) -> None:
+        type_label = theme.lesson_type_label(lesson_type) if lesson_type else None
+        matching_blocks = self._row_placed_blocks(entity_id, lesson_type)
         if not matching_blocks:
-            QMessageBox.information(self, "Ders yok", f"{name} için şu anda yerleştirilmiş ders yok.")
+            what = f"{type_label.lower()} dersi" if type_label else "ders"
+            QMessageBox.information(self, "Ders yok", f"{name} için şu anda yerleştirilmiş {what} yok.")
             return
         all_members = {}
         for b in matching_blocks:
             for m in self._block_group(b):
                 all_members[m.id] = m
+        scope_text = f"{type_label} dersleri" if type_label else "yerleştirilmiş dersler"
         confirm = QMessageBox.question(
             self, "Onay",
-            f"{name} için yerleştirilmiş {len(all_members)} ders saatinin tamamı 'Atanmamış Dersler' "
+            f"{name} için yerleştirilmiş {len(all_members)} ders saati ({scope_text}) 'Atanmamış Dersler' "
             "havuzuna düşürülsün mü?\n\n(Müsaitlik ayarlarına dokunulmaz, sadece ders yerleşimleri kaldırılır.)",
         )
         if confirm != QMessageBox.Yes:
