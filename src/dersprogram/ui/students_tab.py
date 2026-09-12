@@ -456,7 +456,12 @@ class StudentsTab(QWidget):
             self.db, self.navigator.week_start, self.selected_id, class_group_id
         )
         availability = scheduling.get_student_availability(self.db, self.selected_id, self.navigator.week_start)
-        self.mini_grid.render(self.db, filtered, availability)
+        # row_mode="student": kart satırları öğrenciye göre yazılır (ders adı,
+        # TÜR + öğretmen, derslik - bkz. BlockView.student_row_lines).
+        # Önceden row_mode verilmediği için (Sınıflar/Öğretmenler sekmesinin
+        # aksine) kartlarda tür hiç görünmüyordu ve öğrencinin programında
+        # aynı dersin sınıf hâli ile birebir hâli ayırt edilemiyordu.
+        self.mini_grid.render(self.db, filtered, availability, row_mode="student")
         totals = scheduling.summarize_student_hours(
             self.db, self.navigator.week_start, self.selected_id, class_group_id
         )

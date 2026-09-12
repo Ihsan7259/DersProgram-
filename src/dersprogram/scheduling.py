@@ -156,6 +156,21 @@ class BlockView:
     def type_abbrev(self) -> str:
         return self._TYPE_ABBREV.get(self.type, self.type_label()[:3])
 
+    _TYPE_SHORT = {
+        TYPE_CLASS: "Sınıf",
+        TYPE_ONE_ON_ONE: "Birebir",
+        TYPE_COACHING: "Koçluk",
+        TYPE_DEPARTMENT: "Zümre",
+        TYPE_PROBLEM_SOLVING: "Soru Çöz.",
+        TYPE_TRIAL: "Deneme",
+        TYPE_STUDY: "Etüt",
+    }
+
+    def type_short(self) -> str:
+        """Kartta bir satıra sığacak kadar kısa ama okunur tür adı
+        ("Sınıf Dersi" yerine "Sınıf", "Birebir Ders" yerine "Birebir")."""
+        return self._TYPE_SHORT.get(self.type, self.type_label())
+
     def pool_label_short(self) -> str:
         """Havuzda yer kazanmak için kısaltılmış etiket (tam metin tooltip'te)."""
         type_abbrev = self.type_abbrev()
@@ -219,17 +234,23 @@ class BlockView:
 
     def student_row_lines(self) -> tuple[str, str, str]:
         """Öğrencinin kendi haftalık programında (ve önizlemesinde)
-        gösterilecek satırlar: ders/tür adı ve öğretmen adı - öğrenci adı
-        zaten belli olduğu için tekrar edilmez (bkz. scheduling.
-        student_effective_blocks - burada hem öğrencinin kişisel bloğu hem
-        de sınıfının ortak ders bloğu aynı satırda görünebilir); varsa
-        üçüncü satırda atanan derslik."""
-        if self.type == TYPE_COACHING:
-            return "Öğrenci Koçluk", self.teacher_name or "", self.room_line()
-        if self.type == TYPE_DEPARTMENT:
-            return "Zümre", self.teacher_name or "", self.room_line()
-        label = self.subject_name or LESSON_TYPE_LABELS.get(self.type, self.type)
-        return label, self.teacher_name or "", self.room_line()
+        gösterilecek satırlar: ders adı, DERSİN TÜRÜ + öğretmen, varsa
+        atanan derslik. Öğrenci adı zaten belli olduğu için tekrar
+        edilmez.
+
+        Türün de yazılması şart: bir öğrencinin programında aynı ders
+        (ör. Matematik) hem sınıfının ortak dersi hem de birebir dersi
+        olarak yer alabiliyor (bkz. student_effective_blocks) ve bunlar
+        sadece ders adıyla birbirinden ayırt edilemiyordu - hatta ders
+        için elle aynı renk seçilmişse renkleri de aynı oluyordu
+        (kullanıcı bildirimi)."""
+        teacher = short_teacher_name(self.teacher_name)
+        if self.subject_name:
+            secondary = f"{self.type_short()} · {teacher}" if teacher else self.type_short()
+            return self.subject_name, secondary, self.room_line()
+        # Dersi/branşı olmayan türlerde (koçluk, zümre...) tür adı zaten
+        # ilk satırda - ikinci satırda tekrar edilmez.
+        return self.type_short(), teacher, self.room_line()
 
     def subject_row_lines(self) -> tuple[str, str, str]:
         """Bir DERSİN (branşın) kendi haftalık programında gösterilecek
@@ -1292,15 +1313,20 @@ def student_effective_blocks(
     db: Database, week_start: _dt.date, student_id: int, class_group_id: int | None
 ) -> dict[tuple[int, int], list[BlockView]]:
     """Bir öğrencinin haftalık programı: kendi kişisel (birebir/koçluk)
-    blokları + (bir sınıfa atalıysa) o sınıfın tüm sınıf dersleri
-    birleşik olarak - öğrenci kendi sınıfının derslerine de katılır."""
+    blokları + (bir sınıfa atalıysa) o sınıfa yazılmış tüm dersler
+    birleşik olarak - öğrenci kendi sınıfının derslerine de katılır.
+
+    Sınıfa yazılmış dersler TİPE GÖRE süzülmez (bkz. ScheduleTab.
+    _cell_blocks - orada da aynısı yapılıyor): sınıfın normal dersleri
+    kadar o sınıfa yazılan Deneme/Etüt gibi dersler de öğrencinin
+    programında görünür."""
     schedule, _pool = get_week_view(db, week_start)
     filtered: dict[tuple[int, int], list[BlockView]] = {}
     for cell, blocks in schedule.items():
         matched = [
             b for b in blocks
             if b.student_id == student_id
-            or (class_group_id is not None and b.type == TYPE_CLASS and b.class_group_id == class_group_id)
+            or (class_group_id is not None and b.class_group_id == class_group_id)
         ]
         if matched:
             filtered[cell] = matched

@@ -99,6 +99,29 @@ class ColorPickButton(QWidget):
         self.color_changed.emit(None)
 
 
+def _content_row_height(table: QTableWidget, col_width: int) -> int:
+    """Hücrelerdeki ders kartlarının TÜM satırlarının (ders adı, tür +
+    öğretmen, derslik - gerektiğinde kelime kaydırmasıyla) tam görünmesi
+    için gereken en küçük satır yüksekliği.
+
+    Satır yüksekliği yalnızca sütun genişliğinden (3:2 oran) türetildiğinde,
+    saat sayısı çok olan ekranlarda hücre kutusu kartın yazısından kısa
+    kalıp alt satırları kırpıyordu (kullanıcı bildirimi: "yazıların bloklar
+    içinde hepsinin okunduğundan emin olalım"). Burada kartların kendi
+    boyut ihtiyacı ölçülüp taban değer olarak kullanılır - tüm satırlar
+    yine AYNI yükseklikte kalır."""
+    needed = 0
+    for row in range(table.rowCount()):
+        for col in range(table.columnCount()):
+            widget = table.cellWidget(row, col)
+            if widget is None:
+                continue
+            if widget.hasHeightForWidth():
+                needed = max(needed, widget.heightForWidth(col_width))
+            needed = max(needed, widget.sizeHint().height())
+    return needed
+
+
 def _set_cell_widget(table: QTableWidget, row: int, col: int, widget: QWidget) -> None:
     """QTableWidget.setCellWidget() eskisini yenisiyle değiştirdiğinde
     önceki widget'ı silmez - üst-alt ilişkisi kalır ama görünmez kalır.
@@ -129,15 +152,24 @@ def divider() -> QFrame:
 
 
 def _period_header_labels(db: Database, periods) -> list[str]:
-    """'1.' ya da (Ayarlar'da saat girilmişse) '1.\n08:30-09:20' şeklinde
-    dikey başlık etiketleri üretir. periods bir int (1..periods) ya da
-    doğrudan bir saat numarası listesi/aralığı olabilir."""
+    """'1.' ya da (Ayarlar'da saat girilmişse) başlangıç/bitiş saatini ALT
+    ALTA veren '1.\n16:30-\n17:30' şeklinde başlık etiketleri üretir.
+    periods bir int (1..periods) ya da doğrudan bir saat numarası
+    listesi/aralığı olabilir.
+
+    Saat aralığı tek satıra ('16:30-17:30') yazıldığında dar sütun/başlık
+    genişliğine sığmayıp kırpılıyordu; kullanıcı isteği üzerine iki satıra
+    bölünüyor."""
     if isinstance(periods, int):
         periods = range(1, periods + 1)
     labels = []
     for p in periods:
         time_label = db.period_time_label(p)
-        labels.append(f"{p}.\n{time_label}" if time_label else f"{p}.")
+        if not time_label:
+            labels.append(f"{p}.")
+            continue
+        start, _sep, end = time_label.partition("-")
+        labels.append(f"{p}.\n{start}-\n{end}" if end else f"{p}.\n{time_label}")
     return labels
 
 
@@ -429,6 +461,14 @@ class MiniScheduleGrid(QTableWidget):
         v_header = self.verticalHeader()
         v_header.setSectionResizeMode(QHeaderView.Fixed)
         row_height = max(28, int(col_width / 1.5))
+        if self._fixed_col_width is None:
+            # Sadece EKRANDA: yazı tipi boyutu burada sabit (pt) olduğu için
+            # çok saatli programlarda hücre kutusu kartın yazısından kısa
+            # kalıp alt satırları kırpabiliyordu - kartın gerçek ihtiyacı
+            # taban alınır. Dışa aktarımda (PDF/Kopyala) buna dokunulmaz:
+            # orada yazı boyutu zaten hücre genişliğine oranlı hesaplanıyor
+            # ve kullanıcının onayladığı 3:2 kutu oranı korunmalı.
+            row_height = max(row_height, _content_row_height(self, col_width))
         for row in range(self.rowCount()):
             self.setRowHeight(row, row_height)
 
@@ -536,7 +576,10 @@ class AvailabilityGrid(QTableWidget):
         # her koşulda bizim belirlediğimiz değerde SABİT kalır.
         v_header = self.verticalHeader()
         v_header.setSectionResizeMode(QHeaderView.Fixed)
-        row_height = max(28, int(col_width / 1.5))
+        # Bu ızgarada ders kartları da görünüyor (dolu saatler) - kartın
+        # yazısı kutuya sığmazsa satır yüksekliği ona göre büyütülür, aksi
+        # halde ders adı/öğretmen/derslik satırları kırpılıyordu.
+        row_height = max(28, int(col_width / 1.5), _content_row_height(self, col_width))
         for row in range(self.rowCount()):
             self.setRowHeight(row, row_height)
 
