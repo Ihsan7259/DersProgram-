@@ -30,8 +30,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
 )
 
-from ..db import Database
+from ..db import Database, LESSON_TYPES, LESSON_TYPE_LABELS
 from .. import seed, institutions
+from . import theme
+from .widgets import ColorPickButton
 
 ALL_DAYS = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
@@ -126,6 +128,7 @@ class SettingsTab(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_appearance_tab(), "Görünüm")
+        self.tabs.addTab(self._build_colors_tab(), "Renkler")
         self.tabs.addTab(self._build_schedule_tab(), "Program Günleri ve Saatleri")
         self.tabs.addTab(self._build_term_tab(), "Dönem Tarihleri")
         self.tabs.addTab(self._build_data_tab(), "Veri Yönetimi")
@@ -167,6 +170,46 @@ class SettingsTab(QWidget):
         layout.addLayout(appearance_form)
         layout.addStretch()
         return self._wrap_scroll(page)
+
+    # ---------- Renkler (ders tipi renkleri) ----------
+    def _build_colors_tab(self) -> QScrollArea:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(_section_label("Ders Tipi Renkleri"))
+        hint = QLabel(
+            "Her ders tipinin programda hangi renkle görüneceğini kendiniz "
+            "seçebilirsiniz (ör. koçluk dersleri turuncu, zümre yeşil). "
+            "Seçtiğiniz renk anında uygulanır ve kaydedilir; 'Sıfırla' o tipi "
+            "otomatik (varsayılan) rengine döndürür.\n"
+            "Tek tek DERSLERİN (Matematik, Kimya...) rengini ise Dersler "
+            "sekmesinden seçebilirsiniz - ders rengi, o dersin sınıf/birebir/"
+            "soru çözümü derslerinde ders tipi renginin önüne geçer."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.type_color_buttons: dict[str, ColorPickButton] = {}
+        color_form = QFormLayout()
+        for lesson_type in LESSON_TYPES:
+            button = ColorPickButton(f"{LESSON_TYPE_LABELS[lesson_type]} rengi")
+            default_bg, _dot = theme.LESSON_TYPE_COLORS.get(lesson_type, (theme.SURFACE, theme.INK_MUTED_58))
+            button.set_color(self.db.get_lesson_type_color(lesson_type), default_preview=default_bg)
+            button.color_changed.connect(
+                lambda color, t=lesson_type: self._handle_type_color_changed(t, color)
+            )
+            self.type_color_buttons[lesson_type] = button
+            color_form.addRow(f"{LESSON_TYPE_LABELS[lesson_type]}:", button)
+        layout.addLayout(color_form)
+        layout.addStretch()
+        return self._wrap_scroll(page)
+
+    def _handle_type_color_changed(self, lesson_type: str, color: str | None) -> None:
+        """Renk seçimi 'Ayarları Kaydet'i beklemez - anında kaydedilip tüm
+        program ekranlarına uygulanır (bkz. theme.load_color_overrides)."""
+        self.db.set_lesson_type_color(lesson_type, color)
+        theme.load_color_overrides(self.db)
+        if self.on_change:
+            self.on_change()
 
     # ---------- Program Günleri ve Saatleri ----------
     def _build_schedule_tab(self) -> QScrollArea:

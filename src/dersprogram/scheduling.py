@@ -17,6 +17,9 @@ from .db import (
     TYPE_ONE_ON_ONE,
     TYPE_COACHING,
     TYPE_DEPARTMENT,
+    TYPE_PROBLEM_SOLVING,
+    TYPE_TRIAL,
+    TYPE_STUDY,
 )
 
 SCOPE_WEEK_ONLY = "week"
@@ -101,6 +104,9 @@ class BlockView:
     student_class_group_id: int | None = None
     zumre_group_id: int | None = None
 
+    def type_label(self) -> str:
+        return LESSON_TYPE_LABELS.get(self.type, self.type)
+
     def short_label(self) -> str:
         type_label = LESSON_TYPE_LABELS.get(self.type, self.type)
         parts = [type_label]
@@ -132,11 +138,17 @@ class BlockView:
         TYPE_ONE_ON_ONE: "BB",
         TYPE_COACHING: "Koç",
         TYPE_DEPARTMENT: "Züm",
+        TYPE_PROBLEM_SOLVING: "SÇ",
+        TYPE_TRIAL: "Den",
+        TYPE_STUDY: "Etüt",
     }
+
+    def type_abbrev(self) -> str:
+        return self._TYPE_ABBREV.get(self.type, self.type_label()[:3])
 
     def pool_label_short(self) -> str:
         """Havuzda yer kazanmak için kısaltılmış etiket (tam metin tooltip'te)."""
-        type_abbrev = self._TYPE_ABBREV.get(self.type, "SÇ")
+        type_abbrev = self.type_abbrev()
         bits = [type_abbrev]
         if self.class_name:
             bits.append(self.class_name)
@@ -158,7 +170,7 @@ class BlockView:
             return "Öğrenci Koçluk", self.student_name or "", self.teacher_name or ""
         if self.type == TYPE_DEPARTMENT:
             return "Zümre", self.subject_name or "", self.teacher_name or ""
-        return "Soru Çözümü", self.subject_name or "", self.teacher_name or ""
+        return self.type_label(), self.subject_name or "", self.teacher_name or ""
 
     def room_line(self) -> str:
         """Kart üçüncü satırı: '<ders türü etiketi>(<atanan derslik>)' -
@@ -193,7 +205,7 @@ class BlockView:
             return "Öğrenci Koçluk", self.student_name or "", self.room_line()
         if self.type == TYPE_DEPARTMENT:
             return "Zümre", self.subject_name or "", self.room_line()
-        return "Soru Çözümü", self.subject_name or "", self.room_line()
+        return self.type_label(), self.subject_name or "", self.room_line()
 
     def student_row_lines(self) -> tuple[str, str, str]:
         """Öğrencinin kendi haftalık programında (ve önizlemesinde)
@@ -209,12 +221,28 @@ class BlockView:
         label = self.subject_name or LESSON_TYPE_LABELS.get(self.type, self.type)
         return label, self.teacher_name or "", self.room_line()
 
+    def subject_row_lines(self) -> tuple[str, str, str]:
+        """Bir DERSİN (branşın) kendi haftalık programında gösterilecek
+        satırlar: öğretmen adı ve kiminle olduğu (sınıf/öğrenci) - ders adı
+        zaten belli olduğu için tekrar edilmez. Aynı gün/saatte o dersi
+        veren birden fazla öğretmen varsa hepsi aynı hücrede alt alta
+        sıralanır (bkz. theme.make_multi_cell)."""
+        who = self.class_name or self.student_name or ""
+        if self.type != TYPE_CLASS and not who:
+            who = self.type_label()
+        return self.teacher_name or self.type_label(), who, self.room_line()
+
     def dense_lines(self, row_mode: str) -> tuple[str, str]:
         """Kurum geneli ızgarada (satır=sınıf/öğretmen/öğrenci) hücrede
         gösterilecek iki kısa satır. Satırın kendisi zaten kim olduğunu
         belli ettiği için o bilgi tekrar edilmez."""
         if row_mode == "class":
-            return self.subject_name or "Ders", short_teacher_name(self.teacher_name)
+            # Sınıf dersinde ayırt edici bilgi DERSİN ADI; sınıfın satırında
+            # görünen diğer tiplerde (Deneme/Etüt gibi) ise TİPİN KENDİSİ -
+            # "Ders" gibi hiçbir şey anlatmayan bir metin yazılmaz.
+            if self.type == TYPE_CLASS:
+                return self.subject_name or "Ders", short_teacher_name(self.teacher_name)
+            return self.type_label(), short_teacher_name(self.teacher_name)
         if row_mode == "student":
             if self.type == TYPE_COACHING:
                 return "Koçluk", short_teacher_name(self.teacher_name)
@@ -229,7 +257,45 @@ class BlockView:
             return "Koçluk", self.student_name or ""
         if self.type == TYPE_DEPARTMENT:
             return "Zümre", self.subject_name or ""
-        return "Soru Çöz.", self.subject_name or ""
+        if self.type == TYPE_PROBLEM_SOLVING:
+            return "Soru Çöz.", self.subject_name or ""
+        return self.type_label(), self.subject_name or self.class_name or ""
+
+    def dense_keywords(self, row_mode: str) -> list[str]:
+        """Kurum geneli ızgarada hücre metninin, EN UZUNDAN EN KISAYA
+        adayları. Sütunlar ne kadar daralırsa daralsın hücrede dersin
+        türünü/kimle olduğunu anlatan BİR ŞEY kalsın diye: delegate
+        (bkz. schedule_tab._CellDelegate) sığan ilk adayı çizer, hiçbiri
+        sığmazsa en kısası ("Koç", "BB", "Den"... gibi tür kısaltması)
+        kullanılır. Önceden tek bir uzun metin verilip sonu '…' ile
+        kesiliyordu - dar sütunlarda hücrede hiçbir okunur bilgi
+        kalmıyordu (kullanıcı isteği)."""
+        primary, _secondary = self.dense_lines(row_mode)
+        candidates = [primary]
+        if row_mode == "class":
+            # Satır zaten sınıfı belli ediyor: ders adı > kısaltması > tür
+            if self.type == TYPE_CLASS and self.subject_name:
+                candidates.append(self.subject_name[:4])
+        elif self.type == TYPE_ONE_ON_ONE and self.student_name:
+            candidates.append(short_teacher_name(self.student_name))
+            candidates.append(self.student_name.split()[0])
+        elif self.type == TYPE_COACHING:
+            if self.student_name:
+                candidates.append(f"Koç {self.student_name.split()[0]}")
+            candidates.append("Koç")
+        elif self.type == TYPE_CLASS and self.class_name:
+            # "12-Say B" -> "12-Say" -> "SD"
+            candidates.append(self.class_name.split()[0])
+        candidates.append(self.type_abbrev())
+        # Aynı metni iki kez denemenin anlamı yok; sıra (uzun -> kısa) korunur.
+        seen: set[str] = set()
+        unique = []
+        for text in candidates:
+            text = (text or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                unique.append(text)
+        return unique
 
     def group_key(self):
         """Aynı ihtiyaçtan gelen (ör. '9-A Matematik, X öğretmeni, haftada

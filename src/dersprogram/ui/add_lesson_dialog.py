@@ -24,10 +24,16 @@ from ..db import (
     TYPE_COACHING,
     TYPE_DEPARTMENT,
     TYPE_PROBLEM_SOLVING,
+    TYPE_TRIAL,
+    TYPE_STUDY,
+    TEACHERLESS_TYPES,
     LESSON_TYPE_LABELS,
 )
 
-TYPE_ORDER = [TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_DEPARTMENT, TYPE_PROBLEM_SOLVING]
+TYPE_ORDER = [
+    TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_DEPARTMENT,
+    TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
+]
 
 
 class AddLessonDialog(QDialog):
@@ -46,9 +52,15 @@ class AddLessonDialog(QDialog):
 
         self._teacher_subject_ids: dict[int, list[int]] = {}
         self.teacher_combo = QComboBox()
+        # Deneme/Etüt öğretmensiz de atanabildiği için listenin başına
+        # "(Öğretmensiz)" seçeneği konur; bu seçenek sadece o tiplerde
+        # geçerlidir (bkz. _update_visible_fields / _on_accept).
+        self.teacher_combo.addItem("(Öğretmensiz)", None)
         for t in db.list_teachers():
             self.teacher_combo.addItem(t["name"], t["id"])
             self._teacher_subject_ids[t["id"]] = db.get_teacher_subject_ids(t["id"])
+        if self.teacher_combo.count() > 1:
+            self.teacher_combo.setCurrentIndex(1)
         self.teacher_label = QLabel("Öğretmen:")
         layout.addRow(self.teacher_label, self.teacher_combo)
 
@@ -80,8 +92,12 @@ class AddLessonDialog(QDialog):
         layout.addRow(self.subject_label, self.subject_combo)
 
         self.class_combo = QComboBox()
+        # Deneme/Etüt sınıfsız da (ör. sadece bir öğretmenin etüdü) olabilir.
+        self.class_combo.addItem("(Yok)", None)
         for c in db.list_class_groups():
             self.class_combo.addItem(c["name"], c["id"])
+        if self.class_combo.count() > 1:
+            self.class_combo.setCurrentIndex(1)
         self.class_label = QLabel("Sınıf:")
         layout.addRow(self.class_label, self.class_combo)
 
@@ -133,25 +149,32 @@ class AddLessonDialog(QDialog):
         is_coaching = t == TYPE_COACHING
         is_department = t == TYPE_DEPARTMENT
         is_problem = t == TYPE_PROBLEM_SOLVING
+        # Deneme/Etüt: öğretmen ZORUNLU değil, sınıf ise seçilebilir -
+        # böylece bir deneme sınavı ya da etüt, hocası olmadan doğrudan
+        # sınıfın satırına yerleştirilebilir (kullanıcı isteği).
+        is_teacherless = t in TEACHERLESS_TYPES
 
         single_teacher = not is_department
         self.teacher_label.setVisible(single_teacher)
         self.teacher_combo.setVisible(single_teacher)
+        self.teacher_label.setText("Öğretmen (isteğe bağlı):" if is_teacherless else "Öğretmen:")
         self.teachers_list_label.setVisible(is_department)
         self.teachers_scroll.setVisible(is_department)
 
-        show_subject = is_class or is_one_on_one or is_problem
+        show_subject = is_class or is_one_on_one or is_problem or is_teacherless
         self.subject_label.setVisible(show_subject)
         self.subject_combo.setVisible(show_subject)
 
-        self.class_label.setVisible(is_class)
-        self.class_combo.setVisible(is_class)
+        show_class = is_class or is_teacherless
+        self.class_label.setVisible(show_class)
+        self.class_combo.setVisible(show_class)
+        self.class_label.setText("Sınıf (isteğe bağlı):" if is_teacherless else "Sınıf:")
 
         show_student = is_one_on_one or is_coaching
         self.student_label.setVisible(show_student)
         self.student_combo.setVisible(show_student)
 
-        show_room = is_class or is_one_on_one or is_department
+        show_room = is_class or is_one_on_one or is_department or is_teacherless
         self.room_label.setVisible(show_room)
         self.room_combo.setVisible(show_room)
 
@@ -176,15 +199,26 @@ class AddLessonDialog(QDialog):
             return
 
         teacher_id = self.teacher_combo.currentData()
-        if teacher_id is None:
+        is_teacherless = t in TEACHERLESS_TYPES
+        if teacher_id is None and not is_teacherless:
             QMessageBox.warning(self, "Eksik bilgi", "Öğretmen seçmelisiniz.")
             return
 
-        class_group_id = self.class_combo.currentData() if t == TYPE_CLASS else None
+        class_group_id = self.class_combo.currentData() if self.class_combo.isVisible() else None
         student_id = self.student_combo.currentData() if t in (TYPE_ONE_ON_ONE, TYPE_COACHING) else None
 
         if t == TYPE_CLASS and class_group_id is None:
-            QMessageBox.warning(self, "Eksik bilgi", "Önce en az bir sınıf tanımlamalısınız.")
+            QMessageBox.warning(self, "Eksik bilgi", "Sınıf seçmelisiniz (yoksa önce bir sınıf tanımlayın).")
+            return
+        # Blok, programda ya bir öğretmenin ya da bir sınıfın satırında
+        # görünerek yerleştirilir - ikisi de boşsa hiçbir satıra düşmez ve
+        # havuzdan çıkarılamaz hale gelir.
+        if is_teacherless and teacher_id is None and class_group_id is None:
+            QMessageBox.warning(
+                self, "Eksik bilgi",
+                "Deneme/Etüt için en az bir sınıf ya da bir öğretmen seçmelisiniz - "
+                "ders programda bunlardan birinin satırına yerleştirilir.",
+            )
             return
         if t in (TYPE_ONE_ON_ONE, TYPE_COACHING) and student_id is None:
             QMessageBox.warning(self, "Eksik bilgi", "Önce en az bir öğrenci tanımlamalısınız.")

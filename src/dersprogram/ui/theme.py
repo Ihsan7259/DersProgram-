@@ -26,6 +26,8 @@ from ..db import (
     TYPE_COACHING,
     TYPE_DEPARTMENT,
     TYPE_PROBLEM_SOLVING,
+    TYPE_TRIAL,
+    TYPE_STUDY,
     LESSON_TYPE_LABELS,
 )
 
@@ -124,6 +126,8 @@ LESSON_TYPE_COLORS: dict[str, tuple[str, str]] = {
     TYPE_COACHING: ("#f8e5c7", "#b47900"),
     TYPE_DEPARTMENT: ("#d0f1e1", "#008b61"),
     TYPE_PROBLEM_SOLVING: ("#ffdedb", "#bf534e"),
+    TYPE_TRIAL: ("#dfe3ee", "#54617f"),
+    TYPE_STUDY: ("#e6f0cf", "#5f7d24"),
 }
 LESSON_TYPE_TEXT = "#10161f"  # pastel kart üzerindeki metin - temadan bağımsız koyu
 LESSON_TYPE_TEXT_MUTED = "#4b5768"  # pastel kart üzerindeki ikincil metin
@@ -276,11 +280,53 @@ _SUBJECT_APPLICABLE_TYPES = {TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_PROBLEM_SOLVING}
 _SUBJECT_HUES = [210, 20, 140, 280, 45, 165, 320, 0, 190, 100, 260, 340, 60, 230]
 
 
-def _subject_colors(subject_id: int) -> tuple[str, str]:
+def auto_subject_colors(subject_id: int) -> tuple[str, str]:
+    """Bir ders için OTOMATİK (id'den türetilen) renk çifti - kullanıcı o
+    ders için elle bir renk seçmemişse kullanılır. Dersler sekmesindeki
+    renk düğmesi de, henüz seçim yapılmamışken bu rengi gösterir."""
     hue = _SUBJECT_HUES[subject_id % len(_SUBJECT_HUES)]
     bg = QColor.fromHsl(hue, 190, 228).name()
     dot = QColor.fromHsl(hue, 200, 100).name()
     return bg, dot
+
+
+# Kullanıcının elle seçtiği renkler (Ayarlar: ders tipi renkleri, Dersler
+# sekmesi: ders/branş renkleri). theme.py'nin veritabanına erişimi olmadığı
+# için modül düzeyinde tutulur; uygulama açılışında ve her renk
+# değişikliğinden sonra load_color_overrides(db) ile yenilenir.
+CUSTOM_TYPE_COLORS: dict[str, tuple[str, str]] = {}
+CUSTOM_SUBJECT_COLORS: dict[int, tuple[str, str]] = {}
+
+SETTING_TYPE_COLORS = "lesson_type_colors"
+SETTING_SUBJECT_COLORS = "subject_colors"
+
+
+def derive_dot_color(bg_hex: str) -> str:
+    """Kullanıcı tek bir arkaplan rengi seçer; kartın üzerindeki küçük
+    nokta/vurgu rengi bundan otomatik türetilir (aynı renk ailesi, çok
+    daha koyu) - kullanıcıya iki renk seçtirmeye gerek kalmasın diye."""
+    color = QColor(bg_hex)
+    if not color.isValid():
+        return INK_MUTED_58
+    h, s, l, a = color.getHsl()
+    return QColor.fromHsl(max(h, 0), max(s, 110), max(40, min(130, l - 110)), a).name()
+
+
+def _color_pair(bg_hex: str) -> tuple[str, str]:
+    return bg_hex, derive_dot_color(bg_hex)
+
+
+def load_color_overrides(db) -> None:
+    """Elle seçilmiş renkleri veritabanından okuyup modül düzeyindeki
+    önbelleğe alır (bkz. CUSTOM_TYPE_COLORS / CUSTOM_SUBJECT_COLORS)."""
+    CUSTOM_TYPE_COLORS.clear()
+    for type_, bg in (db.get_setting(SETTING_TYPE_COLORS) or {}).items():
+        if bg:
+            CUSTOM_TYPE_COLORS[type_] = _color_pair(bg)
+    CUSTOM_SUBJECT_COLORS.clear()
+    for subject_id, bg in (db.get_setting(SETTING_SUBJECT_COLORS) or {}).items():
+        if bg:
+            CUSTOM_SUBJECT_COLORS[int(subject_id)] = _color_pair(bg)
 
 
 def lesson_colors_for(block, tinted: bool = False) -> tuple[str, str]:
@@ -288,9 +334,17 @@ def lesson_colors_for(block, tinted: bool = False) -> tuple[str, str]:
     (sınıf/birebir/soru çözümü) dersin kendisine (subject_id) göre, yoksa
     (koçluk/zümre) ders tipine göre. tinted=True ise (öğretmen
     görünümünde) sınıf/öğrenciye göre küçük bir ton farkı eklenir - renk
-    ailesi korunur, sadece tonu değişir."""
+    ailesi korunur, sadece tonu değişir.
+
+    Kullanıcı bu ders ya da bu ders tipi için elle bir renk seçmişse o renk
+    AYNEN kullanılır (ton kaydırma da uygulanmaz) - "seçtiğim rengi
+    göreyim" beklentisi için."""
+    if block.type in _SUBJECT_APPLICABLE_TYPES and block.subject_id in CUSTOM_SUBJECT_COLORS:
+        return CUSTOM_SUBJECT_COLORS[block.subject_id]
+    if block.type in CUSTOM_TYPE_COLORS:
+        return CUSTOM_TYPE_COLORS[block.type]
     if block.type in _SUBJECT_APPLICABLE_TYPES and block.subject_id is not None:
-        bg, dot = _subject_colors(block.subject_id)
+        bg, dot = auto_subject_colors(block.subject_id)
     else:
         bg, dot = LESSON_TYPE_COLORS.get(block.type, (SURFACE, INK_MUTED_58))
     if not tinted:
@@ -322,6 +376,8 @@ def make_lesson_card(
         primary, secondary, tertiary = block.teacher_row_lines()
     elif row_mode == "student":
         primary, secondary, tertiary = block.student_row_lines()
+    elif row_mode == "subject":
+        primary, secondary, tertiary = block.subject_row_lines()
     else:
         primary, secondary, tertiary = block.card_lines()
 
@@ -380,7 +436,7 @@ def make_lesson_card(
     )
     layout.addWidget(primary_label)
 
-    if secondary and (not compact or row_mode in ("class", "teacher", "student")):
+    if secondary and (not compact or row_mode in ("class", "teacher", "student", "subject")):
         secondary_size_css = f"{secondary_px}px" if secondary_px else ("7.9pt" if compact else "8.2pt")
         secondary_label = QLabel(secondary)
         secondary_label.setWordWrap(True)

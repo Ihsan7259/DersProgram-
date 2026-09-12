@@ -10,6 +10,7 @@ from .. import backup, institutions
 from ..db import Database
 from .list_tab import ListTab
 from .schedule_tab import ScheduleTab
+from .subjects_tab import SubjectsTab
 from .teachers_tab import TeachersTab
 from .students_tab import StudentsTab
 from .classes_tab import ClassesTab
@@ -108,7 +109,7 @@ class MainWindow(QMainWindow):
         self.classes_tab = ClassesTab(db, on_change=self._on_reference_change)
         self.teachers_tab = TeachersTab(db, on_change=self._on_reference_change)
         self.students_tab = StudentsTab(db, on_change=self._on_reference_change)
-        self.subjects_tab = ListTab(db, "subjects", "Ders/Branş", on_change=self._on_reference_change)
+        self.subjects_tab = SubjectsTab(db, on_change=self._on_reference_change)
         self.rooms_tab = ListTab(db, "rooms", "Derslik", on_change=self._on_reference_change)
         self.analysis_tab = AnalysisTab(db)
         self.payments_tab = PaymentsTab(db)
@@ -119,7 +120,7 @@ class MainWindow(QMainWindow):
             "siniflar": (self.classes_tab, "Sınıflar", "Sınıf/şube tanımları ve haftalık programları"),
             "ogretmenler": (self.teachers_tab, "Öğretmenler", "Öğretmen tanımları ve haftalık programları"),
             "ogrenciler": (self.students_tab, "Öğrenciler", "Öğrenci tanımları, koç ataması ve haftalık programları"),
-            "dersler": (self.subjects_tab, "Dersler", "Ders/branş tanımları"),
+            "dersler": (self.subjects_tab, "Dersler", "Ders/branş tanımları, renkleri ve haftalık programları"),
             "derslikler": (self.rooms_tab, "Derslikler", "Derslik tanımları"),
             "analiz": (self.analysis_tab, "Analiz", "Tarih aralığına göre öğretmen/öğrenci saat toplamları"),
             "odemeler": (self.payments_tab, "Ödemeler", "Öğrenci ücretleri, ödemeler ve kalan borç"),
@@ -138,6 +139,7 @@ class MainWindow(QMainWindow):
             self.teachers_tab.navigator,
             self.students_tab.navigator,
             self.classes_tab.navigator,
+            self.subjects_tab.navigator,
         ]
         for nav in self._week_navigators:
             nav.week_changed.connect(self._sync_week)
@@ -196,6 +198,9 @@ class MainWindow(QMainWindow):
         # Kurumun kendi tema tercihini uygula (aksi halde önceki verinin
         # açık/koyu tema seçimi yeni veride de görünmeye devam ederdi).
         theme.apply_theme(new_db.theme)
+        # Renk seçimleri de kuruma özeldir (bkz. theme.load_color_overrides) -
+        # yeni kurumun kendi ders tipi/ders renkleri yüklenmeli.
+        theme.load_color_overrides(new_db)
         app = QApplication.instance()
         if app is not None:
             app.setPalette(theme.build_palette(new_db.theme))
@@ -214,6 +219,7 @@ class MainWindow(QMainWindow):
         self.teachers_tab.refresh_detail()
         self.students_tab.refresh_detail()
         self.classes_tab.refresh_detail()
+        self.subjects_tab.refresh_detail()
 
     def show_page(self, page_id: str) -> None:
         widget, title, subtitle = self.pages[page_id]

@@ -73,6 +73,10 @@ def main() -> int:
     # metinlerin okunmaz hale gelmesine yol açabiliyordu).
     mode = db.theme
     theme.apply_theme(mode)
+    # Kullanıcının elle seçtiği ders tipi / ders renkleri (bkz. Ayarlar >
+    # Renkler ve Dersler sekmesi) - theme.py'nin veritabanına erişimi
+    # olmadığı için açılışta bir kez okunup önbelleğe alınır.
+    theme.load_color_overrides(db)
     app.setStyle("Fusion")
     app.setPalette(theme.build_palette(mode))
 

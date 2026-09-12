@@ -47,6 +47,8 @@ from ..db import (
     TYPE_COACHING,
     TYPE_DEPARTMENT,
     TYPE_PROBLEM_SOLVING,
+    TYPE_TRIAL,
+    TYPE_STUDY,
 )
 from .. import scheduling
 from .widgets import WeekNavigator, ScopeDialog, MiniScheduleGrid
@@ -64,6 +66,13 @@ MODE_STUDENT = "student"
 class _CellDelegate(QStyledItemDelegate):
     """MainGrid'in her hücresini (sınıf/öğretmen × gün/saat) çizer.
 
+    Hücre metni, sütun genişliğine göre KADEMELİ olarak seçilir (bkz.
+    _fit_text): en büyük yazı boyutunda en uzun sığan aday kullanılır,
+    hiçbiri sığmazsa yazı küçültülerek en azından tür kısaltmasının
+    ("BB", "Koç", "Den") okunur kalması sağlanır. Yakınlaştırıldığında
+    (zoom) hücre büyüdüğü için yazı da büyür - eskiden sabit 6.9pt'ti ve
+    dar sütunlarda hücrede sadece "…" görünüyordu (kullanıcı isteği).
+
     Önceden her hücre için ayrı bir QWidget kuruluyordu (setCellWidget) -
     büyük kurumlarda (çok sayıda sınıf/öğretmen × gün×saat) bu, binlerce
     widget'ın her yenilemede sıfırdan oluşturulup silinmesi anlamına
@@ -73,6 +82,56 @@ class _CellDelegate(QStyledItemDelegate):
     delegate ise sadece GÖRÜNEN hücreleri QPainter ile çizer - Qt'nin
     item tabanlı tablo render mimarisi widget tabanlıdan çok daha hafiftir.
     """
+
+    # Denenecek yazı boyutları (büyükten küçüğe) - hücreye sığan ilk
+    # kombinasyon kullanılır.
+    _SIZE_STEPS = (12.0, 10.5, 9.2, 8.0, 6.9, 6.0, 5.2, 4.6)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # QFontMetrics oluşturmak görece pahalı; boyut sayısı az ve sabit
+        # olduğu için ölçümler önbelleğe alınır (her yeniden çizimde
+        # yüzlerce hücre için tekrar kurulmasın).
+        self._metrics_cache: dict[tuple[float, bool], QFontMetrics] = {}
+
+    def _metrics(self, base_font: QFont, point_size: float, bold: bool) -> QFontMetrics:
+        key = (point_size, bold)
+        cached = self._metrics_cache.get(key)
+        if cached is None:
+            font = QFont(base_font)
+            font.setBold(bold)
+            font.setPointSizeF(point_size)
+            cached = QFontMetrics(font)
+            self._metrics_cache[key] = cached
+        return cached
+
+    # Bu boyutun altına düşmek yerine metni kısaltmayı tercih ediyoruz -
+    # 5pt'lik bir öğrenci adı, okunur bir "BB"den daha az işe yarıyor.
+    _LEGIBLE_MIN_PT = 6.0
+
+    def _fit_text(self, base_font: QFont, keywords: list[str], width: int, max_point_size: float):
+        """(metin, yazı boyutu) döner. Öncelik BİLGİDE: en uzun adaydan
+        (ör. öğrencinin tam adı) başlanır ve hücreye OKUNUR bir boyutta
+        sığan ilk aday seçilir; sığmıyorsa sırayla daha kısa adaylara
+        (ör. "B. Ekin" -> "Berranur" -> "BB") geçilir. Böylece geniş
+        hücrede tam ad, dar hücrede en azından tür kısaltması görünür."""
+        fallback = None
+        for candidate in keywords:
+            for point_size in self._SIZE_STEPS:
+                if point_size > max_point_size:
+                    continue
+                if self._metrics(base_font, point_size, True).horizontalAdvance(candidate) <= width:
+                    # Bu adayın sığdığı EN BÜYÜK boyut bu (liste büyükten
+                    # küçüğe); okunur ise bunu kullan, değilse bu aday çok
+                    # uzun - bir sonraki (daha kısa) adaya geç.
+                    if point_size >= self._LEGIBLE_MIN_PT:
+                        return candidate, point_size
+                    if fallback is None:
+                        fallback = (candidate, point_size)
+                    break
+        if fallback is not None:
+            return fallback
+        return keywords[-1], min(self._SIZE_STEPS[-1], max(max_point_size, self._SIZE_STEPS[-1]))
 
     def paint(self, painter, option, index) -> None:
         payload = index.data(Qt.UserRole)
@@ -107,30 +166,60 @@ class _CellDelegate(QStyledItemDelegate):
             painter.setPen(QColor(theme.CONFLICT_BORDER))
             painter.drawText(rect, Qt.AlignCenter, "×")
         elif kind == "chip":
-            line1 = payload.get("line1", "")
+            # line1 yerine, en uzundan en kısaya sıralanmış adaylar gelir
+            # (bkz. BlockView.dense_keywords): sütun ne kadar darsa o kadar
+            # kısa ama HER ZAMAN dersin türünü/kimle olduğunu anlatan bir
+            # metin çizilir ("Koç", "BB", "Den"... gibi). Önceden tek uzun
+            # metin '…' ile kesiliyor ve dar sütunlarda okunur hiçbir bilgi
+            # kalmıyordu (kullanıcı isteği).
+            keywords = payload.get("keywords") or [payload.get("line1", "")]
             line2 = payload.get("line2", "")
-            inner = rect.adjusted(2, 1, -2, -1)
-            if line2:
+            # Dar hücrelerde her piksel değerli - kenar boşluğu genişliğe
+            # göre ayarlanır (16px'lik bir sütunda 2+2px payı, metne yer
+            # bırakmıyordu).
+            side_margin = 2 if rect.width() >= 34 else 1
+            inner = rect.adjusted(side_margin, 1, -side_margin, -1)
+            base_font = QFont(painter.font())
+            # Yazı boyutunun üst sınırı hem genişlikten hem yükseklikten
+            # (iki satır sığmalı) türetilir - yakınlaştırıldığında hücre
+            # büyüdükçe yazı da büyür.
+            max_point_size = max(4.6, min(inner.width() * 0.34, inner.height() * 0.30))
+            text1, point_size1 = self._fit_text(base_font, keywords, inner.width(), max_point_size)
+
+            metrics1 = self._metrics(base_font, point_size1, True)
+            # İkinci satır (ör. branş / kiminle olduğu) sadece hem dikeyde
+            # hem yatayda gerçekten yer varsa çizilir; sığmayan bir "…"
+            # yerine boş bırakmak ilk satırı daha okunur kılıyor.
+            metrics2 = self._metrics(base_font, max(4.6, point_size1 * 0.9), False)
+            show_line2 = bool(line2) and (
+                metrics1.height() + metrics2.height() <= inner.height()
+                and metrics2.horizontalAdvance(line2[:2]) <= inner.width()
+            )
+            if show_line2:
                 top = QRect(inner.x(), inner.y(), inner.width(), inner.height() // 2)
                 bottom = QRect(inner.x(), inner.y() + inner.height() // 2, inner.width(), inner.height() - inner.height() // 2)
             else:
                 top, bottom = inner, None
 
-            font1 = QFont(painter.font())
+            font1 = QFont(base_font)
             font1.setBold(True)
-            font1.setPointSizeF(6.9)
+            font1.setPointSizeF(point_size1)
             painter.setFont(font1)
             painter.setPen(QColor(theme.LESSON_TYPE_TEXT))
-            elided1 = QFontMetrics(font1).elidedText(line1, Qt.ElideRight, top.width())
-            painter.drawText(top, Qt.AlignHCenter | (Qt.AlignBottom if bottom else Qt.AlignVCenter), elided1)
+            painter.drawText(
+                top, Qt.AlignHCenter | (Qt.AlignBottom if bottom else Qt.AlignVCenter),
+                metrics1.elidedText(text1, Qt.ElideRight, top.width()),
+            )
 
             if bottom is not None:
-                font2 = QFont(painter.font())
-                font2.setPointSizeF(6.3)
+                font2 = QFont(base_font)
+                font2.setPointSizeF(max(4.6, point_size1 * 0.9))
                 painter.setFont(font2)
                 painter.setPen(QColor(theme.LESSON_TYPE_TEXT_MUTED))
-                elided2 = QFontMetrics(font2).elidedText(line2, Qt.ElideRight, bottom.width())
-                painter.drawText(bottom, Qt.AlignHCenter | Qt.AlignTop, elided2)
+                painter.drawText(
+                    bottom, Qt.AlignHCenter | Qt.AlignTop,
+                    metrics2.elidedText(line2, Qt.ElideRight, bottom.width()),
+                )
 
             # Borca yapılan birebir göstergesi - kalıcı bir işaret değil,
             # sadece ekranda gösterilir; PDF çıktısında görünmemesi
@@ -246,6 +335,13 @@ def _pool_dense_lines(rep_block, members: list) -> tuple[str, str]:
     elif rep_block.type == TYPE_COACHING:
         line1 = "Öğrenci Koçluk"
         line2 = f"{rep_block.student_name} · {teacher_short}" if rep_block.student_name else teacher_short
+    elif rep_block.type in (TYPE_TRIAL, TYPE_STUDY):
+        # Deneme/Etüt öğretmensiz de olabilir - ayırt edici bilgi tipin
+        # kendisi olduğu için ilk satırda o yazar, ikinci satırda kime
+        # ait olduğu (sınıf/ders/öğretmen) sığdığı kadar gösterilir.
+        line1 = rep_block.type_label()
+        bits = [b for b in (rep_block.class_name, rep_block.subject_name, teacher_short) if b]
+        line2 = " · ".join(bits[:2])
     else:  # TYPE_PROBLEM_SOLVING
         line1 = rep_block.subject_name or "Soru Çözümü"
         line2 = teacher_short
@@ -716,7 +812,7 @@ def _render_row_pixmap(grid: "MiniScheduleGrid", title: str, subtitle: str, reve
     return pixmap
 
 
-def _export_table_as_pdf(parent: QWidget, grid: "MiniScheduleGrid", default_filename: str, title: str, subtitle: str) -> None:
+def export_table_as_pdf(parent: QWidget, grid: "MiniScheduleGrid", default_filename: str, title: str, subtitle: str) -> None:
     path, _ = QFileDialog.getSaveFileName(parent, "PDF Olarak Kaydet", default_filename, "PDF Dosyası (*.pdf)")
     if not path:
         return
@@ -745,7 +841,7 @@ def _export_table_as_pdf(parent: QWidget, grid: "MiniScheduleGrid", default_file
     QMessageBox.information(parent, "PDF Oluşturuldu", f"PDF olarak kaydedildi:\n{path}")
 
 
-def _copy_table_as_image(parent: QWidget, grid: "MiniScheduleGrid", title: str, subtitle: str) -> None:
+def copy_table_as_image(parent: QWidget, grid: "MiniScheduleGrid", title: str, subtitle: str) -> None:
     pixmap = _render_row_pixmap(grid, title, subtitle)
     QApplication.clipboard().setPixmap(pixmap)
     QMessageBox.information(
@@ -756,7 +852,7 @@ def _copy_table_as_image(parent: QWidget, grid: "MiniScheduleGrid", title: str, 
     )
 
 
-def _sanitize_filename(name: str) -> str:
+def sanitize_filename(name: str) -> str:
     return "".join(c if (c.isalnum() or c in "-_") else "_" for c in name).strip("_") or "program"
 
 
@@ -894,7 +990,10 @@ class RowPreviewDialog(QDialog):
             filtered = {}
             for cell, blocks in schedule.items():
                 if mode == MODE_CLASS:
-                    matched = [b for b in blocks if b.type == TYPE_CLASS and b.class_group_id == entity_id]
+                    # Tipe göre değil, sınıfa atanmış olmasına göre (bkz.
+                    # ScheduleTab._cell_blocks) - Deneme/Etüt de sınıfın
+                    # önizlemesinde/PDF'inde görünür.
+                    matched = [b for b in blocks if b.class_group_id == entity_id]
                 else:
                     matched = [b for b in blocks if b.teacher_id == entity_id]
                 if matched:
@@ -909,15 +1008,15 @@ class RowPreviewDialog(QDialog):
         copy_button.setObjectName("outlineButton")
         copy_button.setIcon(theme.icon(theme.NAV_ICONS["copy"], theme.ACCENT_HOVER))
         copy_button.setToolTip("Bu haftalık programı, başlığıyla birlikte görsel olarak panoya kopyalar.")
-        copy_button.clicked.connect(lambda: _copy_table_as_image(self, grid, entity_name, week_text))
+        copy_button.clicked.connect(lambda: copy_table_as_image(self, grid, entity_name, week_text))
         button_row.addWidget(copy_button)
 
         pdf_button = QPushButton("  PDF")
         pdf_button.setObjectName("outlineButton")
         pdf_button.setIcon(theme.icon(theme.NAV_ICONS["document"], theme.ACCENT_HOVER))
         pdf_button.setToolTip("Bu haftalık programı PDF dosyası olarak kaydeder.")
-        default_filename = f"{_sanitize_filename(entity_name)}_haftalik_program.pdf"
-        pdf_button.clicked.connect(lambda: _export_table_as_pdf(self, grid, default_filename, entity_name, week_text))
+        default_filename = f"{sanitize_filename(entity_name)}_haftalik_program.pdf"
+        pdf_button.clicked.connect(lambda: export_table_as_pdf(self, grid, default_filename, entity_name, week_text))
         button_row.addWidget(pdf_button)
         button_row.addStretch()
 
@@ -1427,13 +1526,17 @@ class ScheduleTab(QWidget):
     def _cell_blocks(self, entity_id: int, day: int, period: int) -> list:
         blocks = self._schedule.get((day, period), [])
         if self.mode == MODE_CLASS:
-            return [b for b in blocks if b.type == TYPE_CLASS and b.class_group_id == entity_id]
+            # Tipe göre değil, BİR SINIFA ATANMIŞ OLMASINA göre süzülür -
+            # böylece sınıf dersinin yanında o sınıfa yazılan Deneme/Etüt
+            # gibi (öğretmensiz de olabilen) dersler de sınıfın satırında
+            # görünür ve oraya yerleştirilebilir.
+            return [b for b in blocks if b.class_group_id == entity_id]
         if self.mode == MODE_STUDENT:
             class_group_id = self._student_class_group_ids.get(entity_id)
             return [
                 b for b in blocks
                 if b.student_id == entity_id
-                or (b.type == TYPE_CLASS and class_group_id is not None and b.class_group_id == class_group_id)
+                or (class_group_id is not None and b.class_group_id == class_group_id)
             ]
         return [b for b in blocks if b.teacher_id == entity_id]
 
@@ -1494,9 +1597,15 @@ class ScheduleTab(QWidget):
                     else:
                         line1, line2 = blocks[0].dense_lines(self.mode)
                         bg, _dot = theme.lesson_colors_for(blocks[0], tinted=self.mode in (MODE_TEACHER, MODE_STUDENT))
+                        keywords = blocks[0].dense_keywords(self.mode)
                         if len(blocks) > 1:
-                            line1 = f"{line1} (+{len(blocks) - 1})"
-                        payload = {"kind": "chip", "bg": bg, "line1": line1, "line2": line2}
+                            suffix = f" (+{len(blocks) - 1})"
+                            line1 = f"{line1}{suffix}"
+                            keywords = [f"{k}{suffix}" for k in keywords]
+                        payload = {
+                            "kind": "chip", "bg": bg,
+                            "line1": line1, "line2": line2, "keywords": keywords,
+                        }
                         tooltip = f"{line1}\n{line2}" if line2 else line1
                         if blocks[0].type == TYPE_ONE_ON_ONE and blocks[0].student_id in debt_student_ids:
                             payload["debt"] = True
@@ -1648,7 +1757,7 @@ class ScheduleTab(QWidget):
 
     def _row_matches_block(self, block, entity_id) -> bool:
         if self.mode == MODE_CLASS:
-            return block.type == TYPE_CLASS and block.class_group_id == entity_id
+            return block.class_group_id == entity_id
         if self.mode == MODE_STUDENT:
             # Öğrenci görünümü salt-okunur bir özet - havuzdaki bir ders
             # hiçbir zaman bir öğrenci satırına "ait" sayılmaz (yerleştirme

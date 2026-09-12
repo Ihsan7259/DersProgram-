@@ -17,8 +17,13 @@ TYPE_ONE_ON_ONE = "birebir"  # birebir ders
 TYPE_COACHING = "kocluk"     # öğrenci koçluk
 TYPE_DEPARTMENT = "zumre"    # zümre toplantısı
 TYPE_PROBLEM_SOLVING = "soru_cozum"  # soru çözümü
+TYPE_TRIAL = "deneme"        # deneme sınavı (öğretmen zorunlu değil)
+TYPE_STUDY = "etut"          # etüt (öğretmen zorunlu değil)
 
-LESSON_TYPES = [TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_DEPARTMENT, TYPE_PROBLEM_SOLVING]
+LESSON_TYPES = [
+    TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_DEPARTMENT,
+    TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
+]
 
 LESSON_TYPE_LABELS = {
     TYPE_CLASS: "Sınıf Dersi",
@@ -26,7 +31,14 @@ LESSON_TYPE_LABELS = {
     TYPE_COACHING: "Öğrenci Koçluk",
     TYPE_DEPARTMENT: "Zümre",
     TYPE_PROBLEM_SOLVING: "Soru Çözümü",
+    TYPE_TRIAL: "Deneme",
+    TYPE_STUDY: "Etüt",
 }
+
+# Bu tiplerde öğretmen seçmek ZORUNLU DEĞİL - deneme sınavı ya da etüt bir
+# sınıfa (ya da bir dersliğe) öğretmensiz de yazılabilir. Bu durumda blok
+# öğretmen satırında değil, atandığı sınıfın satırında görünür.
+TEACHERLESS_TYPES = {TYPE_TRIAL, TYPE_STUDY}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS teachers (
@@ -241,6 +253,11 @@ DEFAULT_SETTINGS = {
     # Liste index'i period-1'e karşılık gelir; bir saat için henüz
     # girilmemişse o index null kalır - Ayarlar'dan tek tek doldurulur.
     "period_times": [],
+    # Kullanıcının ELLE seçtiği renkler. Boş bırakılan tip/ders otomatik
+    # (varsayılan) rengini kullanmaya devam eder - bkz. theme.lesson_colors_for.
+    # {"kocluk": "#f8e5c7", ...} ve {"<subject_id>": "#d7eaff", ...}
+    "lesson_type_colors": {},
+    "subject_colors": {},
 }
 
 
@@ -396,6 +413,30 @@ class Database:
             (key, json.dumps(value, ensure_ascii=False)),
         )
         self.conn.commit()
+
+    # ---------- elle seçilen renkler ----------
+    def _set_color_entry(self, setting_key: str, entry_key: str, color: str | None) -> None:
+        colors = dict(self.get_setting(setting_key) or {})
+        if color:
+            colors[entry_key] = color
+        else:
+            colors.pop(entry_key, None)
+        self.set_setting(setting_key, colors)
+
+    def get_lesson_type_color(self, type_: str) -> str | None:
+        return (self.get_setting("lesson_type_colors") or {}).get(type_)
+
+    def set_lesson_type_color(self, type_: str, color: str | None) -> None:
+        """color None ise o ders tipi otomatik (varsayılan) rengine döner."""
+        self._set_color_entry("lesson_type_colors", type_, color)
+
+    def get_subject_color(self, subject_id: int) -> str | None:
+        return (self.get_setting("subject_colors") or {}).get(str(subject_id))
+
+    def set_subject_color(self, subject_id: int, color: str | None) -> None:
+        """color None ise o ders otomatik (branş id'sinden türetilen)
+        rengine döner."""
+        self._set_color_entry("subject_colors", str(subject_id), color)
 
     @property
     def day_names(self) -> list[str]:
@@ -678,7 +719,7 @@ class Database:
         self,
         type_: str,
         count: int,
-        teacher_id: int,
+        teacher_id: int | None = None,
         subject_id: int | None = None,
         class_group_id: int | None = None,
         student_id: int | None = None,

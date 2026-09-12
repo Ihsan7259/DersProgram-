@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as _dt
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget,
     QHBoxLayout,
@@ -20,11 +21,82 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QFrame,
     QStyle,
+    QColorDialog,
 )
 
 from ..db import Database, LESSON_TYPE_LABELS
 from .. import scheduling
 from . import theme
+
+
+class ColorPickButton(QWidget):
+    """Bir ders tipi ya da ders için ELLE renk seçmeye yarayan küçük
+    bileşen: üzerinde o an geçerli rengi gösteren bir düğme + rengi
+    otomatik (varsayılan) haline döndüren bir "Sıfırla" düğmesi.
+    color_changed sinyali seçilen rengi (hex) ya da varsayılana dönülünce
+    None değerini yayınlar (bkz. theme.CUSTOM_TYPE_COLORS)."""
+
+    color_changed = Signal(object)  # "#rrggbb" ya da None (varsayılan)
+
+    def __init__(self, title: str = "Renk Seç", parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._color: str | None = None
+        self._default_preview: str = theme.SURFACE
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.pick_button = QPushButton()
+        self.pick_button.setFixedSize(64, 24)
+        self.pick_button.setToolTip(f"{title} - tıklayıp renk seçin")
+        self.pick_button.clicked.connect(self._handle_pick)
+        layout.addWidget(self.pick_button)
+        self.reset_button = QPushButton("Sıfırla")
+        self.reset_button.setObjectName("outlineButton")
+        self.reset_button.setToolTip("Otomatik (varsayılan) renge döndür")
+        self.reset_button.clicked.connect(self._handle_reset)
+        layout.addWidget(self.reset_button)
+        # Düğmeler kendi boyutunda kalsın; form satırının kalan genişliğini
+        # "Sıfırla" düğmesi kaplayıp orantısız görünmesin.
+        layout.addStretch()
+        self._apply_swatch()
+
+    def set_color(self, color: str | None, default_preview: str | None = None) -> None:
+        """Seçili rengi (sinyal YAYINLAMADAN) ayarlar. default_preview,
+        kullanıcı hiç renk seçmemişse düğmede gösterilecek otomatik rengi
+        belirtir - böylece düğme her zaman o an ekranda görünen rengi
+        gösterir."""
+        self._color = color
+        if default_preview:
+            self._default_preview = default_preview
+        self._apply_swatch()
+
+    def color(self) -> str | None:
+        return self._color
+
+    def _apply_swatch(self) -> None:
+        shown = self._color or self._default_preview
+        border = theme.ACCENT if self._color else theme.BORDER_INPUT
+        self.pick_button.setStyleSheet(
+            f"QPushButton {{ background:{shown}; border:2px solid {border}; border-radius:5px; }}"
+        )
+        self.reset_button.setEnabled(self._color is not None)
+
+    def _handle_pick(self) -> None:
+        initial = QColor(self._color or self._default_preview)
+        chosen = QColorDialog.getColor(initial, self, self._title)
+        if not chosen.isValid():
+            return
+        self._color = chosen.name()
+        self._apply_swatch()
+        self.color_changed.emit(self._color)
+
+    def _handle_reset(self) -> None:
+        if self._color is None:
+            return
+        self._color = None
+        self._apply_swatch()
+        self.color_changed.emit(None)
 
 
 def _set_cell_widget(table: QTableWidget, row: int, col: int, widget: QWidget) -> None:
