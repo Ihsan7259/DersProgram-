@@ -1173,6 +1173,24 @@ class Database:
     def set_student_availability_template(self, student_id: int, day: int, period: int, status: str | None) -> None:
         self._set_availability_template("student_availability", "student_id", student_id, day, period, status)
 
+    def apply_student_availability_template(
+        self, state: dict[tuple[int, int], str], target_student_ids: list[int]
+    ) -> None:
+        """Bir öğrencinin müsaitlik ızgarasında hazırlanan şablonu (day,period)
+        -> status olarak, listedeki diğer öğrencilerin KALICI müsaitlik
+        şablonuna aynen kopyalar (öncekini silip yeniden yazar) - çok sayıda
+        öğrencide tek tek işaretlemek yerine bir öğrencide hazırlayıp
+        diğerlerine toplu uygulamak için (bkz. StudentsTab.handle_apply_
+        availability_template)."""
+        for student_id in target_student_ids:
+            self.conn.execute("DELETE FROM student_availability WHERE student_id=?", (student_id,))
+            for (day, period), status in state.items():
+                self.conn.execute(
+                    "INSERT INTO student_availability(student_id, day, period, status) VALUES (?, ?, ?, ?)",
+                    (student_id, day, period, status),
+                )
+        self.conn.commit()
+
     def get_student_availability_exceptions(self, week_start: str) -> dict[tuple[int, int, int], str]:
         return self._get_availability_exceptions("student_availability_exceptions", "student_id", week_start)
 

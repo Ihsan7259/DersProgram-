@@ -120,7 +120,9 @@ class StudentsTab(QWidget):
         availability_hint = QLabel(
             "Boş kutuya tıklayın: 1. tık müsait (yeşil), 2. tık müsait değil (kırmızı), 3. tık kaldırır. "
             "Gün/saat başlığına tıklarsanız o günün/saatin tamamı topluca değişir. "
-            "Müsait değil işaretlenen saatlere Ana Program'da bu öğrenci için ders atanamaz."
+            "Müsait değil işaretlenen saatlere Ana Program'da bu öğrenci için ders atanamaz.\n"
+            "Bu ızgarayı bir öğrenci için hazırladıktan sonra, sağdaki listeden diğer öğrencileri "
+            "işaretleyip 'Şablonu İşaretli Öğrencilere Uygula' ile aynısını onlara da kopyalayabilirsiniz."
         )
         availability_hint.setWordWrap(True)
         left_layout.addWidget(availability_hint)
@@ -128,9 +130,21 @@ class StudentsTab(QWidget):
         self.mini_grid = AvailabilityGrid()
         self.mini_grid.changed.connect(self._handle_availability_changed)
         left_layout.addWidget(self.mini_grid, 1)
+        availability_button_row = QHBoxLayout()
         self.save_availability_button = QPushButton("Müsaitliği Kaydet")
         self.save_availability_button.clicked.connect(self.handle_save_availability)
-        left_layout.addWidget(self.save_availability_button)
+        availability_button_row.addWidget(self.save_availability_button)
+        self.apply_template_button = QPushButton("Şablonu İşaretli Öğrencilere Uygula")
+        self.apply_template_button.setObjectName("outlineButton")
+        self.apply_template_button.setToolTip(
+            "Yukarıdaki müsaitlik ızgarasını, sağdaki listeden onay kutusuyla "
+            "işaretlediğiniz öğrencilerin KALICI müsaitlik şablonuna kopyalar - "
+            "çok sayıda öğrencide tek tek işaretlemek yerine birinde hazırlayıp "
+            "diğerlerine toplu uygulayabilirsiniz."
+        )
+        self.apply_template_button.clicked.connect(self.handle_apply_availability_template)
+        availability_button_row.addWidget(self.apply_template_button)
+        left_layout.addLayout(availability_button_row)
 
         main_splitter.addWidget(left)
 
@@ -465,6 +479,45 @@ class StudentsTab(QWidget):
         for (day, period), status in self._pending_availability.items():
             scheduling.set_student_availability(self.db, self.navigator.week_start, self.selected_id, day, period, status, scope)
         self.refresh_detail()
+
+    def handle_apply_availability_template(self) -> None:
+        if self.selected_id is None:
+            QMessageBox.information(
+                self, "Seçim yok",
+                "Önce listeden, müsaitlik ızgarasını şablon olarak kullanacağınız bir öğrenci seçin.",
+            )
+            return
+        target_ids = [sid for sid in self._checked_student_ids if sid != self.selected_id]
+        if not target_ids:
+            QMessageBox.information(
+                self, "Öğrenci işaretlenmedi",
+                "Sağdaki listeden, şablonun uygulanacağı öğrencileri (kendisi hariç) "
+                "en soldaki onay kutusuyla işaretleyin.",
+            )
+            return
+        source_name = next((r["name"] for r in self._all_rows if r["id"] == self.selected_id), "")
+        names = [r["name"] for r in self._all_rows if r["id"] in target_ids]
+        preview = "\n".join(f"- {n}" for n in names[:10])
+        if len(names) > 10:
+            preview += f"\n... ve {len(names) - 10} tane daha"
+        confirm = QMessageBox.question(
+            self, "Şablon Uygulama Onayı",
+            f"'{source_name}' öğrencisinin müsaitlik ızgarası, {len(target_ids)} öğrencinin KALICI "
+            "müsaitlik şablonunun üzerine yazılacak (bu öğrencilerin mevcut şablonları silinir):\n\n"
+            + preview,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        state = self.mini_grid.current_state()
+        # Kaynak öğrencinin kendi KALICI şablonuna da aynı durumu yazıyoruz -
+        # aksi halde birazdan çağıracağımız refresh_detail() ızgarayı DB'den
+        # yeniden yüklerken, henüz "Müsaitliği Kaydet" ile hiç kaydedilmemiş
+        # olabilecek bu ekrandaki hazırlığı boş görüp sıfırlardı.
+        self.db.apply_student_availability_template(state, target_ids + [self.selected_id])
+        QMessageBox.information(self, "Tamamlandı", f"Şablon {len(target_ids)} öğrenciye uygulandı.")
+        self.refresh_detail()
+        if self.on_change:
+            self.on_change()
 
     def handle_selection(self) -> None:
         items = self.table_widget.selectedItems()

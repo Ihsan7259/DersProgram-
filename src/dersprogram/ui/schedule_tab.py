@@ -12,7 +12,7 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 from __future__ import annotations
 
 from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QMimeData, QRect, QSize, QThread, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QFontMetrics, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QCursor, QDrag, QFont, QFontMetrics, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QMenu,
     QProgressDialog,
+    QToolTip,
 )
 
 from ..db import (
@@ -331,6 +332,13 @@ class PoolChip(QFrame):
         self._drag_start_pos = None
         super().mouseReleaseEvent(event)
 
+    def enterEvent(self, event) -> None:
+        # Qt'nin varsayılan ipucu (tooltip) gecikmesi (~700ms) havuzda hızlıca
+        # fare gezdirirken "yavaş" hissettiriyordu - kullanıcı isteği üzerine
+        # bu kart için ipucu, üstüne gelir gelmez ANINDA gösteriliyor.
+        QToolTip.showText(QCursor.pos(), self.toolTip(), self)
+        super().enterEvent(event)
+
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_requested.emit()
@@ -347,7 +355,7 @@ class MainGrid(QTableWidget):
     row_header_clicked = Signal(int)  # entity_id
     row_header_context_menu_requested = Signal(int, object)  # entity_id, QPoint (global)
 
-    def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request, period_time_label=None):
+    def __init__(self, get_block_by_id, validate_drop, on_drop, on_remove_request, on_cell_click=None, period_time_label=None):
         super().__init__()
         self.setObjectName("mainGrid")
         self.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -381,6 +389,7 @@ class MainGrid(QTableWidget):
         self._validate_drop = validate_drop
         self._on_drop = on_drop
         self._on_remove_request = on_remove_request
+        self._on_cell_click = on_cell_click
         self._period_time_label = period_time_label
         self._hover_cell = None
         self._hover_original_state = "normal"
@@ -394,6 +403,7 @@ class MainGrid(QTableWidget):
         # sadece dışa aktarma sırasında geçici olarak kapatılır.
         self.show_debt_icons = True
         self.cellDoubleClicked.connect(self._handle_double_click)
+        self.cellClicked.connect(self._handle_single_click)
         self._apply_column_sizing()
 
     # ---------- yakınlaştırma / sütun sıkıştırma ----------
@@ -561,6 +571,17 @@ class MainGrid(QTableWidget):
         entity_id = self.row_to_entity(row)
         day, period = self.col_to_day_period(col)
         self._on_remove_request(entity_id, day, period)
+
+    def _handle_single_click(self, row: int, col: int) -> None:
+        """Sürükle-bırağa alternatif olarak: havuzdan bir ders seçiliyken
+        (bkz. ScheduleTab._handle_pool_chip_clicked) bu hücreye tıklamak,
+        dersi doğrudan buraya yerleştirir - hiçbir ders seçili değilse
+        hiçbir şey yapmaz (bkz. ScheduleTab._handle_grid_cell_clicked)."""
+        if self._on_cell_click is None:
+            return
+        entity_id = self.row_to_entity(row)
+        day, period = self.col_to_day_period(col)
+        self._on_cell_click(entity_id, day, period)
 
     def _handle_row_header_double_click(self, row: int) -> None:
         entity_id = self.row_to_entity(row)
@@ -1042,6 +1063,7 @@ class ScheduleTab(QWidget):
             validate_drop=self._validate_drop,
             on_drop=self._handle_drop,
             on_remove_request=self._handle_remove_request,
+            on_cell_click=self._handle_grid_cell_clicked,
             period_time_label=self.db.period_time_label,
         )
         splitter.addWidget(self.grid)
@@ -1283,6 +1305,28 @@ class ScheduleTab(QWidget):
         block = self._blocks_by_id.get(block_id)
         if block is not None:
             self._apply_row_preview(block)
+            self._scroll_to_matching_row(block)
+
+    def _scroll_to_matching_row(self, block) -> None:
+        """Havuzdan bir ders seçilince, o dersin ait olduğu satır (ör. o
+        hocanın satırı) ekranda görünmüyorsa otomatik olarak ortaya kaydırır -
+        kullanıcı isteği: 'kaydırma yapsın direkt o hocanın kısmı ortaya
+        gelsin gözümün önüne'."""
+        for row_index, (entity_id, _name) in enumerate(self._row_entities):
+            if self._row_matches_block(block, entity_id):
+                self.grid.scrollTo(self.grid.model().index(row_index, 0), QAbstractItemView.PositionAtCenter)
+                break
+
+    def _handle_grid_cell_clicked(self, entity_id, day: int, period: int) -> None:
+        """Sürükle-bırağa alternatif olarak: havuzdan bir ders seçiliyken
+        ızgarada bir hücreye tıklamak, dersi doğrudan oraya yerleştirir -
+        kullanıcı isteği: 'sürükle mantığından ziyade tıkladığımda atacağım
+        ders boşluğuna tıkladığımda direkt oraya atsın'. Aynı doğrulama/
+        çakışma/onay akışını (bkz. _handle_drop) sürükle-bırakla birebir
+        paylaşır."""
+        if self._selected_pool_block_id is None:
+            return
+        self._handle_drop(self._selected_pool_block_id, entity_id, day, period)
 
     def _reapply_pool_preview(self) -> None:
         if self._selected_pool_block_id is None:

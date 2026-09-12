@@ -515,6 +515,11 @@ class AvailabilityGrid(QTableWidget):
                 continue
             self._apply(day, period, next_status)
 
+    def current_state(self) -> dict[tuple[int, int], str]:
+        """O an ızgarada gösterilen müsaitlik durumunun kopyası - şablon
+        olarak başka varlıklara uygulamak için (bkz. StudentsTab)."""
+        return dict(self._state)
+
     def _handle_period_header_click(self, row: int) -> None:
         period = row + 1
         next_status = self._ORDER[self._period_header_state.get(period)]
