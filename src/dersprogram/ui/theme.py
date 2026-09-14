@@ -166,6 +166,9 @@ def apply_theme(mode: str) -> None:
 
     MODE = "dark" if mode == "dark" else "light"
     palette = _DARK if MODE == "dark" else _LIGHT
+    # Önbellekteki ikonlar eski temanın renkleriyle çizilmiş olabilir
+    # (varsayılan renk INK_MUTED_58 birazdan değişiyor) - bkz. _ICON_CACHE.
+    _ICON_CACHE.clear()
 
     APP_BG = palette["APP_BG"]
     SURFACE = palette["SURFACE"]
@@ -231,8 +234,20 @@ def app_icon() -> QIcon:
     return QIcon(str(_assets_dir() / "icons" / "app.png"))
 
 
+# Aynı ikon (aynı çizim + renk + boyut) uygulama boyunca defalarca
+# isteniyor - ör. öğrenci listesinde her satırın yukarı/aşağı okları. Her
+# seferinde SVG'yi yeniden çizmek 400 satırlık bir listede yenilemenin
+# yarım saniyesini yiyordu (ölçüldü); sonuç değişmez olduğu için
+# önbelleğe alınıyor. Farklı kombinasyon sayısı azdır (birkaç düzine).
+_ICON_CACHE: dict[tuple[str, str, int], QIcon] = {}
+
+
 def icon(path_d: str, color: str | None = None, size: int = 18) -> QIcon:
     color = color or INK_MUTED_58
+    cache_key = (path_d, color, size)
+    cached = _ICON_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
         f'stroke="{color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
@@ -247,7 +262,9 @@ def icon(path_d: str, color: str | None = None, size: int = 18) -> QIcon:
     painter.setRenderHint(QPainter.Antialiasing, True)
     renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
-    return QIcon(pixmap)
+    result = QIcon(pixmap)
+    _ICON_CACHE[cache_key] = result
+    return result
 
 
 def lesson_type_label(type_: str) -> str:

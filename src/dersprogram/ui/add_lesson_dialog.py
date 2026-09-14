@@ -102,8 +102,15 @@ class AddLessonDialog(QDialog):
         layout.addRow(self.class_label, self.class_combo)
 
         self.student_combo = QComboBox()
+        # Koçluk, belirli bir öğrenciye bağlanmadan da (ör. haftalık genel
+        # koçluk saati) programa konabilsin diye listenin başında
+        # "(Öğrencisiz)" seçeneği var - bkz. _on_accept, bu seçenek sadece
+        # koçlukta geçerli, birebir derste öğrenci zorunlu.
+        self.student_combo.addItem("(Öğrencisiz)", None)
         for s in db.list_students():
             self.student_combo.addItem(s["name"], s["id"])
+        if self.student_combo.count() > 1:
+            self.student_combo.setCurrentIndex(1)
         self.student_label = QLabel("Öğrenci:")
         layout.addRow(self.student_label, self.student_combo)
 
@@ -173,6 +180,7 @@ class AddLessonDialog(QDialog):
         show_student = is_one_on_one or is_coaching
         self.student_label.setVisible(show_student)
         self.student_combo.setVisible(show_student)
+        self.student_label.setText("Öğrenci (isteğe bağlı):" if is_coaching else "Öğrenci:")
 
         show_room = is_class or is_one_on_one or is_department or is_teacherless
         self.room_label.setVisible(show_room)
@@ -220,8 +228,10 @@ class AddLessonDialog(QDialog):
                 "ders programda bunlardan birinin satırına yerleştirilir.",
             )
             return
-        if t in (TYPE_ONE_ON_ONE, TYPE_COACHING) and student_id is None:
-            QMessageBox.warning(self, "Eksik bilgi", "Önce en az bir öğrenci tanımlamalısınız.")
+        # Koçlukta öğrenci isteğe bağlı (öğrencisiz genel koçluk saati de
+        # konabilir); birebir ders ise tanımı gereği bir öğrenciye ait.
+        if t == TYPE_ONE_ON_ONE and student_id is None:
+            QMessageBox.warning(self, "Eksik bilgi", "Birebir ders için öğrenci seçmelisiniz.")
             return
 
         self.db.add_lesson_blocks(

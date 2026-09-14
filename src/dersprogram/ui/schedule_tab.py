@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QButtonGroup,
     QDialog,
+    QDialogButtonBox,
     QMenu,
     QProgressDialog,
     QToolTip,
@@ -473,7 +474,14 @@ class MainGrid(QTableWidget):
         # bağımsız, hep okunaklı kalsın diye ayrı bir isimle stillenir
         # (bkz. _apply_column_sizing - iki başlığa farklı font boyutu verir).
         self.verticalHeader().setObjectName("mainGridVHeader")
-        self.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        # DİKKAT (performans): burası ResizeToContents idi. O modda Qt, her
+        # setRowHeight çağrısında TÜM satırların içeriğini yeniden ölçüyor;
+        # yüzlerce satırda (ör. 400 öğrenci) bu O(n²)'ye dönüşüp "Öğrencilere
+        # Göre" görünümünü ~33 saniye donduruyordu (ölçüldü). Satır yüksekliği
+        # zaten bizim belirlediğimiz sabit bir değer (bkz. row_height), bu
+        # yüzden Fixed + setDefaultSectionSize kullanılıyor: tek çağrıyla tüm
+        # satırlar ayarlanır, yeniden ölçüm hiç yapılmaz.
+        self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.verticalHeader().setMinimumWidth(64)
         self.verticalHeader().setDefaultAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.verticalHeader().setSectionsClickable(True)
@@ -562,8 +570,10 @@ class MainGrid(QTableWidget):
             f"#mainGrid {{ gridline-color: {theme.INK}; border:none; }}"
         )
         self._apply_header_labels(per_column)
-        for row in range(self.rowCount()):
-            self.setRowHeight(row, self.row_height())
+        # Tüm satırlar tek çağrıyla: satır satır setRowHeight, çok satırlı
+        # görünümlerde (400 öğrenci) her yeniden boyutlandırmada saniyeler
+        # sürüyordu (bkz. __init__'teki Fixed/ResizeToContents notu).
+        self.verticalHeader().setDefaultSectionSize(self.row_height())
 
     def _apply_header_labels(self, per_column: int) -> None:
         """Sütunlar iyice daraldığında gün kısaltması sadece o günün ilk
@@ -960,6 +970,94 @@ def _export_rows_as_multi_page_pdf(
     )
 
 
+class RowExportFilterDialog(QDialog):
+    """PDF'e aktarmadan önce HANGİ sınıf/öğretmen/öğrencilerin dahil
+    edileceğini ders türüne göre seçtirir - kullanıcı isteği: "çok fazla
+    öğrenci olunca çok fazla PDF oluyor; sınıf dersi olanlar, birebiri
+    olanlar, koçluğu olanlar gibi seçim ekleyelim".
+
+    İşaretli türlerden EN AZ BİRİNE sahip olan satırlar aktarılır; hiç
+    dersi olmayanlar varsayılan olarak atlanır (boş sayfa üretmesinler)."""
+
+    def __init__(self, title: str, row_entities, types_by_entity, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("PDF'e Aktarılacaklar")
+        self.resize(460, 380)
+        self._row_entities = list(row_entities)
+        self._types_by_entity = types_by_entity
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            f"{title} için hangi dersleri olanlar PDF'e aktarılsın?\n"
+            "İşaretlediğiniz türlerden en az birine sahip olanlar dahil edilir."
+        ))
+
+        self.type_checks: dict[str, QCheckBox] = {}
+        present_types = {t for types in types_by_entity.values() for t in types}
+        for lesson_type in LESSON_TYPES:
+            if lesson_type not in present_types:
+                continue
+            count = sum(1 for types in types_by_entity.values() if lesson_type in types)
+            check = QCheckBox(f"{theme.lesson_type_label(lesson_type)} olanlar ({count})")
+            check.setChecked(True)
+            check.toggled.connect(self._update_count)
+            self.type_checks[lesson_type] = check
+            layout.addWidget(check)
+
+        if not self.type_checks:
+            layout.addWidget(QLabel("Bu haftada programa yerleşmiş hiç ders yok."))
+
+        self.skip_empty_check = QCheckBox("Hiç dersi olmayanları atla (boş sayfa oluşmasın)")
+        self.skip_empty_check.setChecked(True)
+        self.skip_empty_check.toggled.connect(self._update_count)
+        layout.addWidget(self.skip_empty_check)
+
+        select_row = QHBoxLayout()
+        all_button = QPushButton("Tümünü Seç")
+        all_button.setObjectName("outlineButton")
+        all_button.clicked.connect(lambda: self._set_all(True))
+        select_row.addWidget(all_button)
+        none_button = QPushButton("Hiçbirini Seçme")
+        none_button.setObjectName("outlineButton")
+        none_button.clicked.connect(lambda: self._set_all(False))
+        select_row.addWidget(none_button)
+        select_row.addStretch()
+        layout.addLayout(select_row)
+
+        self.count_label = QLabel()
+        self.count_label.setStyleSheet("font-weight:700;")
+        layout.addWidget(self.count_label)
+        layout.addStretch()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("PDF Oluştur")
+        buttons.button(QDialogButtonBox.Cancel).setText("Vazgeç")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._update_count()
+
+    def _set_all(self, checked: bool) -> None:
+        for check in self.type_checks.values():
+            check.setChecked(checked)
+
+    def selected_entities(self) -> list[tuple[int, str]]:
+        wanted = {t for t, check in self.type_checks.items() if check.isChecked()}
+        selected = []
+        for entity_id, name in self._row_entities:
+            types = self._types_by_entity.get(entity_id) or set()
+            if not types:
+                if not self.skip_empty_check.isChecked():
+                    selected.append((entity_id, name))
+                continue
+            if types & wanted:
+                selected.append((entity_id, name))
+        return selected
+
+    def _update_count(self) -> None:
+        self.count_label.setText(f"{len(self.selected_entities())} kayıt PDF'e aktarılacak.")
+
+
 class RowPreviewDialog(QDialog):
     """Ana Program'da bir sınıf/öğretmen/öğrenci adının üstüne çift
     tıklanınca açılan, sadece o satırın haftalık programını gösteren
@@ -1269,14 +1367,65 @@ class ScheduleTab(QWidget):
     # ---------- PDF dışa aktarma ----------
     _PDF_FILENAME_BY_MODE = {MODE_CLASS: "siniflar", MODE_TEACHER: "ogretmenler", MODE_STUDENT: "ogrenciler"}
 
+    _PDF_TITLE_BY_MODE = {MODE_CLASS: "Sınıflar", MODE_TEACHER: "Öğretmenler", MODE_STUDENT: "Öğrenciler"}
+
+    def _placed_types_by_entity(self) -> dict[int, set[str]]:
+        """Her satır (sınıf/öğretmen/öğrenci) için o hafta PROGRAMA
+        YERLEŞMİŞ ders türleri - PDF'e aktarımdaki tür filtresi için
+        (bkz. RowExportFilterDialog).
+
+        Satır başına ayrı ayrı taramak yerine bloklar TEK seferde gezilir:
+        çok öğrencili kurumlarda satır×blok taraması eski bilgisayarlarda
+        gözle görülür bir bekleme yaratıyordu."""
+        result: dict[int, set[str]] = {entity_id: set() for entity_id, _name in self._row_entities}
+        students_by_class: dict[int, list[int]] = {}
+        if self.mode == MODE_STUDENT:
+            for student_id, class_group_id in self._student_class_group_ids.items():
+                if class_group_id is not None:
+                    students_by_class.setdefault(class_group_id, []).append(student_id)
+        for blocks in self._schedule.values():
+            for block in blocks:
+                if self.mode == MODE_CLASS:
+                    targets = [block.class_group_id]
+                elif self.mode == MODE_TEACHER:
+                    targets = [block.teacher_id]
+                else:
+                    # Öğrencinin kendi dersleri + sınıfına yazılan dersler
+                    # (bkz. scheduling.student_effective_blocks).
+                    targets = [block.student_id]
+                    targets += students_by_class.get(block.class_group_id, [])
+                for entity_id in targets:
+                    if entity_id in result:
+                        result[entity_id].add(block.type)
+        return result
+
     def handle_export_pdf(self) -> None:
         # Ana Program'ın tamamı tek dev bir sayfa yerine, her satır
         # (sınıf/öğretmen/öğrenci) kendi ayrı sayfasında olacak şekilde
         # TEK bir çok sayfalı PDF olarak dışa aktarılır (bkz.
         # _export_rows_as_multi_page_pdf) - kullanıcı isteği.
+        if not self._row_entities:
+            QMessageBox.information(self, "Veri Yok", "Şu an dışa aktarılacak satır yok.")
+            return
+        # Önce kimlerin aktarılacağı sorulur - yüzlerce öğrencinin tamamı
+        # yerine sadece ilgilenilen ders türüne sahip olanlar (kullanıcı
+        # isteği: "çok fazla öğrenci olunca çok fazla PDF oluyor").
+        dialog = RowExportFilterDialog(
+            self._PDF_TITLE_BY_MODE.get(self.mode, "Program"),
+            self._row_entities, self._placed_types_by_entity(), self,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        selected = dialog.selected_entities()
+        if not selected:
+            QMessageBox.information(
+                self, "Seçim yok",
+                "Seçtiğiniz türlerde dersi olan kimse yok - en az bir ders türü işaretleyin.",
+            )
+            return
         stem = self._PDF_FILENAME_BY_MODE.get(self.mode, "program")
         _export_rows_as_multi_page_pdf(
-            self, self.db, self.navigator.week_start, self.mode, self._row_entities,
+            self, self.db, self.navigator.week_start, self.mode, selected,
             self._cell_blocks, f"{stem}_haftalik_program.pdf",
         )
 
@@ -1604,8 +1753,11 @@ class ScheduleTab(QWidget):
         self._preview_highlighted = []
         self._preview_header_rows = []
 
+        # Satır yüksekliği satır satır değil, başlığın varsayılan bölüm
+        # boyutuyla TEK seferde verilir (bkz. MainGrid.__init__ - satır
+        # başına setRowHeight, çok satırlı görünümlerde saniyeler sürüyordu).
+        self.grid.verticalHeader().setDefaultSectionSize(self.grid.row_height())
         for row, (entity_id, _name) in enumerate(self._row_entities):
-            self.grid.setRowHeight(row, self.grid.row_height())
             for day in range(len(day_names)):
                 for period in range(1, period_count + 1):
                     col = day * period_count + (period - 1)
