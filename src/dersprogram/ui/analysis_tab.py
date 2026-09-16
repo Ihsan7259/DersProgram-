@@ -25,10 +25,17 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 
-from ..db import Database, LESSON_TYPE_LABELS
+from ..db import Database, LESSON_TYPE_LABELS, TEACHERLESS_TYPES
 from .. import scheduling
 
 TOTAL_COLUMN_LABEL = "Toplam Ders"
+
+# Öğretmen tablosunda gösterilmeyen ders tipleri. Deneme ve Etüt zaten
+# öğretmensiz atanabilen tiplerdir (bkz. db.TEACHERLESS_TYPES); öğretmen
+# analizinde bu iki sütun yer kaplamaktan başka bir şey yapmıyordu -
+# kullanıcı isteği: "deneme ve etüt sekmesini de kaldıralım analiz
+# partında hocalar için". Öğrenci ve derslik tablolarında duruyorlar.
+TEACHER_HIDDEN_TYPES = set(TEACHERLESS_TYPES)
 
 
 class AnalysisTab(QWidget):
@@ -57,7 +64,7 @@ class AnalysisTab(QWidget):
         layout.addLayout(date_row)
 
         self.tabs = QTabWidget()
-        self.teacher_table = self._make_table()
+        self.teacher_table = self._make_table(hidden_types=TEACHER_HIDDEN_TYPES)
         self.student_table = self._make_table()
         self.room_table = self._make_table()
         self.tabs.addTab(self.teacher_table, "Öğretmenler")
@@ -68,10 +75,15 @@ class AnalysisTab(QWidget):
         self.refresh_button.clicked.connect(self.refresh)
         self.refresh()
 
-    def _make_table(self) -> QTableWidget:
+    def _make_table(self, hidden_types: set[str] | None = None) -> QTableWidget:
         table = QTableWidget()
         table.setEditTriggers(QTableWidget.NoEditTriggers)
-        columns = ["Ad"] + list(LESSON_TYPE_LABELS.values()) + [TOTAL_COLUMN_LABEL]
+        types = [t for t in LESSON_TYPE_LABELS if t not in (hidden_types or set())]
+        # Hangi tiplerin gösterildiği tabloyla birlikte taşınır - _fill_table
+        # hem sütunları hem TOPLAM'ı bu listeye göre doldurur, böylece
+        # "Toplam Ders" her zaman görünen sütunların toplamına eşit kalır.
+        table.lesson_types = types
+        columns = ["Ad"] + [LESSON_TYPE_LABELS[t] for t in types] + [TOTAL_COLUMN_LABEL]
         table.setColumnCount(len(columns))
         table.setHorizontalHeaderLabels(columns)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -105,7 +117,7 @@ class AnalysisTab(QWidget):
             self._fill_table(table, entities, start, end, key)
 
     def _fill_table(self, table: QTableWidget, entities, start: _dt.date, end: _dt.date, key: str) -> None:
-        types = list(LESSON_TYPE_LABELS.keys())
+        types = table.lesson_types
         # Tüm satırların toplamı TEK geçişte hesaplanır (eskiden satır
         # başına bir kez aralığın tamamı yeniden kuruluyordu), sonra TOPLAM
         # DERS'e göre (çoktan aza) sıralanır - en yoğun olan en üstte.
@@ -114,7 +126,7 @@ class AnalysisTab(QWidget):
         rows = []
         for entity in entities:
             totals = by_id.get(entity["id"], empty)
-            rows.append((entity["name"], totals, sum(totals.values())))
+            rows.append((entity["name"], totals, sum(totals.get(t, 0) for t in types)))
         rows.sort(key=lambda row: (-row[2], row[0]))
 
         table.setRowCount(len(rows))
