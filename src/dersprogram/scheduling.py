@@ -280,6 +280,26 @@ class BlockView:
             who = self.type_label()
         return self.teacher_name or self.type_label(), who, self.room_line()
 
+    def crowded_line(self, row_mode: str | None) -> str:
+        """Çok kalabalık bir (gün, saat) hücresinde (aynı saatte 4+ ders)
+        bu blok için gösterilecek TEK kısa satır. Böyle bir hücrede üç
+        satırlık kartları üst üste dizmek okunmaz bir yığın oluşturuyordu
+        (kullanıcı bildirimi: "Extra Soru Çözümü" dersinde 13 öğretmen aynı
+        saatte); onun yerine satırın kendisinin anlatmadığı TEK ayırt edici
+        bilgi yazılır (bkz. theme.MultiNameCell)."""
+        if row_mode == "subject":
+            # Dersin programı: ayırt edici olan ÖĞRETMEN.
+            return short_teacher_name(self.teacher_name) or self.type_label()
+        if row_mode == "teacher":
+            # Öğretmenin programı: ayırt edici olan KİMİNLE.
+            return self.class_name or self.student_name or self.type_label()
+        if row_mode in ("class", "student"):
+            return self.subject_name or self.type_label()
+        return (
+            self.class_name or self.student_name
+            or self.subject_name or self.type_label()
+        )
+
     def dense_lines(self, row_mode: str) -> tuple[str, str]:
         """Kurum geneli ızgarada (satır=sınıf/öğretmen/öğrenci) hücrede
         gösterilecek iki kısa satır. Satırın kendisi zaten kim olduğunu

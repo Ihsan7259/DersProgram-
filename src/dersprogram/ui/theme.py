@@ -15,8 +15,10 @@ import sys
 from html import escape as _html_escape
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QColor, QFontDatabase, QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtCore import QByteArray, QRectF, QSize, Qt
+from PySide6.QtGui import (
+    QColor, QFont, QFontDatabase, QFontMetrics, QIcon, QPainter, QPalette, QPixmap,
+)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy
 
@@ -580,15 +582,166 @@ def make_unavailable_cell(compact: bool = False, mark_px: int | None = None) -> 
     return frame
 
 
+# Bir (gün, saat) hücresinde bu kadar ya da daha fazla ders varsa artık
+# üç satırlık kartlar üst üste dizilmez; sadece tek satırlık adlar yazılır
+# (bkz. MultiNameCell). Kullanıcı bildirimi: "Extra Soru Çözümü" dersinde
+# 13 öğretmen aynı saatte ders veriyordu ve çıktı tamamen okunmaz oluyordu.
+CROWDED_CELL_LIMIT = 4
+
+
+class MultiNameCell(QWidget):
+    """Kalabalık bir hücredeki adları (öğretmen/sınıf/öğrenci) hücreye
+    SIĞACAK şekilde yazan hücre kartı.
+
+    Neden özel bir widget (alt alta QLabel'ler yerine): yazıların üst üste
+    binmesi ihtimalini tamamen ortadan kaldırmak için. Yerleşim, Qt'nin
+    layout'una bırakılmaz; her çizimde hücrenin O ANKİ gerçek genişlik ve
+    yüksekliği ölçülüp
+
+      * yazı tipi boyutu,
+      * sütun sayısı (1-3),
+      * satır yüksekliği
+
+    buna göre hesaplanır ve adlar bu ızgaranın içine birer birer çizilir.
+    Sütuna sığmayan ad yatayda "..." ile kısaltılır (taşmaz), hücreye
+    sığmayan ad kalırsa son gözde "+N" yazılır - hiçbir koşulda iki yazı
+    aynı yere denk gelmez. Tam adlar araç ipucunda (tooltip) durur.
+
+    heightForWidth() gerçek ihtiyacı bildirir; ızgara (bkz.
+    MiniScheduleGrid._apply_grid_sizing) satır yüksekliğini buna göre
+    büyütür, böylece "+N" durumuna normalde hiç düşülmez."""
+
+    def __init__(self, names: list[str], bg: str, max_px: int, parent=None):
+        super().__init__(parent)
+        self._names = [n for n in names if n]
+        self._bg = QColor(bg)
+        self._max_px = max(8, int(max_px))
+        self._min_px = max(6, int(self._max_px * 0.5))
+        self._max_cols = 3
+        policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        self.setToolTip("\n".join(self._names))
+
+    # ---------- ölçüm ----------
+    def _metrics(self, width: int):
+        margin = max(3, width // 60)
+        gap = max(4, width // 40)
+        return margin, gap
+
+    def _fit(self, width: int, height: int | None = None):
+        """(yazı_px, sütun_sayısı, satır_yüksekliği, gereken_toplam_yükseklik).
+        height verilirse o yüksekliğe sığan EN BÜYÜK yazı tipi seçilir."""
+        width = max(20, width)
+        margin, gap = self._metrics(width)
+        avail = max(10, width - 2 * margin)
+        count = max(1, len(self._names))
+        result = None
+        for px in range(self._max_px, self._min_px - 1, -1):
+            font = QFont(FONT_HEADING)
+            font.setPixelSize(px)
+            font.setBold(True)
+            metrics = QFontMetrics(font)
+            widest = max((metrics.horizontalAdvance(n) for n in self._names), default=1)
+            cols = int((avail + gap) // max(1, widest + gap))
+            cols = max(1, min(self._max_cols, cols))
+            line_h = metrics.height() + max(1, px // 6)
+            rows = (count + cols - 1) // cols
+            total = rows * line_h + 2 * margin
+            result = (px, cols, line_h, total)
+            if height is None or total <= height:
+                break
+        return result
+
+    def heightForWidth(self, width: int) -> int:
+        return self._fit(width)[3]
+
+    def sizeHint(self) -> QSize:
+        width = max(40, self.width())
+        return QSize(40, self.heightForWidth(width))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(20, 12)
+
+    # ---------- yerleşim ----------
+    def text_layout(self, width: int, height: int):
+        """(yazı_px, [(metin, dikdörtgen, soluk_mu), ...]) - hücre bu
+        boyuttayken hangi yazının TAM OLARAK nereye çizileceği.
+
+        paintEvent bunu kullanır; testler de bunu kullanıp hiçbir
+        dikdörtgenin bir diğeriyle kesişmediğini ve hepsinin hücrenin
+        içinde kaldığını doğrulayabilir (bkz. scratchpad testleri)."""
+        width = max(20, width)
+        height = max(10, height)
+        margin, gap = self._metrics(width)
+        px, cols, line_h, _total = self._fit(width, height)
+        font = QFont(FONT_HEADING)
+        font.setPixelSize(px)
+        font.setBold(True)
+        metrics = QFontMetrics(font)
+
+        col_w = (width - 2 * margin - (cols - 1) * gap) / cols
+        usable_h = max(0, height - 2 * margin)
+        max_rows = max(1, int(usable_h // line_h)) if line_h else 1
+        rows_needed = (len(self._names) + cols - 1) // cols
+        rows = min(rows_needed, max_rows)
+        capacity = max(1, rows * cols)
+        # Izgara satır yüksekliğini heightForWidth'e göre ayarladığı için
+        # normalde hepsi sığar; yine de sığmazsa son göze "+N" yazılır ki
+        # ne yazı kırpılsın, ne üst üste binsin, ne de sessizce ders
+        # kaybolsun.
+        overflow = len(self._names) - capacity
+        shown = self._names[: capacity - 1] if overflow > 0 else self._names
+        top = margin + max(0.0, (usable_h - rows * line_h)) / 2
+
+        def cell_rect(index: int) -> QRectF:
+            row, col = divmod(index, cols)
+            return QRectF(margin + col * (col_w + gap), top + row * line_h, col_w, line_h)
+
+        items = [
+            (metrics.elidedText(name, Qt.ElideRight, int(col_w)), cell_rect(i), False)
+            for i, name in enumerate(shown)
+        ]
+        if overflow > 0:
+            items.append((f"+{overflow + 1}", cell_rect(capacity - 1), True))
+        return px, items
+
+    # ---------- çizim ----------
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        painter.fillRect(self.rect(), self._bg)
+        px, items = self.text_layout(self.width(), self.height())
+        font = QFont(FONT_HEADING)
+        font.setPixelSize(px)
+        font.setBold(True)
+        painter.setFont(font)
+        for text, rect, muted in items:
+            painter.setPen(QColor(LESSON_TYPE_TEXT_MUTED if muted else LESSON_TYPE_TEXT))
+            painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
+        painter.end()
+
+
 def make_multi_cell(
     blocks: list, compact: bool = False, row_mode: str | None = None,
     primary_px: int | None = None, secondary_px: int | None = None, tertiary_px: int | None = None,
 ) -> QWidget:
     """Bir (gün, saat) hücresindeki tüm ders bloklarını üst üste dizer.
     Ana Program hücresinde birden fazla ders (farklı sınıflar) aynı
-    saatte olabilir; filtrelenmiş mini programlarda genelde tek olur."""
+    saatte olabilir; filtrelenmiş mini programlarda genelde tek olur.
+
+    CROWDED_CELL_LIMIT (4) ya da daha fazla ders varsa kartlar yerine
+    sadeleştirilmiş, tek satırlık adlardan oluşan bir hücre çizilir
+    (bkz. MultiNameCell) - aksi halde 13 öğretmenlik bir hücrede 39 satır
+    yazı üst üste binip tamamen okunmaz oluyordu."""
     if not blocks:
         return make_empty_cell(compact=compact)
+    if compact and len(blocks) >= CROWDED_CELL_LIMIT:
+        # Renk ilk bloğa göre seçilir: kalabalık hücrede kartlar tek bir
+        # bloğa dönüştüğü için tek bir arkaplan rengi gerekiyor.
+        bg, _dot = lesson_colors_for(blocks[0], tinted=False)
+        names = [block.crowded_line(row_mode) for block in blocks]
+        return MultiNameCell(names, bg, primary_px or 12)
     frame = QWidget()
     frame.setObjectName("cellFrame")
     radius = 0 if compact else 8

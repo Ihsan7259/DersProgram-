@@ -99,27 +99,33 @@ class ColorPickButton(QWidget):
         self.color_changed.emit(None)
 
 
+def _row_content_height(table: QTableWidget, row: int, col_width: int) -> int:
+    """TEK bir satırdaki hücre kartlarının tamamının (ders adı, tür +
+    öğretmen, derslik; kalabalık hücrelerde ad listesi) tam görünmesi için
+    gereken en küçük satır yüksekliği."""
+    needed = 0
+    for col in range(table.columnCount()):
+        widget = table.cellWidget(row, col)
+        if widget is None:
+            continue
+        if widget.hasHeightForWidth():
+            needed = max(needed, widget.heightForWidth(col_width))
+        needed = max(needed, widget.sizeHint().height())
+    return needed
+
+
 def _content_row_height(table: QTableWidget, col_width: int) -> int:
-    """Hücrelerdeki ders kartlarının TÜM satırlarının (ders adı, tür +
-    öğretmen, derslik - gerektiğinde kelime kaydırmasıyla) tam görünmesi
-    için gereken en küçük satır yüksekliği.
+    """Izgaradaki TÜM satırların aynı yükseklikte kalması istendiğinde
+    (bkz. AvailabilityGrid) gereken ortak yükseklik.
 
     Satır yüksekliği yalnızca sütun genişliğinden (3:2 oran) türetildiğinde,
     saat sayısı çok olan ekranlarda hücre kutusu kartın yazısından kısa
     kalıp alt satırları kırpıyordu (kullanıcı bildirimi: "yazıların bloklar
-    içinde hepsinin okunduğundan emin olalım"). Burada kartların kendi
-    boyut ihtiyacı ölçülüp taban değer olarak kullanılır - tüm satırlar
-    yine AYNI yükseklikte kalır."""
-    needed = 0
-    for row in range(table.rowCount()):
-        for col in range(table.columnCount()):
-            widget = table.cellWidget(row, col)
-            if widget is None:
-                continue
-            if widget.hasHeightForWidth():
-                needed = max(needed, widget.heightForWidth(col_width))
-            needed = max(needed, widget.sizeHint().height())
-    return needed
+    içinde hepsinin okunduğundan emin olalım")."""
+    return max(
+        (_row_content_height(table, row, col_width) for row in range(table.rowCount())),
+        default=0,
+    )
 
 
 def _set_cell_widget(table: QTableWidget, row: int, col: int, widget: QWidget) -> None:
@@ -473,17 +479,17 @@ class MiniScheduleGrid(QTableWidget):
         # her koşulda bizim belirlediğimiz değerde SABİT kalır.
         v_header = self.verticalHeader()
         v_header.setSectionResizeMode(QHeaderView.Fixed)
-        row_height = max(28, int(col_width / 1.5))
-        if self._fixed_col_width is None:
-            # Sadece EKRANDA: yazı tipi boyutu burada sabit (pt) olduğu için
-            # çok saatli programlarda hücre kutusu kartın yazısından kısa
-            # kalıp alt satırları kırpabiliyordu - kartın gerçek ihtiyacı
-            # taban alınır. Dışa aktarımda (PDF/Kopyala) buna dokunulmaz:
-            # orada yazı boyutu zaten hücre genişliğine oranlı hesaplanıyor
-            # ve kullanıcının onayladığı 3:2 kutu oranı korunmalı.
-            row_height = max(row_height, _content_row_height(self, col_width))
+        # Taban yükseklik kullanıcının onayladığı 3:2 kutu oranından gelir
+        # ve NORMAL (sığan) satırlarda aynen korunur. Yalnızca içeriği bu
+        # kutuya sığmayan satır (ör. aynı saatte 10+ öğretmenin ders verdiği
+        # bir gün) kendi ihtiyacı kadar büyür - böylece ne yazı okunmaz
+        # derecede küçülür ne de üst üste biner. Ölçüm SATIR BAZINDA yapılır:
+        # tek bir kalabalık gün yüzünden haftanın tamamı gereksiz yere
+        # uzamasın. Bu hesap EKRANDA ve DIŞA AKTARIMDA (PDF/Kopyala) aynıdır -
+        # önizleme ile PDF birebir aynı görünsün diye.
+        base_height = max(28, int(col_width / 1.5))
         for row in range(self.rowCount()):
-            self.setRowHeight(row, row_height)
+            self.setRowHeight(row, max(base_height, _row_content_height(self, row, col_width)))
 
 
 class AvailabilityGrid(QTableWidget):

@@ -61,7 +61,9 @@ class SubjectsTab(QWidget):
         self.hint_label = QLabel(
             "Soldan bir ders seçin: o dersin bu haftaki programı aşağıda görünür. "
             "Aynı gün/saatte o dersi veren birden fazla öğretmen varsa hepsi aynı "
-            "hücrede alt alta sıralanır."
+            "hücrede alt alta sıralanır. Bir hücrede 4 ve daha fazla ders varsa "
+            "hücre sadeleşir: sadece öğretmen adları yazılır ve hücre, adların "
+            "tamamı okunacak kadar büyür."
         )
         self.hint_label.setWordWrap(True)
         right_layout.addWidget(self.hint_label)
