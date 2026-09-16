@@ -1062,12 +1062,16 @@ class Database:
         query = f"""
             SELECT lb.*, t.name AS teacher_name, s.name AS subject_name,
                    cg.name AS class_name, st.name AS student_name, r.name AS room_name,
-                   st.class_group_id AS student_class_group_id
+                   st.class_group_id AS student_class_group_id,
+                   scg.name AS student_class_name
             FROM lesson_blocks lb
             LEFT JOIN teachers t ON t.id = lb.teacher_id
             LEFT JOIN subjects s ON s.id = lb.subject_id
             LEFT JOIN class_groups cg ON cg.id = lb.class_group_id
             LEFT JOIN students st ON st.id = lb.student_id
+            -- Öğrencinin KENDİ kayıtlı sınıfı (bloğun sınıfı cg'den ayrı):
+            -- birebir derste öğretmene "Öğrenci/12-A" diye göstermek için.
+            LEFT JOIN class_groups scg ON scg.id = st.class_group_id
             LEFT JOIN rooms r ON r.id = lb.room_id
             {where}
         """

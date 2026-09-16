@@ -276,13 +276,24 @@ class MiniScheduleGrid(QTableWidget):
         super().__init__()
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setShowGrid(False)
+        # Salt-okunur bir önizleme: seçim/odak çerçevesinin işi yok. Aksi
+        # halde Qt ilk hücreyi "geçerli hücre" diye mavi tonluyor ve bu
+        # gölge Kopyala/PDF çıktısına da karışıyordu.
+        self.setSelectionMode(QTableWidget.NoSelection)
+        self.setFocusPolicy(Qt.NoFocus)
         self._col_count = 1
         self._fixed_col_width: int | None = None
         self._last_populate_args: tuple | None = None
         self._applied_sizing: tuple | None = None
         self._sizing_pending = False
 
-    def populate(self, db: Database, blocks_by_cell: dict[tuple[int, int], list], row_mode: str | None = None) -> None:
+    def populate(
+        self,
+        db: Database,
+        blocks_by_cell: dict[tuple[int, int], list],
+        row_mode: str | None = None,
+        unavailable_cells: set[tuple[int, int]] | None = None,
+    ) -> None:
         """Not: bilerek 'render' değil 'populate' adında - QWidget'ın
         kendi render() metodunu (bir widget'ı QPaintDevice'a çizip pixmap
         üretmek için kullanılır, bkz. schedule_tab._render_table_pixmap)
@@ -290,14 +301,15 @@ class MiniScheduleGrid(QTableWidget):
         Kopyala düğmeleri tam da bu yüzden (table.render(pixmap) çağrısı
         QWidget'ınkini değil BUNU çağırdığı için) çöküyordu.
 
-        Kullanıcı isteği: tüm gün/saat sayısını değil, sadece o kişi/sınıfın
-        DERSİNİN OLDUĞU günleri ve saatleri kapsayan EN DAR (optimal)
-        dikdörtgeni gösterir - ör. kurumda 15 saat tanımlıysa ama bu sınıfın
-        dersleri sadece 1-5. saatlerdeyse, 6-15 arası tamamen boş satırlar
-        hiç eklenmez (kutu/yazı boyutu bundan ETKİLENMEZ, sadece kaç satır/
-        sütun çizileceği değişir). Hiç dersi yoksa (blocks_by_cell boş) tüm
-        hafta gösterilir."""
-        self._last_populate_args = (db, blocks_by_cell, row_mode)
+        Izgara HER ZAMAN haftanın tamamını (tüm günler × tüm ders saatleri)
+        gösterir. Bir dönem sadece dersi olan gün/saatleri kapsayan "en dar
+        dikdörtgen" çizilirdi; kullanıcı isteğiyle kaldırıldı - böylece her
+        sayfa/önizleme aynı ve eksiksiz haftayı gösterir.
+
+        unavailable_cells verilirse (ör. öğretmenin müsait olmadığı saatler),
+        o hücrelerde ders yoksa ortasında küçük kırmızı bir çarpı görünür
+        (bkz. theme.make_unavailable_cell)."""
+        self._last_populate_args = (db, blocks_by_cell, row_mode, unavailable_cells)
         # Hücreler bu çağrıda BAŞTAN oluşturuluyor - _apply_grid_sizing'in
         # "zaten bu boyuttaydı" önbelleği (bkz. aşağıda, titreme önleme
         # amaçlı) burada geçersiz kılınmalı, aksi halde yeni hücreler Qt'nin
@@ -305,15 +317,10 @@ class MiniScheduleGrid(QTableWidget):
         self._applied_sizing = None
         day_names = db.day_names
         period_count = db.period_count
+        unavailable_cells = unavailable_cells or set()
 
-        used_days = sorted({day for day, _period in blocks_by_cell.keys()})
-        used_periods = sorted({period for _day, period in blocks_by_cell.keys()})
-        if used_days and used_periods:
-            day_indices = list(range(used_days[0], used_days[-1] + 1))
-            periods = list(range(used_periods[0], used_periods[-1] + 1))
-        else:
-            day_indices = list(range(len(day_names)))
-            periods = list(range(1, period_count + 1))
+        day_indices = list(range(len(day_names)))
+        periods = list(range(1, period_count + 1))
 
         # Kullanıcı isteği: dikey eksen haftanın günleri, yatay eksen ders
         # saatleri olsun (önceden tersiydi - satır=saat, sütun=gün).
@@ -346,20 +353,26 @@ class MiniScheduleGrid(QTableWidget):
             secondary_px = max(9, min(32, round(col_width * 0.082)))
             tertiary_px = max(8, min(26, round(col_width * 0.068)))
             header_px = max(10, min(30, round(col_width * 0.075)))
+            mark_px = max(9, min(28, round(col_width * 0.075)))
             self.setStyleSheet(f"QHeaderView::section {{ font-size: {header_px}px; padding: 4px 2px; }}")
         else:
             primary_px = None
             secondary_px = None
             tertiary_px = None
+            mark_px = None
             self.setStyleSheet("")
 
         for row, day in enumerate(day_indices):
             for col, period in enumerate(periods):
                 blocks = blocks_by_cell.get((day, period), [])
-                _set_cell_widget(self, row, col, theme.make_multi_cell(
-                    blocks, compact=True, row_mode=row_mode,
-                    primary_px=primary_px, secondary_px=secondary_px, tertiary_px=tertiary_px,
-                ))
+                if not blocks and (day, period) in unavailable_cells:
+                    widget = theme.make_unavailable_cell(compact=True, mark_px=mark_px)
+                else:
+                    widget = theme.make_multi_cell(
+                        blocks, compact=True, row_mode=row_mode,
+                        primary_px=primary_px, secondary_px=secondary_px, tertiary_px=tertiary_px,
+                    )
+                _set_cell_widget(self, row, col, widget)
         self._apply_grid_sizing()
 
     def set_fixed_column_width(self, width_px: int | None) -> None:
@@ -377,8 +390,8 @@ class MiniScheduleGrid(QTableWidget):
             return
         self._fixed_col_width = width_px
         if self._last_populate_args is not None:
-            db, blocks_by_cell, row_mode = self._last_populate_args
-            self.populate(db, blocks_by_cell, row_mode=row_mode)
+            db, blocks_by_cell, row_mode, unavailable_cells = self._last_populate_args
+            self.populate(db, blocks_by_cell, row_mode=row_mode, unavailable_cells=unavailable_cells)
         else:
             self._apply_grid_sizing()
 

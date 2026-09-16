@@ -555,6 +555,31 @@ def make_empty_cell(compact: bool = False) -> QWidget:
     return frame
 
 
+def make_unavailable_cell(compact: bool = False, mark_px: int | None = None) -> QWidget:
+    """'Müsait değil' olarak işaretlenmiş boş bir saat: kutunun tamamı
+    kırmızıya boyanmaz, sadece ORTASINDA küçük kırmızı bir çarpı olur -
+    kullanıcı isteği: "kocaman kırmızı çarpılar değil, daha mütevazi bir
+    boyutta; bütün kutucuk kırmızı olmasa da olur"."""
+    frame = QWidget()
+    frame.setObjectName("cellFrame")
+    radius = 0 if compact else 8
+    frame.setStyleSheet(
+        f"#cellFrame {{ border: 1.5px dashed {BORDER_INPUT}; border-radius: {radius}px; background: transparent; }}"
+    )
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(0, 0, 0, 0)
+    label = QLabel("×")
+    label.setAlignment(Qt.AlignCenter)
+    label.setToolTip("Bu saatte müsait değil")
+    size_css = f"{mark_px}px" if mark_px else "9pt"
+    label.setStyleSheet(
+        f"color: {CONFLICT_BORDER}; font-size: {size_css}; font-weight: 700; "
+        "background: transparent; border: none;"
+    )
+    layout.addWidget(label)
+    return frame
+
+
 def make_multi_cell(
     blocks: list, compact: bool = False, row_mode: str | None = None,
     primary_px: int | None = None, secondary_px: int | None = None, tertiary_px: int | None = None,

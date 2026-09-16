@@ -160,9 +160,14 @@ class _CellDelegate(QStyledItemDelegate):
 
         kind = payload.get("kind")
         if kind == "unavailable":
+            # Kullanıcı isteği: "kocaman kırmızı çarpılar değil, daha
+            # mütevazi bir boyutta; bütün kutucuk kırmızı olmasa da olur" -
+            # hücre normal boş hücre gibi kalır (bkz. _render_grid'in
+            # verdiği bg), ortasında yalnızca hücreye oranlı küçük bir
+            # kırmızı çarpı çizilir.
             font = QFont(painter.font())
             font.setBold(True)
-            font.setPointSizeF(10)
+            font.setPointSizeF(max(5.0, min(9.0, rect.height() * 0.16)))
             painter.setFont(font)
             painter.setPen(QColor(theme.CONFLICT_BORDER))
             painter.drawText(rect, Qt.AlignCenter, "×")
@@ -866,6 +871,22 @@ def sanitize_filename(name: str) -> str:
     return "".join(c if (c.isalnum() or c in "-_") else "_" for c in name).strip("_") or "program"
 
 
+def teacher_unavailable_cells(
+    db: Database, week_start, mode: str, entity_id: int, unavailable=None,
+) -> set[tuple[int, int]]:
+    """Bir ÖĞRETMENİN o hafta 'müsait değil' işaretlediği (gün, saat)
+    hücreleri. Kullanıcı isteği: müsaitlik bilgisi SADECE öğretmen
+    önizlemesinde ve öğretmen PDF'inde görünsün - sınıf/öğrenci
+    çıktılarında boş küme döner.
+
+    unavailable (scheduling.UnavailableSlots) verilirse yeniden
+    hesaplanmaz - toplu PDF'te her sayfa için baştan hesaplamamak için."""
+    if mode != MODE_TEACHER:
+        return set()
+    slots = unavailable if unavailable is not None else scheduling.UnavailableSlots.compute(db, week_start)
+    return {(day, period) for tid, day, period in slots.teacher if tid == entity_id}
+
+
 def _export_rows_as_multi_page_pdf(
     parent: QWidget,
     db: Database,
@@ -928,6 +949,10 @@ def _export_rows_as_multi_page_pdf(
     writer.setResolution(dpi)
     writer.setPageMargins(QMarginsF(0, 0, 0, 0))
     painter: QPainter | None = None
+    # Müsaitlik (sadece öğretmen çıktısında kullanılır) tüm sayfalar için
+    # TEK seferde hesaplanır - her sayfada baştan hesaplamak yüzlerce
+    # satırlı çıktılarda gereksiz bekleme yaratıyordu.
+    unavailable = scheduling.UnavailableSlots.compute(db, week_start) if mode == MODE_TEACHER else None
 
     try:
         for index, (entity_id, name) in enumerate(row_entities):
@@ -938,7 +963,10 @@ def _export_rows_as_multi_page_pdf(
                     if blocks:
                         filtered[(day, period)] = blocks
 
-            temp_grid.populate(db, filtered, row_mode=mode)
+            temp_grid.populate(
+                db, filtered, row_mode=mode,
+                unavailable_cells=teacher_unavailable_cells(db, week_start, mode, entity_id, unavailable),
+            )
             # revert=False: bu geçici ızgara hiç ekranda gösterilmiyor,
             # sayfalar arasında sabit dışa aktarım genişliğinde KALMALI
             # (bkz. _render_row_pixmap'in docstring'i - aksi halde 2.
@@ -1098,7 +1126,7 @@ class RowPreviewDialog(QDialog):
                     filtered[cell] = matched
 
         grid = MiniScheduleGrid()
-        grid.populate(db, filtered, row_mode=mode)
+        grid.populate(db, filtered, row_mode=mode, unavailable_cells=teacher_unavailable_cells(db, week_start, mode, entity_id))
         layout.addWidget(grid, 1)
 
         button_row = QHBoxLayout()
@@ -1764,13 +1792,13 @@ class ScheduleTab(QWidget):
                     blocks = self._cell_blocks(entity_id, day, period)
                     if not blocks:
                         if self.mode == MODE_TEACHER and (entity_id, day, period) in self._unavailable.teacher:
-                            payload = {"kind": "unavailable", "bg": theme.CONFLICT_BG}
+                            payload = {"kind": "unavailable", "bg": theme.APP_BG}
                             tooltip = "Öğretmen bu saatte müsait değil olarak işaretlenmiş"
                         elif self.mode == MODE_CLASS and (entity_id, day, period) in self._unavailable.class_:
-                            payload = {"kind": "unavailable", "bg": theme.CONFLICT_BG}
+                            payload = {"kind": "unavailable", "bg": theme.APP_BG}
                             tooltip = "Sınıf bu saatte müsait değil olarak işaretlenmiş"
                         elif self.mode == MODE_STUDENT and (entity_id, day, period) in self._unavailable.student:
-                            payload = {"kind": "unavailable", "bg": theme.CONFLICT_BG}
+                            payload = {"kind": "unavailable", "bg": theme.APP_BG}
                             tooltip = "Öğrenci bu saatte müsait değil olarak işaretlenmiş"
                         else:
                             payload = {"kind": "empty", "bg": theme.APP_BG}

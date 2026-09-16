@@ -112,6 +112,10 @@ class BlockView:
     day: int | None = None
     period: int | None = None
     student_class_group_id: int | None = None
+    # Öğrencinin kendi kayıtlı sınıfının adı (bloğun sınıfı class_name'den
+    # ayrı) - öğretmenin programında birebir dersi "Öğrenci/12-A" diye
+    # göstermek için (bkz. student_with_class).
+    student_class_name: str | None = None
     zumre_group_id: int | None = None
 
     def type_label(self) -> str:
@@ -217,6 +221,17 @@ class BlockView:
             label = f"{label} · {self.subject_name}"
         return label, self.teacher_name or "", self.room_line()
 
+    def student_with_class(self) -> str:
+        """'Mustafa Yürek/12-A' - öğrencinin adı ve kayıtlı olduğu sınıf.
+        Öğrenci bir sınıfa kayıtlı değilse sadece adı döner (kullanıcı
+        isteği: öğretmenin programında birebir dersin kiminle ve hangi
+        sınıftan olduğu tek bakışta görünsün)."""
+        if not self.student_name:
+            return ""
+        if not self.student_class_name:
+            return self.student_name
+        return f"{self.student_name}/{self.student_class_name}"
+
     def teacher_row_lines(self) -> tuple[str, str, str]:
         """Öğretmenin kendi haftalık programında (ve önizlemesinde)
         gösterilecek satırlar: sınıf/öğrenci adı ve branş - öğretmen adı
@@ -225,9 +240,11 @@ class BlockView:
         if self.type == TYPE_CLASS:
             return self.class_name or "Sınıf Dersi", self.subject_name or "", self.room_line()
         if self.type == TYPE_ONE_ON_ONE:
-            return self.student_name or "Birebir", self.subject_name or "", self.room_line()
+            # Kullanıcı isteği: öğretmenin programında birebir bloğunda
+            # öğrencinin kayıtlı olduğu sınıf da yazsın ("Mustafa Yürek/12-A").
+            return self.student_with_class() or "Birebir", self.subject_name or "", self.room_line()
         if self.type == TYPE_COACHING:
-            return "Öğrenci Koçluk", self.student_name or "", self.room_line()
+            return "Öğrenci Koçluk", self.student_with_class(), self.room_line()
         if self.type == TYPE_DEPARTMENT:
             return "Zümre", self.subject_name or "", self.room_line()
         return self.type_label(), self.subject_name or "", self.room_line()
@@ -359,6 +376,7 @@ def _row_to_blockview(row) -> BlockView:
         room_name=row["room_name"],
         note=row["note"] or "",
         student_class_group_id=row["student_class_group_id"],
+        student_class_name=row["student_class_name"],
         zumre_group_id=row["zumre_group_id"],
     )
 
