@@ -80,6 +80,12 @@ class ListTab(QWidget):
     def _handle_return_pressed(self) -> None:
         self.handle_update() if self.selected_id is not None else self.handle_add()
 
+    def select_id(self, row_id: int) -> None:
+        """Listedeki ilgili satırı seçer (başka bir ekrandan yönlendirme
+        için - ör. Derslikler sekmesindeki doluluk tablosundan bir
+        dersliğe tıklamak)."""
+        self._select_row_by_id(row_id)
+
     def _select_row_by_id(self, row_id: int) -> None:
         for r in range(self.table_widget.rowCount()):
             item = self.table_widget.item(r, 0)

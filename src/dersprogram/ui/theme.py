@@ -397,6 +397,8 @@ def make_lesson_card(
         primary, secondary, tertiary = block.student_row_lines()
     elif row_mode == "subject":
         primary, secondary, tertiary = block.subject_row_lines()
+    elif row_mode == "room":
+        primary, secondary, tertiary = block.room_row_lines()
     else:
         primary, secondary, tertiary = block.card_lines()
 
@@ -455,7 +457,7 @@ def make_lesson_card(
     )
     layout.addWidget(primary_label)
 
-    if secondary and (not compact or row_mode in ("class", "teacher", "student", "subject")):
+    if secondary and (not compact or row_mode in ("class", "teacher", "student", "subject", "room")):
         secondary_size_css = f"{secondary_px}px" if secondary_px else ("7.9pt" if compact else "8.2pt")
         secondary_label = QLabel(secondary)
         secondary_label.setWordWrap(True)

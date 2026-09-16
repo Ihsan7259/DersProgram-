@@ -232,6 +232,15 @@ class BlockView:
             return self.student_name
         return f"{self.student_name}/{self.student_class_name}"
 
+    def room_row_lines(self) -> tuple[str, str, str]:
+        """Bir DERSLİĞİN kendi haftalık programında gösterilecek satırlar:
+        o saatte dersliği KİM kullanıyor (sınıf ya da öğrenci), hangi ders
+        ve hangi öğretmen. Derslik adı zaten belli olduğu için tekrar
+        edilmez."""
+        who = self.class_name or self.student_name or self.type_label()
+        what = self.subject_name or self.type_label()
+        return who, what, short_teacher_name(self.teacher_name)
+
     def teacher_row_lines(self) -> tuple[str, str, str]:
         """Öğretmenin kendi haftalık programında (ve önizlemesinde)
         gösterilecek satırlar: sınıf/öğrenci adı ve branş - öğretmen adı
@@ -292,6 +301,9 @@ class BlockView:
             return short_teacher_name(self.teacher_name) or self.type_label()
         if row_mode == "teacher":
             # Öğretmenin programı: ayırt edici olan KİMİNLE.
+            return self.class_name or self.student_name or self.type_label()
+        if row_mode == "room":
+            # Dersliğin programı: ayırt edici olan dersliği KİMİN kullandığı.
             return self.class_name or self.student_name or self.type_label()
         if row_mode in ("class", "student"):
             return self.subject_name or self.type_label()
@@ -1448,6 +1460,7 @@ def summarize_hours_range(
     *,
     teacher_id: int | None = None,
     student_id: int | None = None,
+    room_id: int | None = None,
 ) -> dict[str, int]:
     """start_date - end_date arasını (İKİSİ DE DAHİL) GÜN BAZINDA hassas
     hesaplar - haftanın tamamını değil, sadece aralığa denk düşen günleri
@@ -1471,6 +1484,81 @@ def summarize_hours_range(
                     continue
                 if student_id is not None and block.student_id != student_id:
                     continue
+                if room_id is not None and block.room_id != room_id:
+                    continue
                 totals[block.type] = totals.get(block.type, 0) + 1
         week += _dt.timedelta(days=7)
     return totals
+
+
+
+def summarize_hours_range_by(
+    db: Database, start_date: _dt.date, end_date: _dt.date, attribute: str,
+) -> dict[int, dict[str, int]]:
+    """summarize_hours_range ile AYNI hesabı, ama TÜM öğretmenler/öğrenciler/
+    derslikler için TEK geçişte yapar: {kimlik: {ders_tipi: saat}}.
+
+    Analiz ekranı eskiden her satır için ayrı ayrı summarize_hours_range
+    çağırıyordu; her çağrı aralıktaki bütün haftaların programını baştan
+    kuruyordu (400 öğrenci x 4 hafta = 1600 kez). Burada haftalar bir kez
+    gezilir, bloklar ilgili kimliğe yazılır.
+
+    attribute: 'teacher_id', 'student_id' ya da 'room_id'."""
+    totals: dict[int, dict[str, int]] = {}
+    week = monday_of(start_date)
+    last_week = monday_of(end_date)
+    while week <= last_week:
+        schedule, _pool = get_week_view(db, week)
+        for (day, _period), blocks in schedule.items():
+            cell_date = week + _dt.timedelta(days=day)
+            if not (start_date <= cell_date <= end_date):
+                continue
+            for block in blocks:
+                key = getattr(block, attribute, None)
+                if key is None:
+                    continue
+                bucket = totals.get(key)
+                if bucket is None:
+                    bucket = {t: 0 for t in LESSON_TYPE_LABELS}
+                    totals[key] = bucket
+                bucket[block.type] = bucket.get(block.type, 0) + 1
+        week += _dt.timedelta(days=7)
+    return totals
+
+
+def room_usage_for_week(db: Database, week_start: _dt.date) -> list[dict]:
+    """Bir haftada her dersliğin ne kadar kullanıldığı.
+
+    Her derslik için: kaç (gün, saat) gözünde ders var (dolu), kaç göz boş,
+    toplam göz sayısı ve doluluk yüzdesi. Aynı gözde aynı dersliğe iki ders
+    düşmüşse (çakışma) o göz BİR kez sayılır - "o saatte derslik dolu"
+    denmek isteniyor, ders sayısı değil; toplam ders sayısı ayrıca
+    'blocks' alanında döner.
+
+    Sonuç en çok kullanılandan en aza doğru sıralanır - kullanıcı isteği:
+    "hangi dersliğin ne kadar kullanıldığını takip etmek istiyoruz"."""
+    schedule, _pool = get_week_view(db, week_start)
+    total_slots = max(1, len(db.day_names) * db.period_count)
+    used_cells: dict[int, set] = {}
+    block_counts: dict[int, int] = {}
+    for cell, blocks in schedule.items():
+        for block in blocks:
+            if block.room_id is None:
+                continue
+            used_cells.setdefault(block.room_id, set()).add(cell)
+            block_counts[block.room_id] = block_counts.get(block.room_id, 0) + 1
+
+    rows = []
+    for room in db.list_rows("rooms"):
+        used = len(used_cells.get(room["id"], ()))
+        rows.append({
+            "id": room["id"],
+            "name": room["name"],
+            "used": used,
+            "free": total_slots - used,
+            "total": total_slots,
+            "blocks": block_counts.get(room["id"], 0),
+            "percent": round(100.0 * used / total_slots, 1),
+        })
+    rows.sort(key=lambda r: (-r["used"], r["name"]))
+    return rows

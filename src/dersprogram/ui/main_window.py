@@ -8,9 +8,9 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, Q
 
 from .. import backup, institutions
 from ..db import Database
-from .list_tab import ListTab
 from .schedule_tab import ScheduleTab
 from .subjects_tab import SubjectsTab
+from .rooms_tab import RoomsTab
 from .teachers_tab import TeachersTab
 from .students_tab import StudentsTab
 from .classes_tab import ClassesTab
@@ -110,7 +110,7 @@ class MainWindow(QMainWindow):
         self.teachers_tab = TeachersTab(db, on_change=self._on_reference_change)
         self.students_tab = StudentsTab(db, on_change=self._on_reference_change)
         self.subjects_tab = SubjectsTab(db, on_change=self._on_reference_change)
-        self.rooms_tab = ListTab(db, "rooms", "Derslik", on_change=self._on_reference_change)
+        self.rooms_tab = RoomsTab(db, on_change=self._on_reference_change)
         self.analysis_tab = AnalysisTab(db)
         self.payments_tab = PaymentsTab(db)
         self.settings_tab = SettingsTab(db, on_change=self._on_settings_change, on_restore_requested=self.handle_restore_backup)
@@ -121,7 +121,7 @@ class MainWindow(QMainWindow):
             "ogretmenler": (self.teachers_tab, "Öğretmenler", "Öğretmen tanımları ve haftalık programları"),
             "ogrenciler": (self.students_tab, "Öğrenciler", "Öğrenci tanımları, koç ataması ve haftalık programları"),
             "dersler": (self.subjects_tab, "Dersler", "Ders/branş tanımları, renkleri ve haftalık programları"),
-            "derslikler": (self.rooms_tab, "Derslikler", "Derslik tanımları"),
+            "derslikler": (self.rooms_tab, "Derslikler", "Derslik tanımları, haftalık programları ve doluluk takibi"),
             "analiz": (self.analysis_tab, "Analiz", "Tarih aralığına göre öğretmen/öğrenci saat toplamları"),
             "odemeler": (self.payments_tab, "Ödemeler", "Öğrenci ücretleri, ödemeler ve kalan borç"),
             "ayarlar": (self.settings_tab, "Ayarlar", "Gün ve ders saati sayısı ayarları"),
@@ -140,6 +140,7 @@ class MainWindow(QMainWindow):
             self.students_tab.navigator,
             self.classes_tab.navigator,
             self.subjects_tab.navigator,
+            self.rooms_tab.navigator,
         ]
         for nav in self._week_navigators:
             nav.week_changed.connect(self._sync_week)
@@ -220,6 +221,7 @@ class MainWindow(QMainWindow):
         self.students_tab.refresh_detail()
         self.classes_tab.refresh_detail()
         self.subjects_tab.refresh_detail()
+        self.rooms_tab.refresh_detail()
 
     def show_page(self, page_id: str) -> None:
         widget, title, subtitle = self.pages[page_id]
