@@ -422,6 +422,8 @@ def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, i
 
     schedule: dict[tuple[int, int], list[BlockView]] = {}
     pool: list[BlockView] = []
+    day_count = len(db.day_names)
+    period_count = db.period_count
 
     for row in all_blocks:
         block = _row_to_blockview(row)
@@ -430,7 +432,19 @@ def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, i
         else:
             day, period = row["template_day"], row["template_period"]
 
-        if day is None or period is None:
+        # Gün/ders saati sayısı Ayarlar'dan KÜÇÜLTÜLMÜŞ olabilir (ör. 6
+        # günden 5 güne inilmesi). O durumda eski yerine göre aralık dışına
+        # düşen bir ders programda hiçbir yerde görünmüyor ama "yerleşmiş"
+        # sayılıyordu: ekranda yok, havuzda yok, ama Analiz'de sayılıyordu.
+        # Artık aralık dışı yerleşim ATANMAMIŞ kabul edilir - ders havuzda
+        # görünür ve kullanıcı onu tekrar yerleştirebilir. Veritabanındaki
+        # şablon konumuna DOKUNULMAZ: gün/saat sayısı geri artırılırsa ders
+        # eski yerinde yeniden görünür.
+        out_of_range = (
+            day is not None and period is not None
+            and (not 0 <= day < day_count or not 1 <= period <= period_count)
+        )
+        if day is None or period is None or out_of_range:
             pool.append(block)
         else:
             block.day, block.period = day, period
@@ -1460,6 +1474,7 @@ def summarize_hours_range(
     *,
     teacher_id: int | None = None,
     student_id: int | None = None,
+    class_group_id: int | None = None,
     room_id: int | None = None,
 ) -> dict[str, int]:
     """start_date - end_date arasını (İKİSİ DE DAHİL) GÜN BAZINDA hassas
@@ -1469,7 +1484,11 @@ def summarize_hours_range(
     haftaya özel istisnalar/küçük değişiklikler dahil, bkz. get_week_view)
     hesaba katılır - dönem boyunca bir haftada yapılan tekil bir değişiklik
     (ör. bir dersin o hafta başka güne alınması) da doğru hafta/güne göre
-    sayılır."""
+    sayılır.
+
+    SADECE PROGRAMA YERLEŞMİŞ dersler sayılır; "Atanmamış Dersler"
+    havuzundaki (ve gün/saat aralığı dışına düşmüş) bloklar hiçbir zaman
+    hesaba katılmaz - bkz. get_week_view, havuzu ayrı döner."""
     totals: dict[str, int] = {t: 0 for t in LESSON_TYPE_LABELS}
     week = monday_of(start_date)
     last_week = monday_of(end_date)
@@ -1483,6 +1502,8 @@ def summarize_hours_range(
                 if teacher_id is not None and block.teacher_id != teacher_id:
                     continue
                 if student_id is not None and block.student_id != student_id:
+                    continue
+                if class_group_id is not None and block.class_group_id != class_group_id:
                     continue
                 if room_id is not None and block.room_id != room_id:
                     continue
@@ -1503,7 +1524,10 @@ def summarize_hours_range_by(
     kuruyordu (400 öğrenci x 4 hafta = 1600 kez). Burada haftalar bir kez
     gezilir, bloklar ilgili kimliğe yazılır.
 
-    attribute: 'teacher_id', 'student_id' ya da 'room_id'."""
+    summarize_hours_range gibi, SADECE PROGRAMA YERLEŞMİŞ dersleri sayar -
+    havuzdaki bloklar hesaba katılmaz.
+
+    attribute: 'teacher_id', 'student_id', 'class_group_id' ya da 'room_id'."""
     totals: dict[int, dict[str, int]] = {}
     week = monday_of(start_date)
     last_week = monday_of(end_date)

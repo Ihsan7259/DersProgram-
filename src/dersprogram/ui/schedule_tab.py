@@ -1500,29 +1500,29 @@ class ScheduleTab(QWidget):
         name = next((n for i, n in self._row_entities if i == entity_id), "")
         menu = QMenu(self)
         menu.addAction("Önizleme").triggered.connect(lambda: self._show_row_preview(entity_id))
-        if self.mode != MODE_STUDENT:
-            # Öğrenci görünümü salt-okunur bir özet olduğu için (bkz.
-            # _row_matches_block) burada kaldıracak bir "yerleşim" yok.
-            menu.addSeparator()
-            menu.addAction("Yerleştirilmiş Dersleri Havuza Düşür").triggered.connect(
-                lambda: self._clear_row_assignments(entity_id, name)
-            )
-            # Tür bazlı seçenekler, SADECE o satırda gerçekten yerleşmiş
-            # ders bulunan türler için gösterilir - boş seçeneklerle menüyü
-            # kalabalıklaştırmamak için (yanında kaç saat olduğu da yazar).
-            counts: dict[str, int] = {}
-            for block in self._row_placed_blocks(entity_id):
-                counts[block.type] = counts.get(block.type, 0) + 1
-            available = [t for t in LESSON_TYPES if counts.get(t)]
-            if available:
-                type_menu = menu.addMenu("Ders Türüne Göre Havuza Düşür")
-                for lesson_type in available:
-                    label = f"{theme.lesson_type_label(lesson_type)} ({counts[lesson_type]} saat)"
-                    type_menu.addAction(label).triggered.connect(
-                        lambda _checked=False, t=lesson_type: self._clear_row_assignments(
-                            entity_id, name, lesson_type=t
-                        )
+        menu.addSeparator()
+        # Öğrenci görünümünde de çalışır; oradaki "yerleşim" öğrencinin
+        # KENDİ dersleridir (sınıfın ortak dersleri bu satıra ait değildir,
+        # bkz. _row_matches_block).
+        menu.addAction("Yerleştirilmiş Dersleri Havuza Düşür").triggered.connect(
+            lambda: self._clear_row_assignments(entity_id, name)
+        )
+        # Tür bazlı seçenekler, SADECE o satırda gerçekten yerleşmiş
+        # ders bulunan türler için gösterilir - boş seçeneklerle menüyü
+        # kalabalıklaştırmamak için (yanında kaç saat olduğu da yazar).
+        counts: dict[str, int] = {}
+        for block in self._row_placed_blocks(entity_id):
+            counts[block.type] = counts.get(block.type, 0) + 1
+        available = [t for t in LESSON_TYPES if counts.get(t)]
+        if available:
+            type_menu = menu.addMenu("Ders Türüne Göre Havuza Düşür")
+            for lesson_type in available:
+                label = f"{theme.lesson_type_label(lesson_type)} ({counts[lesson_type]} saat)"
+                type_menu.addAction(label).triggered.connect(
+                    lambda _checked=False, t=lesson_type: self._clear_row_assignments(
+                        entity_id, name, lesson_type=t
                     )
+                )
         return menu
 
     def _show_row_context_menu(self, entity_id: int, global_pos) -> None:
@@ -1570,18 +1570,16 @@ class ScheduleTab(QWidget):
         else:
             self.mode = MODE_STUDENT
 
-        # Öğrenci görünümü salt-okunur bir özet (kişisel + sınıfının ortak
-        # dersleri birlikte) - sürükle-bırak ile yerleştirme buradan
-        # yapılmaz (bkz. _row_matches_block), o yüzden yerleştirmeyle
-        # ilgili havuz/düğmeler karışıklığı önlemek için gizlenir.
-        is_student_mode = self.mode == MODE_STUDENT
-        self.pool_container.setVisible(not is_student_mode)
-        self.add_lesson_button.setVisible(not is_student_mode)
-        self.auto_assign_button.setVisible(not is_student_mode)
-        if is_student_mode:
-            self.undo_auto_assign_button.setVisible(False)
-        elif self._last_auto_assign_block_ids:
-            self.undo_auto_assign_button.setVisible(True)
+        # Üç görünümün üçünde de aynı araçlar açıktır (kullanıcı isteği:
+        # "öğrencilere göre sekmesinden de müdahelede bulunabilmek
+        # istiyorum diğer seçeneklerdeki gibi"). Öğrenci görünümünde
+        # yerleştirilebilen dersler öğrencinin KENDİ dersleridir; sınıfın
+        # ortak dersleri yine "Sınıflara Göre" görünümüne aittir (bkz.
+        # _row_matches_block).
+        self.pool_container.setVisible(True)
+        self.add_lesson_button.setVisible(True)
+        self.auto_assign_button.setVisible(True)
+        self.undo_auto_assign_button.setVisible(bool(self._last_auto_assign_block_ids))
 
         self._selected_row_entity_id = None
         self._update_hint()
@@ -1695,8 +1693,13 @@ class ScheduleTab(QWidget):
                 "Sürükleyip yukarıya bırakın (sadece kendi öğretmeninin satırına). "
                 "Kaldırmak için hücreye çift tıklayın."
             )
-        # MODE_STUDENT: hint_label zaten pool_container ile birlikte gizli
-        # (bkz. _handle_mode_change) - bu görünüm salt-okunur bir özet.
+        else:
+            self.hint_label.setText(
+                "Sürükleyip yukarıya bırakın (sadece kendi öğrencisinin satırına). "
+                "Buradan öğrencinin KENDİ dersleri (birebir, koçluk, ona yazılan etüt/deneme) "
+                "yerleştirilir; sınıfın ortak dersleri 'Sınıflara Göre' görünümüne aittir. "
+                "Kaldırmak için hücreye çift tıklayın."
+            )
 
     # ---------- veri yenileme ----------
     def refresh(self) -> None:
@@ -1968,10 +1971,16 @@ class ScheduleTab(QWidget):
         if self.mode == MODE_CLASS:
             return block.class_group_id == entity_id
         if self.mode == MODE_STUDENT:
-            # Öğrenci görünümü salt-okunur bir özet - havuzdaki bir ders
-            # hiçbir zaman bir öğrenci satırına "ait" sayılmaz (yerleştirme
-            # sınıf/öğretmen görünümünden yapılır, bkz. _handle_mode_change).
-            return False
+            # Öğrenci satırına, öğrencinin KENDİ kişisel dersleri (birebir,
+            # koçluk, ona yazılmış etüt/deneme) aittir - bunlar buradan
+            # yerleştirilip kaldırılabilir (kullanıcı isteği: "öğrencilere
+            # göre sekmesinden de müdahelede bulunabilmek istiyorum").
+            # Sınıfın ORTAK dersleri öğrencinin hücresinde görünür ama
+            # ona ait sayılmaz: onlar tüm sınıfa aittir, yerleri
+            # "Sınıflara Göre" görünümünden değiştirilir - aksi halde tek
+            # bir öğrencinin satırından bütün sınıfın dersi kaydırılmış
+            # olurdu.
+            return block.student_id == entity_id
         return any(m.teacher_id == entity_id for m in self._block_group(block))
 
     def _stack_overflow(self, members: list, day: int, period: int) -> str | None:
@@ -1980,12 +1989,16 @@ class ScheduleTab(QWidget):
         sınır - çakışma uyarısının aksine, 'yine de yerleştir' ile
         aşılamaz."""
         for member in members:
-            row_entity_id = member.class_group_id if self.mode == MODE_CLASS else member.teacher_id
+            if self.mode == MODE_CLASS:
+                row_entity_id, who = member.class_group_id, member.class_name
+            elif self.mode == MODE_STUDENT:
+                row_entity_id, who = member.student_id, member.student_name
+            else:
+                row_entity_id, who = member.teacher_id, member.teacher_name
             if row_entity_id is None:
                 continue
             existing = [b for b in self._cell_blocks(row_entity_id, day, period) if b.id != member.id]
             if len(existing) + 1 > self.MAX_STACKED_PER_CELL:
-                who = member.class_name if self.mode == MODE_CLASS else member.teacher_name
                 return (
                     f"{who} bu saatte zaten {len(existing)} ders içeriyor - bir hücrede en fazla "
                     f"{self.MAX_STACKED_PER_CELL} ders üst üste olabilir."
@@ -2005,7 +2018,19 @@ class ScheduleTab(QWidget):
         if block is None:
             return
         if not self._row_matches_block(block, entity_id):
-            row_word = "sınıfa" if self.mode == MODE_CLASS else "öğretmene"
+            if self.mode == MODE_STUDENT and block.student_id is None:
+                # En sık durum: sınıfın ortak dersi bir öğrenci satırına
+                # bırakılmaya çalışılıyor. Bu ders tek bir öğrenciye değil
+                # bütün sınıfa ait - doğru yeri gösteriyoruz.
+                QMessageBox.warning(
+                    self, "Sınıfın ortak dersi",
+                    f"'{block.pool_label()}' tek bir öğrencinin değil, bütün sınıfın dersi. "
+                    "Yerini değiştirmek için 'Sınıflara Göre' görünümüne geçin.\n\n"
+                    "Bu görünümden öğrencinin kendi dersleri (birebir, koçluk, ona yazılan "
+                    "etüt/deneme) yerleştirilip kaldırılabilir.",
+                )
+                return
+            row_word = {MODE_CLASS: "sınıfa", MODE_STUDENT: "öğrenciye"}.get(self.mode, "öğretmene")
             QMessageBox.warning(
                 self, "Yanlış satır",
                 f"'{block.pool_label()}' dersi bu {row_word} ait değil. "
@@ -2038,15 +2063,24 @@ class ScheduleTab(QWidget):
         self.refresh()
 
     def _handle_remove_request(self, entity_id, day: int, period: int) -> None:
-        if self.mode == MODE_STUDENT:
-            # Öğrenci görünümündeki hücreler kişisel + sınıfının ortak
-            # derslerinin birleşimi olabilir - çift tıklayıp kaldırma
-            # işlemi belirsiz olur, bu yüzden burada devre dışı (kaldırma
-            # işlemi Sınıflara/Öğretmenlere Göre görünümünden yapılır).
-            return
         blocks = self._cell_blocks(entity_id, day, period)
         if not blocks:
             return
+        if self.mode == MODE_STUDENT:
+            # Öğrenci hücresi kişisel + sınıfının ortak derslerinin
+            # birleşimi olabilir. Buradan SADECE öğrencinin kendi dersi
+            # kaldırılır; hücrede yalnızca sınıfın ortak dersi varsa
+            # kullanıcı doğru görünüme yönlendirilir (tek öğrencinin
+            # satırından bütün sınıfın dersi kaldırılmasın).
+            personal = [b for b in blocks if b.student_id == entity_id]
+            if not personal:
+                QMessageBox.information(
+                    self, "Sınıfın ortak dersi",
+                    "Bu saatte öğrencinin kendi dersi yok; görünen ders bütün sınıfın ortak dersi.\n\n"
+                    "Kaldırmak için 'Sınıflara Göre' görünümüne geçin.",
+                )
+                return
+            blocks = personal
         chosen = blocks[0]
         members = self._block_group(chosen)
         label = self._group_label(members)
