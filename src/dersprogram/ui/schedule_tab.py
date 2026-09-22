@@ -1998,10 +1998,12 @@ class ScheduleTab(QWidget):
             # okları); Ana Program satırları da bu sırayı yansıtır.
             self._row_entities = [(r["id"], r["name"]) for r in self.db.list_class_groups()]
         elif self.mode == MODE_TEACHER:
-            rows = self.db.list_teachers()
-            self._row_entities = sorted(
-                ((r["id"], r["name"]) for r in rows), key=lambda pair: scheduling.natural_sort_key(pair[1])
-            )
+            # Öğretmenler de sınıflar gibi elle sıralanabilir (bkz.
+            # TeachersTab yukarı/aşağı okları -> db.move_teacher); Ana
+            # Program satırları o sırayı aynen yansıtır. Burada ADA GÖRE
+            # yeniden sıralamak, Öğretmenler sekmesinde kurulan sırayı
+            # görmezden geliyordu (kullanıcı bildirimi).
+            self._row_entities = [(r["id"], r["name"]) for r in self.db.list_teachers()]
         else:
             rows = self.db.list_students()
             self._row_entities = sorted(
