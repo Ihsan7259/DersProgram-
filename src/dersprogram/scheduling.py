@@ -17,6 +17,8 @@ from .db import (
     TYPE_ONE_ON_ONE,
     TYPE_COACHING,
     TYPE_DEPARTMENT,
+    TYPE_MEETING,
+    GROUP_TYPES,
     TYPE_PROBLEM_SOLVING,
     TYPE_TRIAL,
     TYPE_STUDY,
@@ -152,6 +154,7 @@ class BlockView:
         TYPE_ONE_ON_ONE: "BB",
         TYPE_COACHING: "Koç",
         TYPE_DEPARTMENT: "Züm",
+        TYPE_MEETING: "Top",
         TYPE_PROBLEM_SOLVING: "SÇ",
         TYPE_TRIAL: "Den",
         TYPE_STUDY: "Etüt",
@@ -165,6 +168,7 @@ class BlockView:
         TYPE_ONE_ON_ONE: "Birebir",
         TYPE_COACHING: "Koçluk",
         TYPE_DEPARTMENT: "Zümre",
+        TYPE_MEETING: "Toplantı",
         TYPE_PROBLEM_SOLVING: "Soru Çöz.",
         TYPE_TRIAL: "Deneme",
         TYPE_STUDY: "Etüt",
@@ -197,8 +201,8 @@ class BlockView:
             return self.subject_name or "Birebir", self.student_name or "", self.teacher_name or ""
         if self.type == TYPE_COACHING:
             return "Öğrenci Koçluk", self.student_name or "", self.teacher_name or ""
-        if self.type == TYPE_DEPARTMENT:
-            return "Zümre", self.subject_name or "", self.teacher_name or ""
+        if self.type in GROUP_TYPES:
+            return self.type_label(), self.subject_name or "", self.teacher_name or ""
         return self.type_label(), self.subject_name or "", self.teacher_name or ""
 
     def room_line(self) -> str:
@@ -254,8 +258,8 @@ class BlockView:
             return self.student_with_class() or "Birebir", self.subject_name or "", self.room_line()
         if self.type == TYPE_COACHING:
             return "Öğrenci Koçluk", self.student_with_class(), self.room_line()
-        if self.type == TYPE_DEPARTMENT:
-            return "Zümre", self.subject_name or "", self.room_line()
+        if self.type in GROUP_TYPES:
+            return self.type_label(), self.subject_name or "", self.room_line()
         return self.type_label(), self.subject_name or "", self.room_line()
 
     def student_row_lines(self) -> tuple[str, str, str]:
@@ -326,8 +330,8 @@ class BlockView:
         if row_mode == "student":
             if self.type == TYPE_COACHING:
                 return "Koçluk", short_teacher_name(self.teacher_name)
-            if self.type == TYPE_DEPARTMENT:
-                return "Zümre", short_teacher_name(self.teacher_name)
+            if self.type in GROUP_TYPES:
+                return self.type_label(), short_teacher_name(self.teacher_name)
             return self.subject_name or "Ders", short_teacher_name(self.teacher_name)
         if self.type == TYPE_CLASS:
             return self.class_name or "Ders", self.subject_name or ""
@@ -335,8 +339,8 @@ class BlockView:
             return self.student_name or "Birebir", self.subject_name or ""
         if self.type == TYPE_COACHING:
             return "Koçluk", self.student_name or ""
-        if self.type == TYPE_DEPARTMENT:
-            return "Zümre", self.subject_name or ""
+        if self.type in GROUP_TYPES:
+            return self.type_label(), self.subject_name or ""
         if self.type == TYPE_PROBLEM_SOLVING:
             return "Soru Çöz.", self.subject_name or ""
         return self.type_label(), self.subject_name or self.class_name or ""
@@ -847,7 +851,7 @@ def auto_assign(
     units: list[list[BlockView]] = []
     seen_zumre: set[int] = set()
     for block in pool:
-        if block.type == TYPE_DEPARTMENT and block.zumre_group_id is not None:
+        if block.type in GROUP_TYPES and block.zumre_group_id is not None:
             if block.zumre_group_id in seen_zumre:
                 continue
             seen_zumre.add(block.zumre_group_id)
@@ -932,7 +936,7 @@ def auto_assign(
     group_units: dict[tuple, list[int]] = {}
     group_representative: dict[tuple, BlockView] = {}
     for ui, unit in enumerate(units):
-        if len(unit) == 1 and unit[0].type != TYPE_DEPARTMENT:
+        if len(unit) == 1 and unit[0].type not in GROUP_TYPES:
             key = unit[0].group_key()
             group_units.setdefault(key, []).append(ui)
             group_representative.setdefault(key, unit[0])
@@ -946,7 +950,7 @@ def auto_assign(
     fixed_periods_by_group: dict[tuple, dict[int, set[int]]] = {}
     for blocks in schedule.values():
         for b in blocks:
-            if b.type == TYPE_DEPARTMENT or b.day is None or b.period is None:
+            if b.type in GROUP_TYPES or b.day is None or b.period is None:
                 continue
             fixed_periods_by_group.setdefault(b.group_key(), {}).setdefault(b.day, set()).add(b.period)
 
@@ -1242,7 +1246,7 @@ def _shortfall_warnings(
         rep = unit[0]
         names = ", ".join(sorted(m.teacher_name or "" for m in unit))
         warnings.append(
-            f"Zümre toplantısı ({rep.subject_name or '-'}, {names}): tüm öğretmenlerin birlikte "
+            f"{rep.type_label()} ({rep.subject_name or '-'}, {names}): tüm öğretmenlerin birlikte "
             "müsait olduğu çakışmasız bir saat bulunamadı - müsaitlik durumlarını gözden geçirin."
         )
     return warnings
@@ -1274,7 +1278,7 @@ def explain_unplaced_lessons(
     zumre_units: list[list[BlockView]] = []
     grouped: dict[tuple, list[BlockView]] = {}
     for block in pool:
-        if block.type == TYPE_DEPARTMENT and block.zumre_group_id is not None:
+        if block.type in GROUP_TYPES and block.zumre_group_id is not None:
             if block.zumre_group_id in seen_zumre:
                 continue
             seen_zumre.add(block.zumre_group_id)
@@ -1285,7 +1289,7 @@ def explain_unplaced_lessons(
     fixed_periods_by_group: dict[tuple, dict[int, set[int]]] = {}
     for blocks in schedule.values():
         for b in blocks:
-            if b.type == TYPE_DEPARTMENT or b.day is None or b.period is None:
+            if b.type in GROUP_TYPES or b.day is None or b.period is None:
                 continue
             fixed_periods_by_group.setdefault(b.group_key(), {}).setdefault(b.day, set()).add(b.period)
 

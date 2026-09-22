@@ -23,6 +23,8 @@ from ..db import (
     TYPE_ONE_ON_ONE,
     TYPE_COACHING,
     TYPE_DEPARTMENT,
+    TYPE_MEETING,
+    GROUP_TYPES,
     TYPE_PROBLEM_SOLVING,
     TYPE_TRIAL,
     TYPE_STUDY,
@@ -32,7 +34,7 @@ from ..db import (
 
 TYPE_ORDER = [
     TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_DEPARTMENT,
-    TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
+    TYPE_MEETING, TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
 ]
 
 
@@ -64,7 +66,7 @@ class AddLessonDialog(QDialog):
         self.teacher_label = QLabel("Öğretmen:")
         layout.addRow(self.teacher_label, self.teacher_combo)
 
-        # Zümre: aynı saatte bir araya gelen öğretmenlerin toplantısı -
+        # Zümre/Toplantı: aynı saatte bir araya gelen öğretmenler -
         # her öğretmen ayrı bir kutucukla işaretlenir, hangilerinin
         # eklendiği tek bakışta görülür (liste seçiminden farklı olarak).
         self.teacher_checks: dict[int, QCheckBox] = {}
@@ -154,19 +156,22 @@ class AddLessonDialog(QDialog):
         is_class = t == TYPE_CLASS
         is_one_on_one = t == TYPE_ONE_ON_ONE
         is_coaching = t == TYPE_COACHING
-        is_department = t == TYPE_DEPARTMENT
+        # Zümre ve Toplantı BİREBİR aynı mantıkta çalışır (birden fazla
+        # öğretmen seçilir, hepsi tek grup olarak yerleşir) - sadece adı
+        # ve rengi farklıdır (kullanıcı isteği).
+        is_group = t in GROUP_TYPES
         is_problem = t == TYPE_PROBLEM_SOLVING
         # Deneme/Etüt: öğretmen ZORUNLU değil, sınıf ise seçilebilir -
         # böylece bir deneme sınavı ya da etüt, hocası olmadan doğrudan
         # sınıfın satırına yerleştirilebilir (kullanıcı isteği).
         is_teacherless = t in TEACHERLESS_TYPES
 
-        single_teacher = not is_department
+        single_teacher = not is_group
         self.teacher_label.setVisible(single_teacher)
         self.teacher_combo.setVisible(single_teacher)
         self.teacher_label.setText("Öğretmen (isteğe bağlı):" if is_teacherless else "Öğretmen:")
-        self.teachers_list_label.setVisible(is_department)
-        self.teachers_scroll.setVisible(is_department)
+        self.teachers_list_label.setVisible(is_group)
+        self.teachers_scroll.setVisible(is_group)
 
         show_subject = is_class or is_one_on_one or is_problem or is_teacherless
         self.subject_label.setVisible(show_subject)
@@ -182,7 +187,7 @@ class AddLessonDialog(QDialog):
         self.student_combo.setVisible(show_student)
         self.student_label.setText("Öğrenci (isteğe bağlı):" if is_coaching else "Öğrenci:")
 
-        show_room = is_class or is_one_on_one or is_department or is_teacherless
+        show_room = is_class or is_one_on_one or is_group or is_teacherless
         self.room_label.setVisible(show_room)
         self.room_combo.setVisible(show_room)
 
@@ -192,7 +197,7 @@ class AddLessonDialog(QDialog):
         subject_id = self.subject_combo.currentData() if self.subject_combo.isVisible() else None
         room_id = self.room_combo.currentData() if self.room_combo.isVisible() else None
 
-        if t == TYPE_DEPARTMENT:
+        if t in GROUP_TYPES:
             teacher_ids = [tid for tid, cb in self.teacher_checks.items() if cb.isChecked()]
             if not teacher_ids:
                 QMessageBox.warning(self, "Eksik bilgi", "En az bir öğretmen seçmelisiniz.")
@@ -200,9 +205,9 @@ class AddLessonDialog(QDialog):
             # Her "saat" ayrı bir buluşma: aynı buluşmadaki tüm öğretmenlerin
             # blokları ortak bir zumre_group_id ile bağlanır ki Ana Program'da
             # tek bir ders olarak görünüp birine sürüklenince hepsi aynı
-            # gün/saate yerleşsin (bkz. db.add_zumre_group).
+            # gün/saate yerleşsin (bkz. db.add_group_blocks).
             for _ in range(hours):
-                self.db.add_zumre_group(teacher_ids, subject_id=subject_id, room_id=room_id)
+                self.db.add_group_blocks(teacher_ids, type_=t, subject_id=subject_id, room_id=room_id)
             self.accept()
             return
 

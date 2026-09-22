@@ -11,7 +11,9 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QMimeData, QRect, QSize, QThread, Signal
+import datetime as _dt
+
+from PySide6.QtCore import QMarginsF, QPointF, QRectF, QSizeF, Qt, QMimeData, QRect, QSize, QThread, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QDrag, QFont, QFontMetrics, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,6 +40,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressDialog,
     QToolTip,
+    QRadioButton,
 )
 
 from ..db import (
@@ -47,12 +50,13 @@ from ..db import (
     TYPE_ONE_ON_ONE,
     TYPE_COACHING,
     TYPE_DEPARTMENT,
+    GROUP_TYPES,
     TYPE_PROBLEM_SOLVING,
     TYPE_TRIAL,
     TYPE_STUDY,
 )
 from .. import scheduling
-from .widgets import WeekNavigator, ScopeDialog, MiniScheduleGrid
+from .widgets import WeekNavigator, ScopeDialog, MiniScheduleGrid, divider as _divider
 from .add_lesson_dialog import AddLessonDialog
 from .unplaced_report_dialog import UnplacedReportDialog
 from . import theme
@@ -86,7 +90,11 @@ class _CellDelegate(QStyledItemDelegate):
 
     # Denenecek yazı boyutları (büyükten küçüğe) - hücreye sığan ilk
     # kombinasyon kullanılır.
-    _SIZE_STEPS = (12.0, 10.5, 9.2, 8.0, 6.9, 6.0, 5.2, 4.6)
+    # Üst basamaklar yalnızca hücre gerçekten büyükken devreye girer
+    # (paint'teki max_point_size hücre boyutundan türetilir) - çarşaf
+    # PDF'i gibi yüksek çözünürlüklü çıktılarda yazı da hücreyle
+    # birlikte büyür; ekrandaki görünüm değişmez.
+    _SIZE_STEPS = (30.0, 26.0, 22.0, 18.0, 15.0, 12.0, 10.5, 9.2, 8.0, 6.9, 6.0, 5.2, 4.6)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -310,16 +318,19 @@ class FlowLayout(QLayout):
 
 
 def _group_pool_labels(rep_block, members: list) -> tuple[str, str]:
-    """Bir zümre grubu (birden fazla öğretmenin aynı buluşması) için
-    (kısa, tam) etiket döner; tek üyeli gruplarda normal etiketlere
+    """Bir zümre/toplantı grubu (birden fazla öğretmenin aynı buluşması)
+    için (kısa, tam) etiket döner; tek üyeli gruplarda normal etiketlere
     düşer."""
     if len(members) <= 1:
         return rep_block.pool_label_short(), rep_block.pool_label()
     names = sorted(m.teacher_name or "" for m in members)
-    short = f"Züm · {len(members)} hoca"
+    abbrev = rep_block.type_abbrev()
+    short = f"{abbrev} · {len(members)} hoca"
     if rep_block.subject_name:
-        short = f"Züm · {rep_block.subject_name[:4]} · {len(members)} hoca"
-    full = "Zümre" + (f" · {rep_block.subject_name}" if rep_block.subject_name else "") + " · " + ", ".join(names)
+        short = f"{abbrev} · {rep_block.subject_name[:4]} · {len(members)} hoca"
+    full = rep_block.type_label() + (
+        f" · {rep_block.subject_name}" if rep_block.subject_name else ""
+    ) + " · " + ", ".join(names)
     return short, full
 
 
@@ -329,8 +340,8 @@ def _pool_dense_lines(rep_block, members: list) -> tuple[str, str]:
     bilgisini en kısa şekilde verir, tam bilgi tooltip'te kalır (bkz.
     _group_pool_labels)."""
     teacher_short = scheduling.short_teacher_name(rep_block.teacher_name)
-    if rep_block.type == TYPE_DEPARTMENT:
-        line1 = rep_block.subject_name or "Zümre"
+    if rep_block.type in GROUP_TYPES:
+        line1 = rep_block.subject_name or rep_block.type_label()
         line2 = f"{len(members)} hoca" if len(members) > 1 else teacher_short
     elif rep_block.type == TYPE_CLASS:
         line1 = rep_block.subject_name or "Sınıf Dersi"
@@ -504,6 +515,10 @@ class MainGrid(QTableWidget):
         self._hover_original_state = "normal"
         self._row_entity_ids: list[int] = []
         self._day_names: list[str] = []
+        # None değilse ızgara "çarşaf PDF" boyutlandırmasındadır
+        # (bkz. begin_export_sizing): (sütun genişliği, satır yüksekliği,
+        # isim sütunu genişliği).
+        self._export_sizing: tuple[int, int, int] | None = None
         self._day_count = 1
         self._period_count = 1
         self._zoom = 1.0
@@ -527,7 +542,45 @@ class MainGrid(QTableWidget):
         self._apply_column_sizing()
 
     def row_height(self) -> int:
+        if self._export_sizing is not None:
+            return self._export_sizing[1]
         return max(22, int(38 * self._zoom))
+
+    # ---------- çarşaf PDF'i için sabit, yüksek çözünürlüklü boyutlandırma ----------
+    def begin_export_sizing(self, col_width: int, row_height: int, name_col_width: int) -> None:
+        """Izgarayı, ekran genişliğinden BAĞIMSIZ sabit hücre boyutlarına
+        kilitler - "Toplu Çarşaf Liste" PDF'i ekranda ne kadar yer olduğuna
+        değil, sayfaya göre çizilmelidir. end_export_sizing() ile normale
+        dönülür."""
+        self._export_sizing = (col_width, row_height, name_col_width)
+        self._apply_column_sizing()
+
+    def end_export_sizing(self) -> None:
+        self._export_sizing = None
+        self.verticalHeader().setMinimumWidth(0)
+        self.verticalHeader().setMaximumWidth(16777215)
+        self._apply_column_sizing()
+
+    def _apply_export_sizing(self) -> None:
+        col_width, row_height, name_col_width = self._export_sizing
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Fixed)
+        header.setMinimumSectionSize(1)
+        for col in range(self.columnCount()):
+            self.setColumnWidth(col, col_width)
+        self.verticalHeader().setMinimumWidth(name_col_width)
+        self.verticalHeader().setMaximumWidth(name_col_width)
+        header_px = max(9, min(40, int(col_width * 0.42)))
+        name_px = max(11, min(46, int(row_height * 0.30)))
+        self.setStyleSheet(
+            f"#mainGridHHeader::section {{ font-size: {header_px}px; font-weight:700; padding: 3px 0; }}"
+            f"#mainGridVHeader::section {{ font-size: {name_px}px; font-weight:700; padding: 4px 12px; }}"
+            f"#mainGrid {{ gridline-color: {theme.INK}; border:none; }}"
+        )
+        # Geniş sütunlarda her sütunda gün kısaltması + saat yazılır.
+        self._apply_header_labels(col_width)
+        self.verticalHeader().setDefaultSectionSize(row_height)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -537,7 +590,13 @@ class MainGrid(QTableWidget):
         """Varsayılan yakınlaştırmada (%100) sütunlar pencereye TAM sığar,
         yatay kaydırma hiç gerekmez. Kullanıcı yakınlaştırırsa (zoom>1)
         sütunlar sabit genişlikte büyür ve yatay kaydırma açılır - detay
-        görmek isteyince kaydırma kabul edilebilir, varsayılanda değil."""
+        görmek isteyince kaydırma kabul edilebilir, varsayılanda değil.
+
+        Çarşaf PDF'i sırasında (bkz. begin_export_sizing) ekran genişliği
+        hiç dikkate alınmaz, sabit dışa aktarım boyutları kullanılır."""
+        if self._export_sizing is not None:
+            self._apply_export_sizing()
+            return
         total_columns = self._day_count * self._period_count
         available = self.viewport().width()
         fit_per_column = 34 if available <= 0 else max(8, available // total_columns)
@@ -998,6 +1057,195 @@ def _export_rows_as_multi_page_pdf(
     )
 
 
+# "Toplu Çarşaf Liste" (kullanıcı isteği, aSc k12 çıktısındaki gibi):
+# TÜM sınıflar ya da TÜM öğretmenler alt alta tek bir tabloda, sütunlar
+# gün×saat. A4 YATAY sayfaya göre boyutlandırılır; satır sayısı sığmazsa
+# başlıklar tekrarlanarak sonraki sayfalara bölünür.
+_SHEET_PAGE_W_IN = 11.69   # A4 yatay
+_SHEET_PAGE_H_IN = 8.27
+_SHEET_MARGIN_IN = 0.32
+_SHEET_TITLE_IN = 0.34
+_SHEET_SUBTITLE_IN = 0.22
+_SHEET_FOOTER_IN = 0.20
+_SHEET_NAME_COL_IN = 1.35
+_SHEET_MIN_ROW_IN = 0.26
+_SHEET_MAX_ROW_IN = 0.62
+
+
+def _export_grid_as_sheet_pdf(
+    parent: QWidget,
+    grid: "MainGrid",
+    title: str,
+    week_text: str,
+    visible_rows: list[int],
+    default_filename: str,
+) -> None:
+    """Ana Program ızgarasının TAMAMINI (seçilen satırlarla) tek bir
+    "çarşaf liste" tablosu olarak PDF'e aktarır.
+
+    Her satır kendi sayfasında olan çok sayfalı PDF'in (bkz.
+    _export_rows_as_multi_page_pdf) aksine burada herkes AYNI tabloda
+    görünür - kurum programına tek bakışta bakmak için. Ekrandaki ızgaranın
+    kendisi, sabit ve yüksek çözünürlüklü hücre boyutlarına kilitlenip
+    (begin_export_sizing) sayfa sayfa çizilir; böylece hücrelerin rengi,
+    yazı seçimi ve kısaltma mantığı ekranda görülenle BİREBİR aynı kalır."""
+    if not visible_rows:
+        QMessageBox.information(parent, "Veri Yok", "Şu an dışa aktarılacak satır yok.")
+        return
+    path, _ = QFileDialog.getSaveFileName(parent, "PDF Olarak Kaydet", default_filename, "PDF Dosyası (*.pdf)")
+    if not path:
+        return
+    if not path.lower().endswith(".pdf"):
+        path += ".pdf"
+
+    dpi = _EXPORT_DPI
+    page_w = int(_SHEET_PAGE_W_IN * dpi)
+    page_h = int(_SHEET_PAGE_H_IN * dpi)
+    margin = int(_SHEET_MARGIN_IN * dpi)
+    title_h = int(_SHEET_TITLE_IN * dpi)
+    subtitle_h = int(_SHEET_SUBTITLE_IN * dpi)
+    footer_h = int(_SHEET_FOOTER_IN * dpi)
+    name_col = int(_SHEET_NAME_COL_IN * dpi)
+
+    content_w = page_w - 2 * margin
+    content_h = page_h - 2 * margin - title_h - subtitle_h - footer_h
+    columns = max(1, grid.columnCount())
+    cell_w = max(8, (content_w - name_col) // columns)
+
+    # Önce başlık yüksekliğini öğrenmek için geçici bir boyutlandırma,
+    # sonra kalan yüksekliğe göre satır yüksekliği ve sayfa başına satır.
+    original_hidden = [grid.isRowHidden(r) for r in range(grid.rowCount())]
+    original_scroll = grid.verticalScrollBar().value()
+    original_size = (grid.width(), grid.height())
+    grid.begin_export_sizing(cell_w, int(_SHEET_MIN_ROW_IN * dpi), name_col)
+    # DİKKAT: _render_table_pixmap görselin GENİŞLİĞİ için widget'ın o anki
+    # genişliğini kullanır. Ekranda görünen ızgara sayfadan çok daha dar
+    # olduğu için, önce widget gerçek içerik genişliğine büyütülmeli -
+    # aksi halde çıktıda haftanın sadece ilk birkaç günü görünür.
+    grid_width = name_col + columns * cell_w + 2 * grid.frameWidth()
+    grid.resize(grid_width, grid.height())
+    header_h = grid.horizontalHeader().height() + 2 * grid.frameWidth()
+
+    usable_h = max(int(_SHEET_MIN_ROW_IN * dpi), content_h - header_h)
+    row_h = usable_h // max(1, len(visible_rows))
+    row_h = max(int(_SHEET_MIN_ROW_IN * dpi), min(int(_SHEET_MAX_ROW_IN * dpi), row_h))
+    rows_per_page = max(1, usable_h // row_h)
+
+    # İsim sütunu, EN UZUN satır adına göre ölçülür - sabit bir genişlikte
+    # "Konfiçyüs TYT-AYT" gibi adlar kırpılıyordu. Satır yüksekliği belli
+    # olduktan sonra yapılır, çünkü yazı boyutu ondan türetiliyor (bkz.
+    # _apply_export_sizing).
+    name_font = QFont(grid.font())
+    name_font.setBold(True)
+    name_font.setPixelSize(max(11, min(46, int(row_h * 0.30))))
+    name_metrics = QFontMetrics(name_font)
+    longest = 0
+    for row in visible_rows:
+        item = grid.verticalHeaderItem(row)
+        if item is not None:
+            longest = max(longest, name_metrics.horizontalAdvance(item.text()))
+    name_col = max(int(1.05 * dpi), min(int(2.2 * dpi), longest + int(0.26 * dpi)))
+    cell_w = max(8, (content_w - name_col) // columns)
+    grid_width = name_col + columns * cell_w + 2 * grid.frameWidth()
+
+    grid.begin_export_sizing(cell_w, row_h, name_col)
+    grid.resize(grid_width, grid.height())
+
+    pages = [visible_rows[i:i + rows_per_page] for i in range(0, len(visible_rows), rows_per_page)]
+
+    writer = QPdfWriter(path)
+    writer.setResolution(dpi)
+    writer.setPageSize(QPageSize(QSizeF(_SHEET_PAGE_W_IN, _SHEET_PAGE_H_IN), QPageSize.Unit.Inch))
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0))
+    painter: QPainter | None = None
+    created = _dt.date.today().strftime("%d.%m.%Y")
+
+    try:
+        for page_index, chunk in enumerate(pages):
+            wanted = set(chunk)
+            for row in range(grid.rowCount()):
+                grid.setRowHidden(row, row not in wanted)
+            grid_pixmap = _render_table_pixmap(grid)
+
+            if painter is None:
+                painter = QPainter(writer)
+            else:
+                writer.newPage()
+
+            painter.fillRect(QRectF(0, 0, page_w, page_h), Qt.white)
+
+            title_font = QFont(painter.font())
+            title_font.setBold(True)
+            title_font.setPixelSize(max(10, int(title_h * 0.62)))
+            painter.setFont(title_font)
+            painter.setPen(QColor(theme.INK))
+            heading = f"Toplu Çarşaf Liste : {title}"
+            if len(pages) > 1:
+                heading += f"  ({page_index + 1}/{len(pages)})"
+            painter.drawText(QRectF(margin, margin, content_w, title_h), Qt.AlignCenter, heading)
+
+            subtitle_font = QFont(painter.font())
+            subtitle_font.setBold(False)
+            subtitle_font.setPixelSize(max(8, int(subtitle_h * 0.62)))
+            painter.setFont(subtitle_font)
+            painter.setPen(QColor(theme.INK_MUTED_58))
+            painter.drawText(
+                QRectF(margin, margin + title_h, content_w, subtitle_h), Qt.AlignCenter, week_text,
+            )
+
+            # Izgara, içerik alanına oranı bozulmadan sığdırılır (satır
+            # sayısı az olduğunda zaten tam oturur).
+            top = margin + title_h + subtitle_h
+            scale = min(1.0, content_w / max(1, grid_pixmap.width()), content_h / max(1, grid_pixmap.height()))
+            draw_w = grid_pixmap.width() * scale
+            draw_h = grid_pixmap.height() * scale
+            left = margin + (content_w - draw_w) / 2
+            painter.drawPixmap(
+                QRectF(left, top, draw_w, draw_h), grid_pixmap, QRectF(grid_pixmap.rect()),
+            )
+
+            # Günleri birbirinden ayıran kalın dikey çizgiler - aSc'nin
+            # çarşaf listesindeki gibi, hangi sütunun hangi güne ait
+            # olduğu tek bakışta görünsün (ince ızgara çizgileri 48
+            # sütunda birbirine karışıyordu).
+            periods = max(1, getattr(grid, "_period_count", 1))
+            day_count = max(1, columns // periods)
+            pen = QPen(QColor(theme.INK))
+            pen.setWidth(max(2, int(0.012 * dpi)))
+            painter.setPen(pen)
+            for day in range(day_count + 1):
+                x = left + (grid.frameWidth() + name_col + day * periods * cell_w) * scale
+                painter.drawLine(QPointF(x, top), QPointF(x, top + draw_h))
+
+            footer_font = QFont(painter.font())
+            footer_font.setPixelSize(max(7, int(footer_h * 0.55)))
+            painter.setFont(footer_font)
+            painter.setPen(QColor(theme.INK_MUTED_58))
+            footer_top = page_h - margin - footer_h
+            painter.drawText(
+                QRectF(margin, footer_top, content_w, footer_h),
+                Qt.AlignLeft | Qt.AlignVCenter, f"Ders Planı Oluşturuldu: {created}",
+            )
+            painter.drawText(
+                QRectF(margin, footer_top, content_w, footer_h),
+                Qt.AlignRight | Qt.AlignVCenter, f"Sayfa {page_index + 1}/{len(pages)}",
+            )
+    finally:
+        if painter is not None:
+            painter.end()
+        for row, hidden in enumerate(original_hidden):
+            grid.setRowHidden(row, hidden)
+        grid.resize(*original_size)
+        grid.end_export_sizing()
+        grid.verticalScrollBar().setValue(original_scroll)
+
+    QMessageBox.information(
+        parent, "PDF Oluşturuldu",
+        f"{len(visible_rows)} satırlık toplu çarşaf liste kaydedildi "
+        f"({len(pages)} sayfa):\n{path}",
+    )
+
+
 class RowExportFilterDialog(QDialog):
     """PDF'e aktarmadan önce HANGİ sınıf/öğretmen/öğrencilerin dahil
     edileceğini ders türüne göre seçtirir - kullanıcı isteği: "çok fazla
@@ -1005,16 +1253,34 @@ class RowExportFilterDialog(QDialog):
     olanlar, koçluğu olanlar gibi seçim ekleyelim".
 
     İşaretli türlerden EN AZ BİRİNE sahip olan satırlar aktarılır; hiç
-    dersi olmayanlar varsayılan olarak atlanır (boş sayfa üretmesinler)."""
+    dersi olmayanlar varsayılan olarak atlanır (boş sayfa üretmesinler).
+
+    Ayrıca ÇIKTI BİÇİMİ seçilir (kullanıcı isteği): her kişi/sınıf kendi
+    sayfasında (mevcut davranış) ya da hepsi tek tabloda "toplu çarşaf
+    liste" olarak."""
+
+    FORMAT_PER_ROW = "per_row"
+    FORMAT_SHEET = "sheet"
 
     def __init__(self, title: str, row_entities, types_by_entity, parent=None):
         super().__init__(parent)
         self.setWindowTitle("PDF'e Aktarılacaklar")
-        self.resize(460, 380)
+        self.resize(480, 460)
         self._row_entities = list(row_entities)
         self._types_by_entity = types_by_entity
 
         layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Çıktı biçimi:"))
+        self.per_row_radio = QRadioButton("Herkes kendi sayfasında (ayrıntılı haftalık program)")
+        self.per_row_radio.setChecked(True)
+        layout.addWidget(self.per_row_radio)
+        self.sheet_radio = QRadioButton("Toplu çarşaf liste (hepsi tek tabloda, A4 yatay)")
+        layout.addWidget(self.sheet_radio)
+        self.format_group = QButtonGroup(self)
+        self.format_group.addButton(self.per_row_radio)
+        self.format_group.addButton(self.sheet_radio)
+        layout.addWidget(_divider())
+
         layout.addWidget(QLabel(
             f"{title} için hangi dersleri olanlar PDF'e aktarılsın?\n"
             "İşaretlediğiniz türlerden en az birine sahip olanlar dahil edilir."
@@ -1064,6 +1330,9 @@ class RowExportFilterDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._update_count()
+
+    def selected_format(self) -> str:
+        return self.FORMAT_SHEET if self.sheet_radio.isChecked() else self.FORMAT_PER_ROW
 
     def _set_all(self, checked: bool) -> None:
         for check in self.type_checks.values():
@@ -1452,6 +1721,20 @@ class ScheduleTab(QWidget):
             )
             return
         stem = self._PDF_FILENAME_BY_MODE.get(self.mode, "program")
+        if dialog.selected_format() == RowExportFilterDialog.FORMAT_SHEET:
+            # Toplu çarşaf liste: seçilen satırlar ekrandaki ızgaranın
+            # kendisinden, tek bir tablo olarak çizilir.
+            selected_ids = {entity_id for entity_id, _name in selected}
+            rows = [
+                row for row, (entity_id, _name) in enumerate(self._row_entities)
+                if entity_id in selected_ids
+            ]
+            _export_grid_as_sheet_pdf(
+                self, self.grid, self._PDF_TITLE_BY_MODE.get(self.mode, "Program"),
+                scheduling.week_label(self.navigator.week_start, len(self.db.day_names)),
+                rows, f"{stem}_carsaf_liste.pdf",
+            )
+            return
         _export_rows_as_multi_page_pdf(
             self, self.db, self.navigator.week_start, self.mode, selected,
             self._cell_blocks, f"{stem}_haftalik_program.pdf",
@@ -1962,7 +2245,7 @@ class ScheduleTab(QWidget):
         if len(members) <= 1:
             return members[0].pool_label()
         names = sorted(m.teacher_name or "" for m in members)
-        return "Zümre (" + ", ".join(names) + ")"
+        return f"{members[0].type_label()} (" + ", ".join(names) + ")"
 
     # ---------- yerleştirme / kaldırma ----------
     MAX_STACKED_PER_CELL = 2

@@ -16,13 +16,14 @@ TYPE_CLASS = "sinif"        # normal sınıf dersi
 TYPE_ONE_ON_ONE = "birebir"  # birebir ders
 TYPE_COACHING = "kocluk"     # öğrenci koçluk
 TYPE_DEPARTMENT = "zumre"    # zümre toplantısı
+TYPE_MEETING = "toplanti"    # toplantı (zümre ile AYNI mantık, farklı ad)
 TYPE_PROBLEM_SOLVING = "soru_cozum"  # soru çözümü
 TYPE_TRIAL = "deneme"        # deneme sınavı (öğretmen zorunlu değil)
 TYPE_STUDY = "etut"          # etüt (öğretmen zorunlu değil)
 
 LESSON_TYPES = [
     TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_DEPARTMENT,
-    TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
+    TYPE_MEETING, TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
 ]
 
 LESSON_TYPE_LABELS = {
@@ -30,10 +31,19 @@ LESSON_TYPE_LABELS = {
     TYPE_ONE_ON_ONE: "Birebir Ders",
     TYPE_COACHING: "Öğrenci Koçluk",
     TYPE_DEPARTMENT: "Zümre",
+    TYPE_MEETING: "Toplantı",
     TYPE_PROBLEM_SOLVING: "Soru Çözümü",
     TYPE_TRIAL: "Deneme",
     TYPE_STUDY: "Etüt",
 }
+
+# Birden fazla öğretmenin AYNI anda katıldığı, programa TEK BİR GRUP
+# olarak yerleşen tipler. Her katılımcı için ayrı bir blok açılır ama
+# hepsi ortak bir zumre_group_id ile bağlanır; havuzda tek kart görünür,
+# biri sürüklendiğinde hepsi aynı gün/saate gider (bkz. add_group_blocks,
+# scheduling.find_group_conflicts). Toplantı, zümreyle birebir aynı
+# mantıkta çalışır - sadece adı ve rengi farklıdır (kullanıcı isteği).
+GROUP_TYPES = {TYPE_DEPARTMENT, TYPE_MEETING}
 
 # Bu tiplerde öğretmen seçmek ZORUNLU DEĞİL - deneme sınavı ya da etüt bir
 # sınıfa (ya da bir dersliğe) öğretmensiz de yazılabilir. Bu durumda blok
@@ -744,19 +754,25 @@ class Database:
         self.conn.commit()
         return ids
 
-    def add_zumre_group(
+    def add_group_blocks(
         self,
         teacher_ids: list[int],
+        type_: str = TYPE_DEPARTMENT,
         subject_id: int | None = None,
         room_id: int | None = None,
         note: str = "",
     ) -> list[int]:
-        """Bir zümre 'buluşması' = seçilen tüm öğretmenler için, ortak bir
-        zumre_group_id ile birbirine bağlı birer blok. Ana Program'da bu
-        grup tek bir atanmamış ders olarak görünür; herhangi bir üyenin
-        satırına sürüklenip bırakıldığında tüm grup aynı gün/saate
-        yerleştirilir (bkz. scheduling.find_group_conflicts,
-        schedule_tab.ScheduleTab._group_members)."""
+        """Bir zümre/toplantı 'buluşması' = seçilen tüm öğretmenler için,
+        ortak bir zumre_group_id ile birbirine bağlı birer blok. Ana
+        Program'da bu grup tek bir atanmamış ders olarak görünür; herhangi
+        bir üyenin satırına sürüklenip bırakıldığında tüm grup aynı
+        gün/saate yerleştirilir (bkz. scheduling.find_group_conflicts,
+        schedule_tab.ScheduleTab._group_members).
+
+        type_ GROUP_TYPES içinden biri olmalıdır (zümre ya da toplantı);
+        ikisi de tamamen aynı mantıkla çalışır."""
+        if type_ not in GROUP_TYPES:
+            raise ValueError(f"Grup dersi olamayacak tip: {type_}")
         ids = []
         for teacher_id in teacher_ids:
             cur = self.conn.execute(
@@ -764,7 +780,7 @@ class Database:
                 INSERT INTO lesson_blocks(type, teacher_id, subject_id, room_id, note)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (TYPE_DEPARTMENT, teacher_id, subject_id, room_id, note),
+                (type_, teacher_id, subject_id, room_id, note),
             )
             ids.append(cur.lastrowid)
         group_id = min(ids)
@@ -774,6 +790,10 @@ class Database:
         )
         self.conn.commit()
         return ids
+
+    def add_zumre_group(self, teacher_ids: list[int], **kwargs) -> list[int]:
+        """Geriye dönük ad - add_group_blocks'un zümreye sabitlenmiş hali."""
+        return self.add_group_blocks(teacher_ids, type_=TYPE_DEPARTMENT, **kwargs)
 
     # ---------- sınıf ders hedefleri (müfredat) ----------
     def list_class_curriculum(self, class_group_id: int) -> list[sqlite3.Row]:
