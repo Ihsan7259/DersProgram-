@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtCore import Qt
 
-from ..db import Database
+from ..db import Database, LESSON_TYPE_LABELS, TYPE_STUDY, CLASS_CURRICULUM_TYPES
 from .. import scheduling
 from .widgets import WeekNavigator, AvailabilityGrid, SummaryTable, ScopeDialog, section_title as _section_title, divider as _divider
 from . import theme
@@ -147,6 +147,16 @@ class ClassesTab(QWidget):
         right_layout.addWidget(_section_title("Hedef Ders Saatleri"))
 
         curriculum_form = QHBoxLayout()
+        # Tür: etüt de bir hedef olarak yazılabilir (kullanıcı isteği -
+        # "etüdü birebir ve sınıf dersi gibi düşün"). Etütte ders ve
+        # öğretmen isteğe bağlıdır; etüt hiçbir çakışmaya girmez (bkz.
+        # db.NON_BLOCKING_TYPES).
+        curriculum_form.addWidget(QLabel("Tür:"))
+        self.curriculum_type_combo = QComboBox()
+        for lesson_type in CLASS_CURRICULUM_TYPES:
+            self.curriculum_type_combo.addItem(LESSON_TYPE_LABELS[lesson_type], lesson_type)
+        self.curriculum_type_combo.currentIndexChanged.connect(self._handle_curriculum_type_changed)
+        curriculum_form.addWidget(self.curriculum_type_combo, 1)
         curriculum_form.addWidget(QLabel("Ders:"))
         self.curriculum_subject_combo = QComboBox()
         self.curriculum_subject_combo.currentIndexChanged.connect(self._reload_curriculum_teachers)
@@ -256,6 +266,8 @@ class ClassesTab(QWidget):
         previous = self.curriculum_subject_combo.currentData()
         self.curriculum_subject_combo.blockSignals(True)
         self.curriculum_subject_combo.clear()
+        if self._curriculum_is_study():
+            self.curriculum_subject_combo.addItem("(Genel etüt)", None)
         for row in self.db.list_rows("subjects"):
             self.curriculum_subject_combo.addItem(row["name"], row["id"])
         if previous is not None:
@@ -282,13 +294,34 @@ class ClassesTab(QWidget):
     def _reload_curriculum_teachers(self) -> None:
         """Seçilen dersin branşına sahip öğretmenleri listeler; o branşta
         kimse yoksa (kimseye branş atanmamışsa) tüm öğretmenler gösterilir."""
-        subject_name = self.curriculum_subject_combo.currentText()
+        subject_name = (
+            self.curriculum_subject_combo.currentText()
+            if self.curriculum_subject_combo.currentData() is not None else ""
+        )
         self.curriculum_teacher_combo.clear()
+        if self._curriculum_is_study():
+            self.curriculum_teacher_combo.addItem("(Öğretmensiz)", None)
         teachers = self.db.list_teachers_by_subject_area(subject_name) if subject_name else []
         if not teachers:
             teachers = self.db.list_teachers()
         for teacher in teachers:
             self.curriculum_teacher_combo.addItem(teacher["name"], teacher["id"])
+
+    def _handle_curriculum_type_changed(self) -> None:
+        """Tür değişince ders/öğretmen listeleri yeniden kurulur. Etüde
+        geçildiğinde varsayılan "(Genel etüt)" ve "(Öğretmensiz)" olur -
+        önceki dersin (ör. Fizik) etüde taşınıp yanlışlıkla "Fizik etüdü"
+        açılmasın. Var olan bir hedef seçilince (bkz.
+        _handle_curriculum_selection) ders/öğretmen bundan SONRA hedefin
+        kendi değerleriyle doldurulur."""
+        self._reload_curriculum_subjects()
+        if self._curriculum_is_study():
+            self.curriculum_subject_combo.setCurrentIndex(0)   # (Genel etüt)
+            self.curriculum_teacher_combo.setCurrentIndex(0)   # (Öğretmensiz)
+
+    def _curriculum_is_study(self) -> bool:
+        combo = getattr(self, "curriculum_type_combo", None)
+        return combo is not None and combo.currentData() == TYPE_STUDY
 
     def refresh_curriculum(self) -> None:
         self.curriculum_table.setRowCount(0)
@@ -312,7 +345,10 @@ class ClassesTab(QWidget):
             else:
                 status = "✓ tamam"
 
-            item_subject = QTableWidgetItem(row["subject_name"] or "-")
+            subject_text = row["subject_name"] or "-"
+            if row["lesson_type"] == TYPE_STUDY:
+                subject_text = "Etüt" + (f" · {row['subject_name']}" if row["subject_name"] else "")
+            item_subject = QTableWidgetItem(subject_text)
             item_subject.setData(Qt.UserRole, row["id"])
             cells = [
                 item_subject,
@@ -343,19 +379,24 @@ class ClassesTab(QWidget):
             return
         subject_id = self.curriculum_subject_combo.currentData()
         teacher_id = self.curriculum_teacher_combo.currentData()
-        if subject_id is None:
-            QMessageBox.warning(self, "Eksik bilgi", "Önce Dersler sekmesinden en az bir ders tanımlayın.")
-            return
-        if teacher_id is None:
-            QMessageBox.warning(self, "Eksik bilgi", "Önce Öğretmenler sekmesinden en az bir öğretmen ekleyin.")
-            return
+        lesson_type = self.curriculum_type_combo.currentData()
+        # Etütte ders ve öğretmen isteğe bağlı (genel, öğretmensiz etüt).
+        if lesson_type != TYPE_STUDY:
+            if subject_id is None:
+                QMessageBox.warning(self, "Eksik bilgi", "Önce Dersler sekmesinden en az bir ders tanımlayın.")
+                return
+            if teacher_id is None:
+                QMessageBox.warning(self, "Eksik bilgi", "Önce Öğretmenler sekmesinden en az bir öğretmen ekleyin.")
+                return
         hours = self.curriculum_hours_spin.value()
         room_id = self.curriculum_room_combo.currentData()
-        self.db.add_class_curriculum(self.selected_id, subject_id, teacher_id, hours, room_id=room_id)
+        self.db.add_class_curriculum(
+            self.selected_id, subject_id, teacher_id, hours, room_id=room_id, lesson_type=lesson_type,
+        )
         self.refresh_curriculum()
         QMessageBox.information(
             self, "Eklendi",
-            f"{hours} saat ders 'Atanmamış Dersler' havuzuna eklendi. "
+            f"{hours} saat {LESSON_TYPE_LABELS[lesson_type].lower()} 'Atanmamış Dersler' havuzuna eklendi. "
             "Ana Program'dan sürükleyerek ya da 'Oto Ata' ile yerleştirebilirsiniz.",
         )
         if self.on_change:
@@ -378,6 +419,13 @@ class ClassesTab(QWidget):
         if row is None:
             return
 
+        # Önce tür: ders/öğretmen listeleri ona göre (etütte "(Genel
+        # etüt)"/"(Öğretmensiz)" seçenekleriyle) yeniden kurulur.
+        idx_type = self.curriculum_type_combo.findData(row["lesson_type"])
+        self.curriculum_type_combo.setCurrentIndex(idx_type if idx_type >= 0 else 0)
+        if row["subject_id"] is None and self._curriculum_is_study():
+            self.curriculum_subject_combo.setCurrentIndex(0)
+
         idx_subject = self.curriculum_subject_combo.findData(row["subject_id"])
         if idx_subject >= 0:
             self.curriculum_subject_combo.setCurrentIndex(idx_subject)  # _reload_curriculum_teachers'i tetikler
@@ -389,6 +437,8 @@ class ClassesTab(QWidget):
             # için combo'ya ekleyelim, aksi halde güncellerken kaybolur.
             self.curriculum_teacher_combo.addItem(row["teacher_name"], row["teacher_id"])
             idx_teacher = self.curriculum_teacher_combo.count() - 1
+        if row["teacher_id"] is None and self._curriculum_is_study():
+            idx_teacher = 0
         if idx_teacher >= 0:
             self.curriculum_teacher_combo.setCurrentIndex(idx_teacher)
 
@@ -404,15 +454,20 @@ class ClassesTab(QWidget):
             return
         subject_id = self.curriculum_subject_combo.currentData()
         teacher_id = self.curriculum_teacher_combo.currentData()
-        if subject_id is None:
-            QMessageBox.warning(self, "Eksik bilgi", "Önce Dersler sekmesinden en az bir ders tanımlayın.")
-            return
-        if teacher_id is None:
-            QMessageBox.warning(self, "Eksik bilgi", "Önce Öğretmenler sekmesinden en az bir öğretmen ekleyin.")
-            return
+        lesson_type = self.curriculum_type_combo.currentData()
+        # Etütte ders ve öğretmen isteğe bağlı (genel, öğretmensiz etüt).
+        if lesson_type != TYPE_STUDY:
+            if subject_id is None:
+                QMessageBox.warning(self, "Eksik bilgi", "Önce Dersler sekmesinden en az bir ders tanımlayın.")
+                return
+            if teacher_id is None:
+                QMessageBox.warning(self, "Eksik bilgi", "Önce Öğretmenler sekmesinden en az bir öğretmen ekleyin.")
+                return
         hours = self.curriculum_hours_spin.value()
         room_id = self.curriculum_room_combo.currentData()
-        self.db.update_class_curriculum(curriculum_id, subject_id, teacher_id, hours, room_id=room_id)
+        self.db.update_class_curriculum(
+            curriculum_id, subject_id, teacher_id, hours, room_id=room_id, lesson_type=lesson_type,
+        )
         self.refresh_curriculum()
         QMessageBox.information(self, "Güncellendi", "Ders hedefi güncellendi.")
         if self.on_change:

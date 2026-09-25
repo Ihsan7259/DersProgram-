@@ -51,6 +51,7 @@ from ..db import (
     TYPE_COACHING,
     TYPE_DEPARTMENT,
     GROUP_TYPES,
+    NON_BLOCKING_TYPES,
     TYPE_PROBLEM_SOLVING,
     TYPE_TRIAL,
     TYPE_STUDY,
@@ -2026,12 +2027,12 @@ class ScheduleTab(QWidget):
             # görünür ve oraya yerleştirilebilir.
             return [b for b in blocks if b.class_group_id == entity_id]
         if self.mode == MODE_STUDENT:
-            class_group_id = self._student_class_group_ids.get(entity_id)
-            return [
-                b for b in blocks
-                if b.student_id == entity_id
-                or (class_group_id is not None and b.class_group_id == class_group_id)
-            ]
+            # Kendi dersleri + sınıfının dersleri; sınıfın etüt saatine
+            # öğrencinin kendi dersi konmuşsa etüt o hücrede gösterilmez
+            # (bkz. scheduling.student_cell_blocks).
+            return scheduling.student_cell_blocks(
+                blocks, entity_id, self._student_class_group_ids.get(entity_id),
+            )
         return [b for b in blocks if b.teacher_id == entity_id]
 
     def _debt_student_ids(self) -> set[int]:
@@ -2282,7 +2283,15 @@ class ScheduleTab(QWidget):
                 row_entity_id, who = member.teacher_id, member.teacher_name
             if row_entity_id is None:
                 continue
-            existing = [b for b in self._cell_blocks(row_entity_id, day, period) if b.id != member.id]
+            # Etüt yer kaplamaz (bkz. db.NON_BLOCKING_TYPES): ne kendisi bu
+            # sınıra takılır ne de hücredeki bir etüt başka bir dersin
+            # oraya konmasını engeller.
+            if member.type in NON_BLOCKING_TYPES:
+                continue
+            existing = [
+                b for b in self._cell_blocks(row_entity_id, day, period)
+                if b.id != member.id and b.type not in NON_BLOCKING_TYPES
+            ]
             if len(existing) + 1 > self.MAX_STACKED_PER_CELL:
                 return (
                     f"{who} bu saatte zaten {len(existing)} ders içeriyor - bir hücrede en fazla "

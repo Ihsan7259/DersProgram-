@@ -19,6 +19,8 @@ from .db import (
     TYPE_DEPARTMENT,
     TYPE_MEETING,
     GROUP_TYPES,
+    NON_BLOCKING_TYPES,
+    TEACHERLESS_TYPES,
     TYPE_PROBLEM_SOLVING,
     TYPE_TRIAL,
     TYPE_STUDY,
@@ -332,6 +334,11 @@ class BlockView:
                 return "Koçluk", short_teacher_name(self.teacher_name)
             if self.type in GROUP_TYPES:
                 return self.type_label(), short_teacher_name(self.teacher_name)
+            if self.type in TEACHERLESS_TYPES:
+                # Etüt/Deneme: dersi yazılmamış (genel) etütte hiçbir şey
+                # anlatmayan "Ders" yerine tipin kendisi yazılır; derse
+                # özel etütte "Etüt" üstte, ders adı altta görünür.
+                return self.type_label(), self.subject_name or short_teacher_name(self.teacher_name)
             return self.subject_name or "Ders", short_teacher_name(self.teacher_name)
         if self.type == TYPE_CLASS:
             return self.class_name or "Ders", self.subject_name or ""
@@ -484,7 +491,13 @@ def find_conflicts(
     unavailable: "UnavailableSlots | None" = None,
 ) -> list[str]:
     """Bir bloğu (day, period)'a koymanın doğuracağı çakışmaları
-    insan-okunur mesajlar olarak döner. Boş liste = sorun yok."""
+    insan-okunur mesajlar olarak döner. Boş liste = sorun yok.
+
+    Etüt (NON_BLOCKING_TYPES) hiçbir çakışmaya girmez: etüt başka bir
+    dersin olduğu saate konabilir, ve etüdün olduğu saat başka bir ders
+    için BOŞ sayılır - ör. sınıfının etüt saatinde öğrenciye birebir ya da
+    koçluk yerleştirilebilir (kullanıcı isteği). "Müsait değil"
+    işaretleri ise etüt için de geçerlidir."""
     reasons = []
     if unavailable:
         if block.teacher_id is not None and (block.teacher_id, day, period) in unavailable.teacher:
@@ -493,8 +506,10 @@ def find_conflicts(
             reasons.append(f"{block.student_name} bu saatte müsait değil olarak işaretlenmiş")
         if block.class_group_id is not None and (block.class_group_id, day, period) in unavailable.class_:
             reasons.append(f"{block.class_name} bu saatte müsait değil olarak işaretlenmiş")
+    if block.type in NON_BLOCKING_TYPES:
+        return reasons
     for other in schedule.get((day, period), []):
-        if other.id == block.id:
+        if other.id == block.id or other.type in NON_BLOCKING_TYPES:
             continue
         if block.teacher_id is not None and other.teacher_id == block.teacher_id:
             reasons.append(f"{other.teacher_name} bu saatte zaten dolu")
@@ -887,9 +902,12 @@ def auto_assign(
 
     def add_resource_constraint(key_fn) -> None:
         """Aynı kaynağı (öğretmen/sınıf/öğrenci/derslik) paylaşan
-        birimlerin aynı (gün, saat)'e birden fazlası yerleşemez."""
+        birimlerin aynı (gün, saat)'e birden fazlası yerleşemez. Etüt
+        (NON_BLOCKING_TYPES) kaynak tüketmez - bkz. find_conflicts."""
         buckets: dict[tuple, dict[tuple[int, int], list[int]]] = {}
         for ui, unit in enumerate(units):
+            if all(b.type in NON_BLOCKING_TYPES for b in unit):
+                continue
             for key in key_fn(unit):
                 for (d, p) in domains[ui]:
                     buckets.setdefault(key, {}).setdefault((d, p), []).append(ui)
@@ -915,7 +933,10 @@ def auto_assign(
             if b.type == TYPE_CLASS and b.class_group_id is not None:
                 for (d, p) in domains[ui]:
                     class_slot_units.setdefault(b.class_group_id, {}).setdefault((d, p), []).append(ui)
-            if b.student_id is not None and b.student_class_group_id is not None:
+            if (
+                b.student_id is not None and b.student_class_group_id is not None
+                and b.type not in NON_BLOCKING_TYPES
+            ):
                 for (d, p) in domains[ui]:
                     personal_slot_units.setdefault(b.student_class_group_id, {}).setdefault((d, p), []).append(ui)
     for class_id, class_by_slot in class_slot_units.items():
@@ -1391,14 +1412,39 @@ def student_effective_blocks(
     schedule, _pool = get_week_view(db, week_start)
     filtered: dict[tuple[int, int], list[BlockView]] = {}
     for cell, blocks in schedule.items():
-        matched = [
-            b for b in blocks
-            if b.student_id == student_id
-            or (class_group_id is not None and b.class_group_id == class_group_id)
-        ]
+        matched = student_cell_blocks(blocks, student_id, class_group_id)
         if matched:
             filtered[cell] = matched
     return filtered
+
+
+def student_cell_blocks(
+    blocks: list[BlockView], student_id: int, class_group_id: int | None,
+) -> list[BlockView]:
+    """Bir (gün, saat) hücresindeki bloklardan, o öğrencinin programında
+    görünmesi gerekenler: kendi dersleri + sınıfına yazılan dersler.
+
+    Tek istisna etüt: sınıfın etüt saatine öğrencinin KENDİ bir dersi
+    (birebir, koçluk...) konmuşsa öğrenci o saatte etütte değil, o
+    derstedir - sınıfın etüdü o hücrede öğrencinin programından düşer
+    (kullanıcı isteği: sistem etüt saatini boş görüp oraya birebir/koçluk
+    koyabilsin; koyduktan sonra öğrencinin programında o ders görünsün).
+    Ana Program'ın öğrenci satırı da (bkz. ScheduleTab._cell_blocks)
+    aynı kuralı kullanır."""
+    matched = [
+        b for b in blocks
+        if b.student_id == student_id
+        or (class_group_id is not None and b.class_group_id == class_group_id)
+    ]
+    has_own_lesson = any(
+        b.student_id == student_id and b.type not in NON_BLOCKING_TYPES for b in matched
+    )
+    if has_own_lesson:
+        matched = [
+            b for b in matched
+            if not (b.type in NON_BLOCKING_TYPES and b.student_id != student_id)
+        ]
+    return matched
 
 
 def summarize_student_hours(

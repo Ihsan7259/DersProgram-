@@ -133,6 +133,7 @@ class AddLessonDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
+        self._last_type: str | None = None
         self.type_combo.currentIndexChanged.connect(self._update_visible_fields)
         self.teacher_combo.currentIndexChanged.connect(self._apply_teacher_subject_area)
         self._update_visible_fields()
@@ -182,10 +183,19 @@ class AddLessonDialog(QDialog):
         self.class_combo.setVisible(show_class)
         self.class_label.setText("Sınıf (isteğe bağlı):" if is_teacherless else "Sınıf:")
 
-        show_student = is_one_on_one or is_coaching
+        # Etüt, sınıf dersi gibi bir SINIFA ya da birebir gibi tek bir
+        # ÖĞRENCİYE yazılabilir (kullanıcı isteği). Etüde geçildiğinde
+        # öğrenci "(Öğrencisiz)"e çekilir - varsayılan, sınıfa yazılan etüt.
+        is_study = t == TYPE_STUDY
+        if is_study and self._last_type != TYPE_STUDY:
+            self.student_combo.setCurrentIndex(0)
+        self._last_type = t
+        show_student = is_one_on_one or is_coaching or is_study
         self.student_label.setVisible(show_student)
         self.student_combo.setVisible(show_student)
-        self.student_label.setText("Öğrenci (isteğe bağlı):" if is_coaching else "Öğrenci:")
+        self.student_label.setText(
+            "Öğrenci (isteğe bağlı):" if (is_coaching or is_study) else "Öğrenci:"
+        )
 
         show_room = is_class or is_one_on_one or is_group or is_teacherless
         self.room_label.setVisible(show_room)
@@ -218,7 +228,9 @@ class AddLessonDialog(QDialog):
             return
 
         class_group_id = self.class_combo.currentData() if self.class_combo.isVisible() else None
-        student_id = self.student_combo.currentData() if t in (TYPE_ONE_ON_ONE, TYPE_COACHING) else None
+        student_id = (
+            self.student_combo.currentData() if t in (TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_STUDY) else None
+        )
 
         if t == TYPE_CLASS and class_group_id is None:
             QMessageBox.warning(self, "Eksik bilgi", "Sınıf seçmelisiniz (yoksa önce bir sınıf tanımlayın).")
@@ -226,11 +238,20 @@ class AddLessonDialog(QDialog):
         # Blok, programda ya bir öğretmenin ya da bir sınıfın satırında
         # görünerek yerleştirilir - ikisi de boşsa hiçbir satıra düşmez ve
         # havuzdan çıkarılamaz hale gelir.
-        if is_teacherless and teacher_id is None and class_group_id is None:
+        if is_teacherless and teacher_id is None and class_group_id is None and student_id is None:
             QMessageBox.warning(
                 self, "Eksik bilgi",
-                "Deneme/Etüt için en az bir sınıf ya da bir öğretmen seçmelisiniz - "
+                "Deneme/Etüt için en az bir sınıf, öğrenci ya da öğretmen seçmelisiniz - "
                 "ders programda bunlardan birinin satırına yerleştirilir.",
+            )
+            return
+        # Etüt ya bütün bir sınıfa ya da tek bir öğrenciye yazılır - ikisi
+        # birden seçilirse hangi satırda duracağı belirsiz olur.
+        if t == TYPE_STUDY and class_group_id is not None and student_id is not None:
+            QMessageBox.warning(
+                self, "Belirsiz seçim",
+                "Etüt ya bir sınıfa ya da bir öğrenciye yazılır. Sınıfın etüdü için "
+                "öğrenciyi '(Öğrencisiz)', öğrencinin etüdü için sınıfı '(Yok)' bırakın.",
             )
             return
         # Koçlukta öğrenci isteğe bağlı (öğrencisiz genel koçluk saati de

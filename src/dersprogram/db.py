@@ -50,6 +50,22 @@ GROUP_TYPES = {TYPE_DEPARTMENT, TYPE_MEETING}
 # öğretmen satırında değil, atandığı sınıfın satırında görünür.
 TEACHERLESS_TYPES = {TYPE_TRIAL, TYPE_STUDY}
 
+# Hiçbir ÇAKIŞMA kontrolüne girmeyen tipler (kullanıcı isteği: "herkes aynı
+# anda olabildiği için keşismeye dahil olmasın"). Etüt, programda yer
+# kaplar ve görünür ama kimseyi "meşgul" yapmaz:
+#   * aynı saate başka bir etüt ya da ders konabilir,
+#   * özellikle: sınıfının etüt saatinde bir öğrenciye birebir/koçluk
+#     yerleştirilebilir - sistem o saati öğrenci için BOŞ kabul eder.
+# (Kişinin/sınıfın "müsait değil" işaretleri ise etüt için de geçerlidir -
+# bunlar çakışma değil, açıkça konmuş kısıtlardır.)
+NON_BLOCKING_TYPES = {TYPE_STUDY}
+
+# Sınıflar ve Öğrenciler sekmelerindeki "ders hedefi" formlarında
+# seçilebilen tipler: sınıfa sınıf dersi ya da etüt, öğrenciye birebir ya
+# da etüt yazılabilir ("etüdü birebir ve sınıf dersi gibi düşün").
+CLASS_CURRICULUM_TYPES = [TYPE_CLASS, TYPE_STUDY]
+STUDENT_CURRICULUM_TYPES = [TYPE_ONE_ON_ONE, TYPE_STUDY]
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS teachers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,7 +211,8 @@ CREATE TABLE IF NOT EXISTS class_curriculum (
     subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
     teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
     room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
-    weekly_hours INTEGER NOT NULL DEFAULT 1
+    weekly_hours INTEGER NOT NULL DEFAULT 1,
+    lesson_type TEXT NOT NULL DEFAULT 'sinif'
 );
 
 -- class_curriculum'un birebir ders karşılığı: bir öğrencinin belirli bir
@@ -209,7 +226,8 @@ CREATE TABLE IF NOT EXISTS student_curriculum (
     subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
     teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
     room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
-    weekly_hours INTEGER NOT NULL DEFAULT 1
+    weekly_hours INTEGER NOT NULL DEFAULT 1,
+    lesson_type TEXT NOT NULL DEFAULT 'birebir'
 );
 
 -- Öğrenci ve sınıf müsaitliği: teacher_availability(_exceptions) ile
@@ -328,6 +346,10 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("created_at", "TEXT"),
     ],
     "payments": [("note", "TEXT DEFAULT ''")],
+    # Ders hedefinin hangi tipte blok ürettiği (sınıf dersi/birebir ya da
+    # etüt). Eski kayıtlar varsayılan olarak eskisi gibi davranır.
+    "class_curriculum": [("lesson_type", "TEXT NOT NULL DEFAULT 'sinif'")],
+    "student_curriculum": [("lesson_type", "TEXT NOT NULL DEFAULT 'birebir'")],
 }
 
 
@@ -822,15 +844,19 @@ class Database:
         teacher_id: int | None,
         weekly_hours: int,
         room_id: int | None = None,
+        lesson_type: str = TYPE_CLASS,
     ) -> int:
         """Hedefi kaydeder ve weekly_hours kadar ders bloğu üretip havuza
-        (atanmamış dersler) düşürür."""
+        (atanmamış dersler) düşürür. lesson_type sınıf dersi ya da etüt
+        olabilir (bkz. CLASS_CURRICULUM_TYPES)."""
+        if lesson_type not in CLASS_CURRICULUM_TYPES:
+            raise ValueError(f"Sınıf hedefi bu tipte olamaz: {lesson_type}")
         cur = self.conn.execute(
             """
-            INSERT INTO class_curriculum(class_group_id, subject_id, teacher_id, room_id, weekly_hours)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO class_curriculum(class_group_id, subject_id, teacher_id, room_id, weekly_hours, lesson_type)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (class_group_id, subject_id, teacher_id, room_id, weekly_hours),
+            (class_group_id, subject_id, teacher_id, room_id, weekly_hours, lesson_type),
         )
         curriculum_id = cur.lastrowid
         for _ in range(weekly_hours):
@@ -839,7 +865,7 @@ class Database:
                 INSERT INTO lesson_blocks(type, teacher_id, subject_id, class_group_id, room_id, curriculum_id)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (TYPE_CLASS, teacher_id, subject_id, class_group_id, room_id, curriculum_id),
+                (lesson_type, teacher_id, subject_id, class_group_id, room_id, curriculum_id),
             )
         self.conn.commit()
         return curriculum_id
@@ -851,6 +877,7 @@ class Database:
         teacher_id: int | None,
         weekly_hours: int,
         room_id: int | None = None,
+        lesson_type: str | None = None,
     ) -> None:
         """Bir ders hedefini günceller: ders/öğretmen/derslik/hedef saat
         sayısı değişebilir. Bu hedefe bağlı TÜM lesson_blocks satırları
@@ -863,19 +890,23 @@ class Database:
         olduğunca bozulmaz (sadece hedefteki tüm saatler zaten
         yerleşmişse, aradan yerleşmiş bir saat de silinir)."""
         row = self.conn.execute(
-            "SELECT class_group_id FROM class_curriculum WHERE id=?", (curriculum_id,)
+            "SELECT class_group_id, lesson_type FROM class_curriculum WHERE id=?", (curriculum_id,)
         ).fetchone()
         if row is None:
             return
         class_group_id = row["class_group_id"]
+        # lesson_type verilmezse hedefin mevcut tipi korunur.
+        lesson_type = lesson_type or row["lesson_type"] or TYPE_CLASS
+        if lesson_type not in CLASS_CURRICULUM_TYPES:
+            raise ValueError(f"Sınıf hedefi bu tipte olamaz: {lesson_type}")
 
         self.conn.execute(
-            "UPDATE class_curriculum SET subject_id=?, teacher_id=?, room_id=?, weekly_hours=? WHERE id=?",
-            (subject_id, teacher_id, room_id, weekly_hours, curriculum_id),
+            "UPDATE class_curriculum SET subject_id=?, teacher_id=?, room_id=?, weekly_hours=?, lesson_type=? WHERE id=?",
+            (subject_id, teacher_id, room_id, weekly_hours, lesson_type, curriculum_id),
         )
         self.conn.execute(
-            "UPDATE lesson_blocks SET subject_id=?, teacher_id=?, room_id=? WHERE curriculum_id=?",
-            (subject_id, teacher_id, room_id, curriculum_id),
+            "UPDATE lesson_blocks SET subject_id=?, teacher_id=?, room_id=?, type=? WHERE curriculum_id=?",
+            (subject_id, teacher_id, room_id, lesson_type, curriculum_id),
         )
 
         existing_rows = self.conn.execute(
@@ -889,7 +920,7 @@ class Database:
                     INSERT INTO lesson_blocks(type, teacher_id, subject_id, class_group_id, room_id, curriculum_id)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (TYPE_CLASS, teacher_id, subject_id, class_group_id, room_id, curriculum_id),
+                    (lesson_type, teacher_id, subject_id, class_group_id, room_id, curriculum_id),
                 )
         elif weekly_hours < existing_count:
             to_remove = existing_count - weekly_hours
@@ -924,8 +955,8 @@ class Database:
                 INSERT INTO lesson_blocks(type, teacher_id, subject_id, class_group_id, room_id, curriculum_id)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (TYPE_CLASS, row["teacher_id"], row["subject_id"], row["class_group_id"],
-                 row["room_id"], curriculum_id),
+                (row["lesson_type"] or TYPE_CLASS, row["teacher_id"], row["subject_id"],
+                 row["class_group_id"], row["room_id"], curriculum_id),
             )
         self.conn.commit()
         return missing
@@ -958,16 +989,19 @@ class Database:
         teacher_id: int | None,
         weekly_hours: int,
         room_id: int | None = None,
+        lesson_type: str = TYPE_ONE_ON_ONE,
     ) -> int:
-        """Hedefi kaydeder ve weekly_hours kadar BİREBİR ders bloğu üretip
-        havuza (atanmamış dersler) düşürür - add_class_curriculum'un
-        birebir karşılığı."""
+        """Hedefi kaydeder ve weekly_hours kadar ders bloğu (birebir ya da
+        etüt - bkz. STUDENT_CURRICULUM_TYPES) üretip havuza (atanmamış
+        dersler) düşürür - add_class_curriculum'un öğrenci karşılığı."""
+        if lesson_type not in STUDENT_CURRICULUM_TYPES:
+            raise ValueError(f"Öğrenci hedefi bu tipte olamaz: {lesson_type}")
         cur = self.conn.execute(
             """
-            INSERT INTO student_curriculum(student_id, subject_id, teacher_id, room_id, weekly_hours)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO student_curriculum(student_id, subject_id, teacher_id, room_id, weekly_hours, lesson_type)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (student_id, subject_id, teacher_id, room_id, weekly_hours),
+            (student_id, subject_id, teacher_id, room_id, weekly_hours, lesson_type),
         )
         curriculum_id = cur.lastrowid
         for _ in range(weekly_hours):
@@ -976,7 +1010,7 @@ class Database:
                 INSERT INTO lesson_blocks(type, teacher_id, subject_id, student_id, room_id, student_curriculum_id)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (TYPE_ONE_ON_ONE, teacher_id, subject_id, student_id, room_id, curriculum_id),
+                (lesson_type, teacher_id, subject_id, student_id, room_id, curriculum_id),
             )
         self.conn.commit()
         return curriculum_id
@@ -988,24 +1022,28 @@ class Database:
         teacher_id: int | None,
         weekly_hours: int,
         room_id: int | None = None,
+        lesson_type: str | None = None,
     ) -> None:
         """update_class_curriculum'un birebir karşılığı - bkz. onun
         docstring'i, aynı mantık (bağlı bloklar güncellenir, saat sayısı
         değiştiyse eklenir/silinir, azaltırken önce havuzdakiler gider)."""
         row = self.conn.execute(
-            "SELECT student_id FROM student_curriculum WHERE id=?", (curriculum_id,)
+            "SELECT student_id, lesson_type FROM student_curriculum WHERE id=?", (curriculum_id,)
         ).fetchone()
         if row is None:
             return
         student_id = row["student_id"]
+        lesson_type = lesson_type or row["lesson_type"] or TYPE_ONE_ON_ONE
+        if lesson_type not in STUDENT_CURRICULUM_TYPES:
+            raise ValueError(f"Öğrenci hedefi bu tipte olamaz: {lesson_type}")
 
         self.conn.execute(
-            "UPDATE student_curriculum SET subject_id=?, teacher_id=?, room_id=?, weekly_hours=? WHERE id=?",
-            (subject_id, teacher_id, room_id, weekly_hours, curriculum_id),
+            "UPDATE student_curriculum SET subject_id=?, teacher_id=?, room_id=?, weekly_hours=?, lesson_type=? WHERE id=?",
+            (subject_id, teacher_id, room_id, weekly_hours, lesson_type, curriculum_id),
         )
         self.conn.execute(
-            "UPDATE lesson_blocks SET subject_id=?, teacher_id=?, room_id=? WHERE student_curriculum_id=?",
-            (subject_id, teacher_id, room_id, curriculum_id),
+            "UPDATE lesson_blocks SET subject_id=?, teacher_id=?, room_id=?, type=? WHERE student_curriculum_id=?",
+            (subject_id, teacher_id, room_id, lesson_type, curriculum_id),
         )
 
         existing_rows = self.conn.execute(
@@ -1019,7 +1057,7 @@ class Database:
                     INSERT INTO lesson_blocks(type, teacher_id, subject_id, student_id, room_id, student_curriculum_id)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (TYPE_ONE_ON_ONE, teacher_id, subject_id, student_id, room_id, curriculum_id),
+                    (lesson_type, teacher_id, subject_id, student_id, room_id, curriculum_id),
                 )
         elif weekly_hours < existing_count:
             to_remove = existing_count - weekly_hours
@@ -1053,8 +1091,8 @@ class Database:
                 INSERT INTO lesson_blocks(type, teacher_id, subject_id, student_id, room_id, student_curriculum_id)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (TYPE_ONE_ON_ONE, row["teacher_id"], row["subject_id"], row["student_id"],
-                 row["room_id"], curriculum_id),
+                (row["lesson_type"] or TYPE_ONE_ON_ONE, row["teacher_id"], row["subject_id"],
+                 row["student_id"], row["room_id"], curriculum_id),
             )
         self.conn.commit()
         return missing
