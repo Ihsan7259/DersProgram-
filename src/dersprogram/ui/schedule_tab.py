@@ -1833,7 +1833,7 @@ class ScheduleTab(QWidget):
         )
         if confirm != QMessageBox.Yes:
             return
-        dialog = ScopeDialog(self.db, self, f"{name} derslerini kaldırma")
+        dialog = ScopeDialog(self.db, self, f"{name} derslerini kaldırma", week_start=self.navigator.week_start)
         if dialog.exec() != ScopeDialog.Accepted:
             return
         scope = dialog.scope()
@@ -2348,7 +2348,7 @@ class ScheduleTab(QWidget):
             if proceed != QMessageBox.Yes:
                 return
 
-        dialog = ScopeDialog(self.db, self, f"'{label}' dersini yerleştirme")
+        dialog = ScopeDialog(self.db, self, f"'{label}' dersini yerleştirme", week_start=self.navigator.week_start)
         if dialog.exec() != ScopeDialog.Accepted:
             return
         scope = dialog.scope()
@@ -2378,7 +2378,7 @@ class ScheduleTab(QWidget):
         chosen = blocks[0]
         members = self._block_group(chosen)
         label = self._group_label(members)
-        dialog = ScopeDialog(self.db, self, f"'{label}' dersini kaldırma")
+        dialog = ScopeDialog(self.db, self, f"'{label}' dersini kaldırma", week_start=self.navigator.week_start)
         if dialog.exec() != ScopeDialog.Accepted:
             return
         scope = dialog.scope()

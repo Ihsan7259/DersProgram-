@@ -424,11 +424,49 @@ def _row_to_blockview(row) -> BlockView:
     )
 
 
+def resolve_week_position(
+    row, wkey: str, exceptions: dict, history: dict,
+) -> tuple[int | None, int | None]:
+    """Bir bloğun wkey haftasındaki (gün, saat) konumu - None, None ise o
+    hafta havuzdadır. Öncelik sırası:
+      1. o haftaya özel istisna ("sadece bu hafta" değişikliği),
+      2. tarihli kalıcı konum: from_week <= wkey olan EN SON kayıt
+         (bkz. db.lesson_block_positions - kalıcı değişiklik yapıldığı
+         haftadan itibaren geçerlidir, geçmiş haftaları değiştirmez),
+      3. tarihli kaydı hiç olmayan (bu özellikten önceki) bloklarda eski
+         haftasız şablon konumu (template_day/template_period).
+    Haftalık program (get_week_view) ile birebir paket hesabı
+    (compute_one_on_one_ledger) AYNI bu fonksiyonu kullanır."""
+    block_id = row["id"]
+    if block_id in exceptions:
+        return exceptions[block_id]
+    entries = history.get(block_id)
+    if entries:
+        day = period = None
+        for from_week, d, p in entries:
+            if from_week > wkey:
+                break
+            day, period = d, p
+        return day, period
+    return row["template_day"], row["template_period"]
+
+
+def _created_week_key(row) -> str | None:
+    created = row["created_at"] if "created_at" in row.keys() else None
+    if not created:
+        return None
+    try:
+        return week_key(monday_of(_dt.date.fromisoformat(created)))
+    except ValueError:
+        return None
+
+
 def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, int], list[BlockView]], list[BlockView]]:
     """Verilen haftanın efektif programını döner: (gün,saat) -> [BlockView,...]
     ve o hafta atanmamış (havuzdaki) blokların listesi."""
     wkey = week_key(week_start)
     exceptions = db.get_week_exceptions(wkey)
+    history = db.get_block_position_history()
     all_blocks = db.list_lesson_blocks_detailed()
 
     schedule: dict[tuple[int, int], list[BlockView]] = {}
@@ -438,10 +476,7 @@ def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, i
 
     for row in all_blocks:
         block = _row_to_blockview(row)
-        if row["id"] in exceptions:
-            day, period = exceptions[row["id"]]
-        else:
-            day, period = row["template_day"], row["template_period"]
+        day, period = resolve_week_position(row, wkey, exceptions, history)
 
         # Gün/ders saati sayısı Ayarlar'dan KÜÇÜLTÜLMÜŞ olabilir (ör. 6
         # günden 5 güne inilmesi). O durumda eski yerine göre aralık dışına
@@ -456,6 +491,12 @@ def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, i
             and (not 0 <= day < day_count or not 1 <= period <= period_count)
         )
         if day is None or period is None or out_of_range:
+            # Bu haftadan SONRA eklenmiş bir ders, bu haftanın havuzunda da
+            # görünmez - geçmiş bir haftada "henüz yoktu" (kullanıcı isteği:
+            # "geçmişe yönelik ekleme mantıklı değil").
+            created_wkey = _created_week_key(row)
+            if created_wkey is not None and created_wkey > wkey:
+                continue
             pool.append(block)
         else:
             block.day, block.period = day, period
@@ -557,16 +598,21 @@ def find_group_conflicts(
 
 
 def place_block(db: Database, week_start: _dt.date, block_id: int, day: int, period: int, scope: str) -> None:
+    """SCOPE_ALWAYS: week_start haftasından İTİBAREN her hafta (geçmiş
+    haftalar olduğu gibi kalır - bkz. db.set_block_position_from_week).
+    SCOPE_WEEK_ONLY: sadece week_start haftası."""
     if scope == SCOPE_ALWAYS:
-        db.set_lesson_block_template_position(block_id, day, period)
+        db.set_block_position_from_week(block_id, week_key(week_start), day, period)
         db.clear_week_exception(week_key(week_start), block_id)
     else:
         db.set_week_exception(week_key(week_start), block_id, day, period)
 
 
 def clear_block(db: Database, week_start: _dt.date, block_id: int, scope: str) -> None:
+    """place_block'un tersi: SCOPE_ALWAYS'te ders week_start haftasından
+    İTİBAREN havuza düşer; geçmiş haftalarda yerleştiği yerde kalır."""
     if scope == SCOPE_ALWAYS:
-        db.set_lesson_block_template_position(block_id, None, None)
+        db.set_block_position_from_week(block_id, week_key(week_start), None, None)
         db.clear_week_exception(week_key(week_start), block_id)
     else:
         db.set_week_exception(week_key(week_start), block_id, None, None)
@@ -1464,11 +1510,11 @@ def compute_one_on_one_ledger(db: Database, student_id: int, as_of: _dt.date | N
     """Bir öğrencinin birebir PAKET durumunu anlık tarihe göre hesaplar
     (bkz. db.students.one_on_one_package_hours, lesson_blocks.created_at).
 
-    Öğrencinin programda AN İTİBARIYLE yeri olan (template_day dolu) her
-    birebir ders bloğu için, o blok ilk eklendiği tarihten (created_at)
-    bugüne kadar geçen her hafta gerçekten oluşmuş mu (o hafta için bir
-    istisna bloğu havuza düşürmüş/gizlemiş mi) bakılıp kaç "saat" fiilen
-    yapılmış sayılacağı bulunur. Bu toplam (yapılan) paket saatinden
+    Öğrencinin her birebir ders bloğu için, o blok ilk eklendiği tarihten
+    (created_at) bugüne kadar geçen her hafta o hafta programda gerçekten
+    yeri var mıydı (bkz. resolve_week_position - istisnalar ve "şu
+    haftadan itibaren" kalıcı değişiklikler dahil) bakılıp kaç "saat"
+    fiilen yapılmış sayılacağı bulunur. Bu toplam (yapılan) paket saatinden
     düşülür: karşılığı olan kısım "ödenmiş", aşan kısım "borçlu" olur.
 
     NOT: Havuzdan branş ayrımı yapılmaz (kullanıcı tercihi: öğrenci
@@ -1480,7 +1526,12 @@ def compute_one_on_one_ledger(db: Database, student_id: int, as_of: _dt.date | N
     rows = db.list_lesson_blocks_detailed(
         where="WHERE lb.type=? AND lb.student_id=?", params=(TYPE_ONE_ON_ONE, student_id)
     )
-    active = [r for r in rows if r["template_day"] is not None and r["template_period"] is not None]
+    # Her hafta, dersin O HAFTAKİ konumuna bakılır (bkz. resolve_week_position):
+    # sonradan havuza düşürülmüş bir birebirin geçmişte yapılmış saatleri
+    # de sayılır, kalıcı olarak yeni eklenen birinin eklenmeden önceki
+    # haftaları sayılmaz.
+    history = db.get_block_position_history()
+    active = list(rows)
 
     occurred = 0
     if active:
@@ -1489,17 +1540,15 @@ def compute_one_on_one_ledger(db: Database, student_id: int, as_of: _dt.date | N
             week = monday_of(min(start_dates))
             last_week = monday_of(today)
             while week <= last_week:
-                exceptions = db.get_week_exceptions(week_key(week))
+                wkey = week_key(week)
+                exceptions = db.get_week_exceptions(wkey)
                 for r in active:
                     created = _dt.date.fromisoformat(r["created_at"]) if r["created_at"] else today
                     if created > week + _dt.timedelta(days=6):
                         continue  # bu blok o hafta henüz eklenmemişti
-                    if r["id"] in exceptions:
-                        day, period = exceptions[r["id"]]
-                    else:
-                        day, period = r["template_day"], r["template_period"]
+                    day, period = resolve_week_position(r, wkey, exceptions, history)
                     if day is None or period is None:
-                        continue  # o hafta istisnayla havuza düşmüş/gizlenmiş
+                        continue  # o hafta havuzdaydı
                     occurrence_date = week + _dt.timedelta(days=day)
                     if created <= occurrence_date <= today:
                         occurred += 1

@@ -156,6 +156,25 @@ CREATE TABLE IF NOT EXISTS lesson_blocks (
     note TEXT DEFAULT ''
 );
 
+-- Bir dersin "kalıcı" konumunun HANGİ HAFTADAN İTİBAREN geçerli olduğu.
+-- Kullanıcı bildirimi: 3. haftada kalıcı olarak eklenen/taşınan bir ders
+-- geçmiş 1. ve 2. haftalarda da görünüyordu - tek bir haftasız şablon
+-- konumu (template_day/template_period) geçmişi de değiştiriyordu. Artık
+-- kalıcı bir değişiklik, yapıldığı haftadan itibaren geçerli bir kayıt
+-- olarak eklenir; önceki haftalar eski konumlarında kalır. Bir blok için
+-- hafta X'teki konum = from_week <= X olan EN SON kayıt (bkz.
+-- scheduling.resolve_week_position). Hiç kaydı olmayan (bu özellikten
+-- önceki) bloklar eskisi gibi template_day/template_period'u kullanır.
+-- day/period NULL ise o haftadan itibaren blok havuzdadır.
+CREATE TABLE IF NOT EXISTS lesson_block_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lesson_block_id INTEGER NOT NULL REFERENCES lesson_blocks(id) ON DELETE CASCADE,
+    from_week TEXT NOT NULL,
+    day INTEGER,
+    period INTEGER,
+    UNIQUE(lesson_block_id, from_week)
+);
+
 -- Belirli bir haftaya özel istisna: o blok o hafta template'teki yerinde
 -- DEĞİL, burada belirtilen gün/saatte görünür. day/period NULL ise o
 -- hafta hiç görünmez (havuza geri düşer).
@@ -383,6 +402,20 @@ class Database:
         self.conn.execute(
             "UPDATE lesson_blocks SET created_at=? WHERE created_at IS NULL",
             (_dt.date.today().isoformat(),),
+        )
+        # Yeni eklenen HER ders bloğunun eklenme tarihi olsun - hangi kod
+        # yolundan eklenirse eklensin (Ders Ekle, sınıf/öğrenci hedefleri,
+        # zümre/toplantı, koç ataması...). Geçmiş haftalarda "henüz yoktu"
+        # kararı bu tarihe göre verilir (bkz. scheduling.get_week_view).
+        self.conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS lesson_blocks_created_at
+            AFTER INSERT ON lesson_blocks
+            WHEN NEW.created_at IS NULL
+            BEGIN
+                UPDATE lesson_blocks SET created_at = date('now', 'localtime') WHERE id = NEW.id;
+            END
+            """
         )
         self.conn.commit()
 
@@ -1135,7 +1168,72 @@ class Database:
         """
         return self.conn.execute(query, params).fetchall()
 
+    # Hiçbir gerçek haftadan önce gelen "başlangıçtan beri" anahtarı (hafta
+    # anahtarları 'YYYY-MM-DD' metni olduğu için metin karşılaştırması
+    # tarih sırasıyla aynıdır).
+    POSITION_EPOCH = "0001-01-01"
+
+    def set_block_position_from_week(
+        self, block_id: int, from_week: str, day: int | None, period: int | None,
+    ) -> None:
+        """Bloğun kalıcı konumunu from_week haftasından İTİBAREN değiştirir;
+        daha önceki haftalar olduğu gibi kalır (bkz. lesson_block_positions).
+
+        - Blok için ilk kez tarihli kayıt yazılıyorsa, mevcut (eski) şablon
+          konumu "başlangıçtan beri" (POSITION_EPOCH) geçerli taban kayıt
+          olarak saklanır - geçmiş haftalar eski yerinde kalsın diye.
+        - from_week'ten SONRA planlanmış kayıtlar silinir: "bu haftadan
+          itibaren kalıcı" demek, ileriye dönük eski planların yerine geçer.
+        - template_day/template_period her zaman EN SON (ileriye dönük)
+          konumu tutar; "kaç saat yerleşti" gibi haftasız özetler onu okur."""
+        has_history = self.conn.execute(
+            "SELECT 1 FROM lesson_block_positions WHERE lesson_block_id=? LIMIT 1", (block_id,)
+        ).fetchone()
+        if not has_history:
+            current = self.conn.execute(
+                "SELECT template_day, template_period FROM lesson_blocks WHERE id=?", (block_id,)
+            ).fetchone()
+            if current is None:
+                return
+            self.conn.execute(
+                "INSERT INTO lesson_block_positions(lesson_block_id, from_week, day, period) VALUES (?, ?, ?, ?)",
+                (block_id, self.POSITION_EPOCH, current["template_day"], current["template_period"]),
+            )
+        self.conn.execute(
+            "DELETE FROM lesson_block_positions WHERE lesson_block_id=? AND from_week > ?",
+            (block_id, from_week),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO lesson_block_positions(lesson_block_id, from_week, day, period)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(lesson_block_id, from_week) DO UPDATE SET day=excluded.day, period=excluded.period
+            """,
+            (block_id, from_week, day, period),
+        )
+        self.conn.execute(
+            "UPDATE lesson_blocks SET template_day=?, template_period=? WHERE id=?",
+            (day, period, block_id),
+        )
+        self.conn.commit()
+
+    def get_block_position_history(self) -> dict[int, list[tuple[str, int | None, int | None]]]:
+        """{blok_id: [(from_week, day, period), ...]} - from_week'e göre
+        artan sırada. Tarihli kaydı olmayan bloklar sözlükte yer almaz."""
+        history: dict[int, list[tuple[str, int | None, int | None]]] = {}
+        for row in self.conn.execute(
+            "SELECT lesson_block_id, from_week, day, period FROM lesson_block_positions "
+            "ORDER BY lesson_block_id, from_week"
+        ):
+            history.setdefault(row["lesson_block_id"], []).append((row["from_week"], row["day"], row["period"]))
+        return history
+
     def set_lesson_block_template_position(self, block_id: int, day: int | None, period: int | None) -> None:
+        """HAFTASIZ konum: blok bundan böyle HER haftada (geçmiş dahil) bu
+        konumda olur. Arayüz bunu kullanmaz - "şu haftadan itibaren" için
+        bkz. set_block_position_from_week. Tarihli kayıtlar silinir ki
+        eski planlarla çelişmesin."""
+        self.conn.execute("DELETE FROM lesson_block_positions WHERE lesson_block_id=?", (block_id,))
         self.conn.execute(
             "UPDATE lesson_blocks SET template_day=?, template_period=? WHERE id=?",
             (day, period, block_id),

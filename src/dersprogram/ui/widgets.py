@@ -689,7 +689,7 @@ class ScopeDialog(QDialog):
     """Bir yerleştirme/temizleme işleminin sadece bu hafta mı yoksa
     kalıcı (şablon - dönem boyunca) mı olacağını sorar."""
 
-    def __init__(self, db: Database, parent=None, action_desc: str = "Bu değişiklik"):
+    def __init__(self, db: Database, parent=None, action_desc: str = "Bu değişiklik", week_start=None):
         super().__init__(parent)
         self.setWindowTitle("Kapsam Seç")
         layout = QVBoxLayout(self)
@@ -698,7 +698,16 @@ class ScopeDialog(QDialog):
         always_label = "Her hafta (kalıcı program)"
         term_start = db.term_start
         term_end = db.term_end
-        if term_start and term_end:
+        if week_start is not None:
+            # Ders yerleştirme/kaldırmada kalıcı değişiklik o haftadan
+            # İTİBAREN geçerlidir - geçmiş haftalar değişmez (bkz.
+            # scheduling.place_block). Etiket bunu açıkça söyler.
+            from_txt = week_start.strftime("%d.%m.%Y")
+            always_label = f"Bu haftadan ({from_txt}) itibaren her hafta"
+            if term_end:
+                end_txt = _dt.date.fromisoformat(term_end).strftime("%d.%m.%Y")
+                always_label += f" – dönem sonuna ({end_txt}) kadar"
+        elif term_start and term_end:
             start_txt = _dt.date.fromisoformat(term_start).strftime("%d.%m.%Y")
             end_txt = _dt.date.fromisoformat(term_end).strftime("%d.%m.%Y")
             always_label = f"Bu dönem boyunca ({start_txt} – {end_txt})"
