@@ -25,6 +25,7 @@ from ..db import (
     TYPE_DEPARTMENT,
     TYPE_MEETING,
     GROUP_TYPES,
+    TYPE_PARENT_MEETING,
     TYPE_PROBLEM_SOLVING,
     TYPE_TRIAL,
     TYPE_STUDY,
@@ -33,7 +34,7 @@ from ..db import (
 )
 
 TYPE_ORDER = [
-    TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_DEPARTMENT,
+    TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_PARENT_MEETING, TYPE_DEPARTMENT,
     TYPE_MEETING, TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
 ]
 
@@ -190,14 +191,21 @@ class AddLessonDialog(QDialog):
         if is_study and self._last_type != TYPE_STUDY:
             self.student_combo.setCurrentIndex(0)
         self._last_type = t
-        show_student = is_one_on_one or is_coaching or is_study
+        # Veli görüşmesi: öğretmen ZORUNLU, hangi öğrencinin velisiyle
+        # görüşüleceği isteğe bağlı (bkz. db.STUDENT_LABEL_ONLY_TYPES - öğrenci
+        # o saatte meşgul sayılmaz).
+        is_parent_meeting = t == TYPE_PARENT_MEETING
+        show_student = is_one_on_one or is_coaching or is_study or is_parent_meeting
         self.student_label.setVisible(show_student)
         self.student_combo.setVisible(show_student)
-        self.student_label.setText(
-            "Öğrenci (isteğe bağlı):" if (is_coaching or is_study) else "Öğrenci:"
-        )
+        if is_parent_meeting:
+            self.student_label.setText("Velisi (öğrenci, isteğe bağlı):")
+        else:
+            self.student_label.setText(
+                "Öğrenci (isteğe bağlı):" if (is_coaching or is_study) else "Öğrenci:"
+            )
 
-        show_room = is_class or is_one_on_one or is_group or is_teacherless
+        show_room = is_class or is_one_on_one or is_group or is_teacherless or is_parent_meeting
         self.room_label.setVisible(show_room)
         self.room_combo.setVisible(show_room)
 
@@ -229,7 +237,8 @@ class AddLessonDialog(QDialog):
 
         class_group_id = self.class_combo.currentData() if self.class_combo.isVisible() else None
         student_id = (
-            self.student_combo.currentData() if t in (TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_STUDY) else None
+            self.student_combo.currentData()
+            if t in (TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_STUDY, TYPE_PARENT_MEETING) else None
         )
 
         if t == TYPE_CLASS and class_group_id is None:

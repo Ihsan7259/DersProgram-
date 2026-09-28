@@ -20,6 +20,8 @@ from .db import (
     TYPE_MEETING,
     GROUP_TYPES,
     NON_BLOCKING_TYPES,
+    STUDENT_LABEL_ONLY_TYPES,
+    TYPE_PARENT_MEETING,
     TEACHERLESS_TYPES,
     TYPE_PROBLEM_SOLVING,
     TYPE_TRIAL,
@@ -155,6 +157,7 @@ class BlockView:
         TYPE_CLASS: "SD",
         TYPE_ONE_ON_ONE: "BB",
         TYPE_COACHING: "Koç",
+        TYPE_PARENT_MEETING: "Veli",
         TYPE_DEPARTMENT: "Züm",
         TYPE_MEETING: "Top",
         TYPE_PROBLEM_SOLVING: "SÇ",
@@ -169,6 +172,7 @@ class BlockView:
         TYPE_CLASS: "Sınıf",
         TYPE_ONE_ON_ONE: "Birebir",
         TYPE_COACHING: "Koçluk",
+        TYPE_PARENT_MEETING: "Veli Gör.",
         TYPE_DEPARTMENT: "Zümre",
         TYPE_MEETING: "Toplantı",
         TYPE_PROBLEM_SOLVING: "Soru Çöz.",
@@ -203,6 +207,8 @@ class BlockView:
             return self.subject_name or "Birebir", self.student_name or "", self.teacher_name or ""
         if self.type == TYPE_COACHING:
             return "Öğrenci Koçluk", self.student_name or "", self.teacher_name or ""
+        if self.type == TYPE_PARENT_MEETING:
+            return "Veli Görüşmesi", self.student_name or "", self.teacher_name or ""
         if self.type in GROUP_TYPES:
             return self.type_label(), self.subject_name or "", self.teacher_name or ""
         return self.type_label(), self.subject_name or "", self.teacher_name or ""
@@ -260,6 +266,9 @@ class BlockView:
             return self.student_with_class() or "Birebir", self.subject_name or "", self.room_line()
         if self.type == TYPE_COACHING:
             return "Öğrenci Koçluk", self.student_with_class(), self.room_line()
+        if self.type == TYPE_PARENT_MEETING:
+            # Öğretmenin programında: kimin velisiyle görüşüleceği.
+            return "Veli Görüşmesi", self.student_with_class(), self.room_line()
         if self.type in GROUP_TYPES:
             return self.type_label(), self.subject_name or "", self.room_line()
         return self.type_label(), self.subject_name or "", self.room_line()
@@ -346,6 +355,8 @@ class BlockView:
             return self.student_name or "Birebir", self.subject_name or ""
         if self.type == TYPE_COACHING:
             return "Koçluk", self.student_name or ""
+        if self.type == TYPE_PARENT_MEETING:
+            return "Veli", self.student_name or ""
         if self.type in GROUP_TYPES:
             return self.type_label(), self.subject_name or ""
         if self.type == TYPE_PROBLEM_SOLVING:
@@ -381,6 +392,10 @@ class BlockView:
             if self.student_name:
                 candidates.append(f"Koç {self.student_name.split()[0]}")
             candidates.append("Koç")
+        elif self.type == TYPE_PARENT_MEETING:
+            if self.student_name:
+                candidates.append(f"Veli {self.student_name.split()[0]}")
+            candidates.append("Veli")
         elif self.type == TYPE_CLASS and self.class_name:
             # "12-Say B" -> "12-Say" -> "12-S" -> "12-"
             candidates.append(self.class_name.split()[0])
@@ -475,6 +490,10 @@ def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, i
     period_count = db.period_count
 
     for row in all_blocks:
+        # Sona erdirilmiş (bırakılmış) ders: o haftadan itibaren hiç yok.
+        ended = row["ended_week"] if "ended_week" in row.keys() else None
+        if ended is not None and wkey >= ended:
+            continue
         block = _row_to_blockview(row)
         day, period = resolve_week_position(row, wkey, exceptions, history)
 
@@ -556,7 +575,11 @@ def find_conflicts(
             reasons.append(f"{other.teacher_name} bu saatte zaten dolu")
         if block.class_group_id is not None and other.class_group_id == block.class_group_id:
             reasons.append(f"{other.class_name} bu saatte başka bir derste")
-        if block.student_id is not None and other.student_id == block.student_id:
+        if (
+            block.student_id is not None and other.student_id == block.student_id
+            and block.type not in STUDENT_LABEL_ONLY_TYPES
+            and other.type not in STUDENT_LABEL_ONLY_TYPES
+        ):
             reasons.append(f"{other.student_name} bu saatte başka bir derste")
         if block.room_id is not None and other.room_id is not None and other.room_id == block.room_id:
             reasons.append(f"{other.room_name} bu saatte dolu")
@@ -566,6 +589,7 @@ def find_conflicts(
         if (
             block.student_id is not None
             and block.student_class_group_id is not None
+            and block.type not in STUDENT_LABEL_ONLY_TYPES
             and other.type == TYPE_CLASS
             and other.class_group_id == block.student_class_group_id
         ):
@@ -573,6 +597,7 @@ def find_conflicts(
         if (
             block.type == TYPE_CLASS
             and other.student_id is not None
+            and other.type not in STUDENT_LABEL_ONLY_TYPES
             and other.student_class_group_id == block.class_group_id
         ):
             reasons.append(f"{other.student_name} bu saatte kendi sınıfının ({block.class_name}) dersinde olmalı")
@@ -964,7 +989,10 @@ def auto_assign(
 
     add_resource_constraint(lambda unit: {b.teacher_id for b in unit if b.teacher_id is not None})
     add_resource_constraint(lambda unit: {b.class_group_id for b in unit if b.class_group_id is not None})
-    add_resource_constraint(lambda unit: {b.student_id for b in unit if b.student_id is not None})
+    add_resource_constraint(lambda unit: {
+        b.student_id for b in unit
+        if b.student_id is not None and b.type not in STUDENT_LABEL_ONLY_TYPES
+    })
     add_resource_constraint(lambda unit: {b.room_id for b in unit if b.room_id is not None})
 
     # Bir öğrencinin birebir/koçluk dersi kendi sınıfının o saatteki sınıf
@@ -982,6 +1010,7 @@ def auto_assign(
             if (
                 b.student_id is not None and b.student_class_group_id is not None
                 and b.type not in NON_BLOCKING_TYPES
+                and b.type not in STUDENT_LABEL_ONLY_TYPES
             ):
                 for (d, p) in domains[ui]:
                     personal_slot_units.setdefault(b.student_class_group_id, {}).setdefault((d, p), []).append(ui)
@@ -1479,7 +1508,7 @@ def student_cell_blocks(
     aynı kuralı kullanır."""
     matched = [
         b for b in blocks
-        if b.student_id == student_id
+        if (b.student_id == student_id and b.type not in STUDENT_LABEL_ONLY_TYPES)
         or (class_group_id is not None and b.class_group_id == class_group_id)
     ]
     has_own_lesson = any(

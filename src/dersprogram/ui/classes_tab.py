@@ -467,6 +467,7 @@ class ClassesTab(QWidget):
         room_id = self.curriculum_room_combo.currentData()
         self.db.update_class_curriculum(
             curriculum_id, subject_id, teacher_id, hours, room_id=room_id, lesson_type=lesson_type,
+            from_week=scheduling.week_key(self.navigator.week_start),
         )
         self.refresh_curriculum()
         QMessageBox.information(self, "Güncellendi", "Ders hedefi güncellendi.")
@@ -480,12 +481,13 @@ class ClassesTab(QWidget):
             return
         confirm = QMessageBox.question(
             self, "Silme Onayı",
-            "Bu ders hedefi ve ona ait tüm ders saatleri (yerleştirilmiş olanlar dahil) silinecek. "
-            "Devam edilsin mi?",
+            "Bu ders hedefi ve ona ait ders saatleri, bu haftadan "
+            f"({self.navigator.week_start.strftime('%d.%m.%Y')}) itibaren silinecek. "
+            "Önceki haftalarda yapılmış dersler geçmişte olduğu gibi kalır. Devam edilsin mi?",
         )
         if confirm != QMessageBox.Yes:
             return
-        self.db.delete_class_curriculum(curriculum_id)
+        self.db.delete_class_curriculum(curriculum_id, from_week=scheduling.week_key(self.navigator.week_start))
         self.refresh_curriculum()
         self.refresh_detail()
         if self.on_change:

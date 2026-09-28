@@ -52,6 +52,8 @@ from ..db import (
     TYPE_DEPARTMENT,
     GROUP_TYPES,
     NON_BLOCKING_TYPES,
+    STUDENT_LABEL_ONLY_TYPES,
+    TYPE_PARENT_MEETING,
     TYPE_PROBLEM_SOLVING,
     TYPE_TRIAL,
     TYPE_STUDY,
@@ -352,6 +354,9 @@ def _pool_dense_lines(rep_block, members: list) -> tuple[str, str]:
         line2 = f"{rep_block.student_name} · {teacher_short}" if rep_block.student_name else teacher_short
     elif rep_block.type == TYPE_COACHING:
         line1 = "Öğrenci Koçluk"
+        line2 = f"{rep_block.student_name} · {teacher_short}" if rep_block.student_name else teacher_short
+    elif rep_block.type == TYPE_PARENT_MEETING:
+        line1 = "Veli Görüşmesi"
         line2 = f"{rep_block.student_name} · {teacher_short}" if rep_block.student_name else teacher_short
     elif rep_block.type in (TYPE_TRIAL, TYPE_STUDY):
         # Deneme/Etüt öğretmensiz de olabilir - ayırt edici bilgi tipin
@@ -1690,7 +1695,7 @@ class ScheduleTab(QWidget):
                 else:
                     # Öğrencinin kendi dersleri + sınıfına yazılan dersler
                     # (bkz. scheduling.student_effective_blocks).
-                    targets = [block.student_id]
+                    targets = [] if block.type in STUDENT_LABEL_ONLY_TYPES else [block.student_id]
                     targets += students_by_class.get(block.class_group_id, [])
                 for entity_id in targets:
                     if entity_id in result:
@@ -2266,7 +2271,9 @@ class ScheduleTab(QWidget):
             # "Sınıflara Göre" görünümünden değiştirilir - aksi halde tek
             # bir öğrencinin satırından bütün sınıfın dersi kaydırılmış
             # olurdu.
-            return block.student_id == entity_id
+            # Veli görüşmesi öğrencinin DEĞİL öğretmenin randevusudur (bkz.
+            # db.STUDENT_LABEL_ONLY_TYPES) - öğretmen satırından yerleşir.
+            return block.student_id == entity_id and block.type not in STUDENT_LABEL_ONLY_TYPES
         return any(m.teacher_id == entity_id for m in self._block_group(block))
 
     def _stack_overflow(self, members: list, day: int, period: int) -> str | None:
@@ -2391,9 +2398,12 @@ class ScheduleTab(QWidget):
         dialog.exec()
 
     def handle_delete_pool_lesson(self) -> None:
-        """Havuzdaki seçili dersi tamamen siler (zümre ise tüm grubu).
-        Silinen ders bir sınıf hedefine bağlıysa, Sınıflar sekmesindeki
-        'Ders Hedefleri' tablosunda 'eksik' uyarısı olarak görünür."""
+        """Havuzdaki seçili dersi siler (zümre ise tüm grubu). Kullanıcı
+        bildirimi: öğrenci birebiri bırakınca ders silindiğinde önceki
+        haftalardan da siliniyordu. Artık silme, gösterilen haftadan
+        İTİBAREN geçerli: ders geçmişte yapılmışsa o haftalarda kalır
+        (bkz. db.retire_or_delete_lesson_block); hiç yapılmamışsa gerçekten
+        silinir."""
         if self._selected_pool_block_id is None:
             QMessageBox.information(
                 self, "Seçim yok",
@@ -2406,14 +2416,18 @@ class ScheduleTab(QWidget):
         members = self._block_group(block)
         label = self._group_label(members)
         hours_note = f"\n\n({len(members)} ders saati silinecek.)" if len(members) > 1 else ""
+        week_txt = self.navigator.week_start.strftime("%d.%m.%Y")
         confirm = QMessageBox.question(
             self, "Silme Onayı",
-            f"'{label}' dersi tamamen silinsin mi?{hours_note}",
+            f"'{label}' dersi silinsin mi?{hours_note}"
+            f"\n\nBu haftadan ({week_txt}) itibaren kaldırılır. Önceki haftalarda yapılmış "
+            "dersler geçmişte olduğu gibi kalır (programda, analizde ve birebir paket hesabında).",
         )
         if confirm != QMessageBox.Yes:
             return
+        from_week = scheduling.week_key(self.navigator.week_start)
         for member in members:
-            self.db.delete_lesson_block(member.id)
+            self.db.retire_or_delete_lesson_block(member.id, from_week)
         self._selected_pool_block_id = None
         self.refresh()
 

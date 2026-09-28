@@ -15,6 +15,7 @@ from pathlib import Path
 TYPE_CLASS = "sinif"        # normal sınıf dersi
 TYPE_ONE_ON_ONE = "birebir"  # birebir ders
 TYPE_COACHING = "kocluk"     # öğrenci koçluk
+TYPE_PARENT_MEETING = "veli_gorusme"  # veli görüşmesi (öğretmen + bir öğrencinin velisi)
 TYPE_DEPARTMENT = "zumre"    # zümre toplantısı
 TYPE_MEETING = "toplanti"    # toplantı (zümre ile AYNI mantık, farklı ad)
 TYPE_PROBLEM_SOLVING = "soru_cozum"  # soru çözümü
@@ -22,7 +23,7 @@ TYPE_TRIAL = "deneme"        # deneme sınavı (öğretmen zorunlu değil)
 TYPE_STUDY = "etut"          # etüt (öğretmen zorunlu değil)
 
 LESSON_TYPES = [
-    TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_DEPARTMENT,
+    TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_PARENT_MEETING, TYPE_DEPARTMENT,
     TYPE_MEETING, TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
 ]
 
@@ -30,6 +31,7 @@ LESSON_TYPE_LABELS = {
     TYPE_CLASS: "Sınıf Dersi",
     TYPE_ONE_ON_ONE: "Birebir Ders",
     TYPE_COACHING: "Öğrenci Koçluk",
+    TYPE_PARENT_MEETING: "Veli Görüşmesi",
     TYPE_DEPARTMENT: "Zümre",
     TYPE_MEETING: "Toplantı",
     TYPE_PROBLEM_SOLVING: "Soru Çözümü",
@@ -49,6 +51,13 @@ GROUP_TYPES = {TYPE_DEPARTMENT, TYPE_MEETING}
 # sınıfa (ya da bir dersliğe) öğretmensiz de yazılabilir. Bu durumda blok
 # öğretmen satırında değil, atandığı sınıfın satırında görünür.
 TEACHERLESS_TYPES = {TYPE_TRIAL, TYPE_STUDY}
+
+# Bu tiplerde student_id yalnızca "hangi öğrenci İÇİN" olduğunu söyler; öğrenci
+# o saatte orada değildir. Veli görüşmesinde öğretmen bir öğrencinin velisiyle
+# görüşür: öğretmen (ve derslik) meşgul olur ama ÖĞRENCİ meşgul sayılmaz, o
+# saate öğrenciye ders konabilir ve görüşme öğrencinin kendi programında /
+# PDF'inde görünmez (öğretmenin programında öğrenci adıyla görünür).
+STUDENT_LABEL_ONLY_TYPES = {TYPE_PARENT_MEETING}
 
 # Hiçbir ÇAKIŞMA kontrolüne girmeyen tipler (kullanıcı isteği: "herkes aynı
 # anda olabildiği için keşismeye dahil olmasın"). Etüt, programda yer
@@ -363,6 +372,11 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # tarih olur - o bloklar için geçmişe dönük sayım yapılamaz, sayaç
         # o günden itibaren işlemeye başlar.
         ("created_at", "TEXT"),
+        # Ders "bırakıldıysa" (ör. öğrenci birebir almayı bıraktı ve ders
+        # silindi) hangi haftadan itibaren artık olmadığı. NULL = sürüyor.
+        # Bu haftadan önceki haftalarda ders, yapıldığı yerde görünmeye
+        # devam eder - silmek geçmişi silmez (bkz. retire_or_delete_lesson_block).
+        ("ended_week", "TEXT"),
     ],
     "payments": [("note", "TEXT DEFAULT ''")],
     # Ders hedefinin hangi tipte blok ürettiği (sınıf dersi/birebir ya da
@@ -911,6 +925,7 @@ class Database:
         weekly_hours: int,
         room_id: int | None = None,
         lesson_type: str | None = None,
+        from_week: str | None = None,
     ) -> None:
         """Bir ders hedefini günceller: ders/öğretmen/derslik/hedef saat
         sayısı değişebilir. Bu hedefe bağlı TÜM lesson_blocks satırları
@@ -960,14 +975,30 @@ class Database:
             unplaced_ids = [r["id"] for r in existing_rows if r["template_day"] is None]
             placed_ids = [r["id"] for r in existing_rows if r["template_day"] is not None]
             for block_id in (unplaced_ids + placed_ids)[:to_remove]:
-                self.conn.execute("DELETE FROM lesson_blocks WHERE id=?", (block_id,))
+                if from_week is None:
+                    self.conn.execute("DELETE FROM lesson_blocks WHERE id=?", (block_id,))
+                else:
+                    # Geçmişte yapılmış saat silinmez, bu haftadan itibaren biter.
+                    self.retire_or_delete_lesson_block(block_id, from_week)
         self.conn.commit()
 
-    def delete_class_curriculum(self, curriculum_id: int) -> None:
-        """Hedefi ve ona bağlı tüm ders bloklarını siler."""
-        self.conn.execute("DELETE FROM lesson_blocks WHERE curriculum_id=?", (curriculum_id,))
+    def delete_class_curriculum(self, curriculum_id: int, from_week: str | None = None) -> None:
+        """Hedefi ve ona bağlı tüm ders bloklarını siler. from_week verilirse
+        geçmişte yapılmış dersler silinmez, o haftadan itibaren sona
+        erdirilir (bkz. retire_or_delete_lesson_block)."""
+        self._remove_curriculum_blocks("curriculum_id", curriculum_id, from_week)
         self.conn.execute("DELETE FROM class_curriculum WHERE id=?", (curriculum_id,))
         self.conn.commit()
+
+    def _remove_curriculum_blocks(self, column: str, curriculum_id: int, from_week: str | None) -> None:
+        ids = [r["id"] for r in self.conn.execute(
+            f"SELECT id FROM lesson_blocks WHERE {column}=?", (curriculum_id,)
+        )]
+        for block_id in ids:
+            if from_week is None:
+                self.conn.execute("DELETE FROM lesson_blocks WHERE id=?", (block_id,))
+            else:
+                self.retire_or_delete_lesson_block(block_id, from_week)
 
     def restore_curriculum_blocks(self, curriculum_id: int) -> int:
         """Hedefteki saat sayısına göre eksik kalan blokları yeniden
@@ -1056,6 +1087,7 @@ class Database:
         weekly_hours: int,
         room_id: int | None = None,
         lesson_type: str | None = None,
+        from_week: str | None = None,
     ) -> None:
         """update_class_curriculum'un birebir karşılığı - bkz. onun
         docstring'i, aynı mantık (bağlı bloklar güncellenir, saat sayısı
@@ -1097,12 +1129,17 @@ class Database:
             unplaced_ids = [r["id"] for r in existing_rows if r["template_day"] is None]
             placed_ids = [r["id"] for r in existing_rows if r["template_day"] is not None]
             for block_id in (unplaced_ids + placed_ids)[:to_remove]:
-                self.conn.execute("DELETE FROM lesson_blocks WHERE id=?", (block_id,))
+                if from_week is None:
+                    self.conn.execute("DELETE FROM lesson_blocks WHERE id=?", (block_id,))
+                else:
+                    # Geçmişte yapılmış saat silinmez, bu haftadan itibaren biter.
+                    self.retire_or_delete_lesson_block(block_id, from_week)
         self.conn.commit()
 
-    def delete_student_curriculum(self, curriculum_id: int) -> None:
-        """Hedefi ve ona bağlı tüm birebir ders bloklarını siler."""
-        self.conn.execute("DELETE FROM lesson_blocks WHERE student_curriculum_id=?", (curriculum_id,))
+    def delete_student_curriculum(self, curriculum_id: int, from_week: str | None = None) -> None:
+        """Hedefi ve ona bağlı tüm ders bloklarını siler - bkz.
+        delete_class_curriculum (from_week verilirse geçmiş korunur)."""
+        self._remove_curriculum_blocks("student_curriculum_id", curriculum_id, from_week)
         self.conn.execute("DELETE FROM student_curriculum WHERE id=?", (curriculum_id,))
         self.conn.commit()
 
@@ -1146,8 +1183,62 @@ class Database:
         ).fetchall()
 
     def delete_lesson_block(self, block_id: int) -> None:
+        """Bloğu TAMAMEN siler (geçmiş haftalar dahil). Arayüzdeki "sil"
+        işlemleri bunun yerine retire_or_delete_lesson_block kullanır."""
         self.conn.execute("DELETE FROM lesson_blocks WHERE id=?", (block_id,))
         self.conn.commit()
+
+    def block_was_placed_before(self, block_id: int, week: str) -> bool:
+        """Blok, week haftasından ÖNCEKİ herhangi bir haftada programda
+        yerleşik miydi? (Yani silinirse kaybolacak bir geçmişi var mı?)"""
+        if self.conn.execute(
+            "SELECT 1 FROM week_exceptions WHERE lesson_block_id=? AND week_start<? "
+            "AND day IS NOT NULL AND period IS NOT NULL LIMIT 1",
+            (block_id, week),
+        ).fetchone():
+            return True
+        history = self.conn.execute(
+            "SELECT from_week, day, period FROM lesson_block_positions WHERE lesson_block_id=?",
+            (block_id,),
+        ).fetchall()
+        if history:
+            return any(
+                r["from_week"] < week and r["day"] is not None and r["period"] is not None
+                for r in history
+            )
+        row = self.conn.execute(
+            "SELECT template_day, template_period FROM lesson_blocks WHERE id=?", (block_id,)
+        ).fetchone()
+        # Tarihli kaydı olmayan (eski) blok, şablon konumu doluysa geçmiş
+        # dahil her haftada yerleşikti.
+        return row is not None and row["template_day"] is not None and row["template_period"] is not None
+
+    def retire_or_delete_lesson_block(self, block_id: int, from_week: str) -> str:
+        """Kullanıcı bir dersi sildiğinde çağrılır. Kullanıcı bildirimi:
+        "öğrenci birebir dersi almayı bırakınca ve biz seçili dersi silince
+        bir önceki haftalardan da siliyor".
+
+        - Ders from_week'ten önce hiçbir haftada yapılmamışsa (hiç
+          yerleşmemiş ya da bu hafta/sonrasında eklenmiş) gerçekten silinir
+          -> "deleted".
+        - Geçmişte yapılmışsa SİLİNMEZ, from_week'ten İTİBAREN sona erdirilir
+          -> "ended": o haftadan itibaren ne programda ne havuzda görünür;
+          önceki haftalarda yapıldığı yerde görünmeye (analizde ve birebir
+          paket hesabında sayılmaya) devam eder. Artık bir hedefe (sınıf/
+          öğrenci ders hedefi) sayılmaması için hedef bağlantısı koparılır."""
+        if not self.block_was_placed_before(block_id, from_week):
+            self.delete_lesson_block(block_id)
+            return "deleted"
+        self.set_block_position_from_week(block_id, from_week, None, None)
+        self.conn.execute(
+            "DELETE FROM week_exceptions WHERE lesson_block_id=? AND week_start>=?", (block_id, from_week)
+        )
+        self.conn.execute(
+            "UPDATE lesson_blocks SET ended_week=?, curriculum_id=NULL, student_curriculum_id=NULL WHERE id=?",
+            (from_week, block_id),
+        )
+        self.conn.commit()
+        return "ended"
 
     def list_lesson_blocks_detailed(self, where: str = "", params: tuple = ()) -> list[sqlite3.Row]:
         query = f"""
