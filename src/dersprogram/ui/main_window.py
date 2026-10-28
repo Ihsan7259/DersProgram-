@@ -150,7 +150,15 @@ class MainWindow(QMainWindow):
 
     def handle_switch_institution(self) -> None:
         dialog = InstitutionDialog(self.current_institution["file"], self)
-        if dialog.exec() != InstitutionDialog.Accepted or dialog.selected_entry is None:
+        accepted = dialog.exec() == InstitutionDialog.Accepted
+        # Pencerede açık kurumun ADI değiştirilmiş olabilir - kenar
+        # çubuğundaki ad geçiş yapılmasa da güncel olsun.
+        for entry in institutions.list_institutions():
+            if entry["file"] == self.current_institution["file"]:
+                self.current_institution = entry
+                self.sidebar.set_institution_name(entry["name"])
+                break
+        if not accepted or dialog.selected_entry is None:
             return
         entry = dialog.selected_entry
         if entry["file"] == self.current_institution["file"]:

@@ -136,3 +136,43 @@ def set_active_institution(entry: dict) -> None:
 
 def institution_db_path(entry: dict) -> Path:
     return data_dir() / entry["file"]
+
+
+def rename_institution(file: str, new_name: str) -> dict:
+    """Kurumun GÖRÜNEN adını değiştirir. Veritabanı dosyasının adına
+    dokunulmaz (dosya adı sadece iç kimliktir; yeniden adlandırmak açık
+    bağlantılar ve yedek dosya adları açısından gereksiz risk olurdu)."""
+    new_name = new_name.strip()
+    if not new_name:
+        raise ValueError("Kurum adı boş olamaz.")
+    entries = list_institutions()
+    if any(e["file"] != file and e["name"].strip().lower() == new_name.lower() for e in entries):
+        raise ValueError(f"'{new_name}' adında bir kurum zaten var.")
+    for entry in entries:
+        if entry["file"] == file:
+            entry["name"] = new_name
+            _save_registry(entries)
+            return entry
+    raise ValueError("Kurum bulunamadı.")
+
+
+def delete_institution(file: str) -> None:
+    """Kurumu listeden çıkarır ve veritabanı dosyasını siler. Silmeden
+    önce bir yedek almak ve şu an AÇIK kurumu silmemek çağıranın işidir
+    (bkz. ui/institution_dialog.py). Kurumun otomatik yedekleri Yedekler
+    klasöründe kalır - yanlışlıkla silinen bir kurum oradan geri
+    yüklenebilir."""
+    entries = list_institutions()
+    remaining = [e for e in entries if e["file"] != file]
+    if len(remaining) == len(entries):
+        raise ValueError("Kurum bulunamadı.")
+    if not remaining:
+        raise ValueError("Son kalan kurum silinemez.")
+    _save_registry(remaining)
+    db_path = data_dir() / file
+    # SQLite'ın yardımcı dosyaları (varsa) da temizlenir.
+    for path in (db_path, db_path.with_name(db_path.name + "-wal"), db_path.with_name(db_path.name + "-shm")):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
