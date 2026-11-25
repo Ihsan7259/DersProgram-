@@ -6,7 +6,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QStackedWidget, QMessageBox
 
-from .. import backup, institutions
+from .. import backup, institutions, web_publish
 from ..db import Database
 from .schedule_tab import ScheduleTab
 from .subjects_tab import SubjectsTab
@@ -17,6 +17,7 @@ from .classes_tab import ClassesTab
 from .analysis_tab import AnalysisTab
 from .payments_tab import PaymentsTab
 from .settings_tab import SettingsTab
+from .links_tab import LinksTab, publish_now
 from .sidebar import Sidebar
 from .institution_dialog import InstitutionDialog
 from . import theme
@@ -80,6 +81,32 @@ class MainWindow(QMainWindow):
         height = min(880, max(available.height() - 40, 1))
         self.resize(width, height)
 
+    def closeEvent(self, event) -> None:
+        """Siteye yayın ayarlıysa ve program son yayından beri değiştiyse
+        kapatmadan önce "yayınlansın mı?" diye sorar - linklerdeki program
+        güncel kalsın diye."""
+        try:
+            config = web_publish.get_config(self.db)
+            pending = web_publish.is_configured(config) and web_publish.has_unpublished_changes(
+                self.db, self.current_institution["name"])
+        except Exception:
+            pending = False
+        if pending:
+            answer = QMessageBox.question(
+                self,
+                "Siteye Yayınla",
+                "Program siteye son yayından beri değişti.\n\n"
+                "Kişisel linklerdeki programlar güncellensin mi?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            if answer == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if answer == QMessageBox.Yes:
+                publish_now(self, self.db, self.current_institution["name"])
+        event.accept()
+
     def _run_silent_backup(self) -> None:
         backup.backup_now(self.db, self.current_institution["file"])
 
@@ -113,6 +140,7 @@ class MainWindow(QMainWindow):
         self.rooms_tab = RoomsTab(db, on_change=self._on_reference_change)
         self.analysis_tab = AnalysisTab(db)
         self.payments_tab = PaymentsTab(db)
+        self.links_tab = LinksTab(db, institution_name=lambda: self.current_institution["name"])
         self.settings_tab = SettingsTab(db, on_change=self._on_settings_change, on_restore_requested=self.handle_restore_backup)
 
         self.pages = {
@@ -124,6 +152,7 @@ class MainWindow(QMainWindow):
             "derslikler": (self.rooms_tab, "Derslikler", "Derslik tanımları, haftalık programları ve doluluk takibi"),
             "analiz": (self.analysis_tab, "Analiz", "Tarih aralığına göre öğretmen/öğrenci saat toplamları"),
             "odemeler": (self.payments_tab, "Ödemeler", "Öğrenci ücretleri, ödemeler ve kalan borç"),
+            "linkler": (self.links_tab, "Linkler", "Herkesin kişisel program linki ve siteye yayın"),
             "ayarlar": (self.settings_tab, "Ayarlar", "Gün ve ders saati sayısı ayarları"),
         }
         for widget, _title, _subtitle in self.pages.values():
@@ -244,7 +273,7 @@ class MainWindow(QMainWindow):
             self.analysis_tab.refresh()
         elif widget is self.payments_tab:
             self.payments_tab.refresh_students()
-        elif widget in (self.teachers_tab, self.students_tab, self.classes_tab):
+        elif widget in (self.teachers_tab, self.students_tab, self.classes_tab, self.links_tab):
             widget.refresh()
 
     def _on_reference_change(self) -> None:

@@ -26,6 +26,9 @@ Windows için, tek kullanıcılı, internete ihtiyaç duymadan (offline) çalı�
   tipine göre toplam saatler
 - **Ödemeler**: öğrenci bazında program/birebir ücreti, yapılan ödemeler,
   otomatik hesaplanan kalan borç
+- **Linkler**: her öğretmen, öğrenci ve sınıfın rastgele kodlu kalıcı web
+  linki (bir kere WhatsApp'tan gönderilir) ve "Siteye Yayınla". Sitenin
+  Next.js tarafı ve kurulumu: [`web/README.md`](web/README.md)
 - Veriler bilgisayarınızda `%USERPROFILE%\DersProgrami\veri.db` dosyasında
   otomatik saklanır; ayrı kaydet/aç derdi yoktur.
 
@@ -68,6 +71,7 @@ src/dersprogram/
     scheduling.py       program motoru: hafta hesaplama, şablon+istisna
                          birleştirme, çakışma kontrolü, oto-atama, analiz
     main.py             uygulama giriş noktası
+    web_publish.py      kişisel link kodları + GitHub deposuna yayın
     ui/
         main_window.py     sekmeleri birleştiren ana pencere
         schedule_tab.py    Ana Program: büyük ızgara + sürükle-bırak havuzu
@@ -79,5 +83,6 @@ src/dersprogram/
         payments_tab.py    Ödemeler
         list_tab.py        Ders/Derslik gibi basit liste ekranları
         settings_tab.py    gün/saat ayarları
+        links_tab.py       Linkler: kişisel linkler, WhatsApp, Siteye Yayınla
         widgets.py         ortak bileşenler (hafta gezinme, mini ızgara, özet tablosu)
 ```

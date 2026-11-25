@@ -1,0 +1,288 @@
+{
+ "format": 1,
+ "institution": "Örnek Kurum",
+ "kind": "student",
+ "kindLabel": "Öğrenci",
+ "name": "Zeynep Yıldız",
+ "subtitle": "9-A",
+ "days": [
+  "Pazartesi",
+  "Salı",
+  "Çarşamba",
+  "Perşembe",
+  "Cuma"
+ ],
+ "periods": [
+  {
+   "no": 1,
+   "start": "08:00",
+   "end": "08:40"
+  },
+  {
+   "no": 2,
+   "start": "09:00",
+   "end": "09:40"
+  },
+  {
+   "no": 3,
+   "start": "10:00",
+   "end": "10:40"
+  },
+  {
+   "no": 4,
+   "start": "11:00",
+   "end": "11:40"
+  },
+  {
+   "no": 5,
+   "start": "12:00",
+   "end": "12:40"
+  },
+  {
+   "no": 6,
+   "start": "13:00",
+   "end": "13:40"
+  },
+  {
+   "no": 7,
+   "start": "14:00",
+   "end": "14:40"
+  },
+  {
+   "no": 8,
+   "start": "15:00",
+   "end": "15:40"
+  }
+ ],
+ "weeks": {
+  "2026-11-23": [
+   {
+    "day": 0,
+    "period": 1,
+    "title": "Matematik",
+    "subtitle": "Ahmet Yılmaz",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 101",
+    "color": "#f8ddd0",
+    "accent": "#b24a16"
+   },
+   {
+    "day": 0,
+    "period": 2,
+    "title": "Türkçe",
+    "subtitle": "Elif Ak",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 101",
+    "color": "#f8eed0",
+    "accent": "#b28b16"
+   },
+   {
+    "day": 1,
+    "period": 2,
+    "title": "Fizik",
+    "subtitle": "Ayşe Demir",
+    "type": "birebir",
+    "typeLabel": "Birebir",
+    "room": "Derslik 102",
+    "color": "#d0f8dd",
+    "accent": "#16b24a"
+   },
+   {
+    "day": 2,
+    "period": 3,
+    "title": "Fizik",
+    "subtitle": "Ayşe Demir",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 102",
+    "color": "#d0f8dd",
+    "accent": "#16b24a"
+   },
+   {
+    "day": 3,
+    "period": 2,
+    "title": "Koçluk",
+    "subtitle": "Ahmet Yılmaz",
+    "type": "kocluk",
+    "typeLabel": "Koçluk",
+    "room": "",
+    "color": "#f8e5c7",
+    "accent": "#b47900"
+   }
+  ],
+  "2026-11-30": [
+   {
+    "day": 0,
+    "period": 1,
+    "title": "Matematik",
+    "subtitle": "Ahmet Yılmaz",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 101",
+    "color": "#f8ddd0",
+    "accent": "#b24a16"
+   },
+   {
+    "day": 0,
+    "period": 2,
+    "title": "Türkçe",
+    "subtitle": "Elif Ak",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 101",
+    "color": "#f8eed0",
+    "accent": "#b28b16"
+   },
+   {
+    "day": 1,
+    "period": 2,
+    "title": "Fizik",
+    "subtitle": "Ayşe Demir",
+    "type": "birebir",
+    "typeLabel": "Birebir",
+    "room": "Derslik 102",
+    "color": "#d0f8dd",
+    "accent": "#16b24a"
+   },
+   {
+    "day": 2,
+    "period": 3,
+    "title": "Fizik",
+    "subtitle": "Ayşe Demir",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 102",
+    "color": "#d0f8dd",
+    "accent": "#16b24a"
+   },
+   {
+    "day": 3,
+    "period": 2,
+    "title": "Koçluk",
+    "subtitle": "Ahmet Yılmaz",
+    "type": "kocluk",
+    "typeLabel": "Koçluk",
+    "room": "",
+    "color": "#f8e5c7",
+    "accent": "#b47900"
+   }
+  ],
+  "2026-12-07": [
+   {
+    "day": 0,
+    "period": 1,
+    "title": "Matematik",
+    "subtitle": "Ahmet Yılmaz",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 101",
+    "color": "#f8ddd0",
+    "accent": "#b24a16"
+   },
+   {
+    "day": 0,
+    "period": 2,
+    "title": "Türkçe",
+    "subtitle": "Elif Ak",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 101",
+    "color": "#f8eed0",
+    "accent": "#b28b16"
+   },
+   {
+    "day": 1,
+    "period": 2,
+    "title": "Fizik",
+    "subtitle": "Ayşe Demir",
+    "type": "birebir",
+    "typeLabel": "Birebir",
+    "room": "Derslik 102",
+    "color": "#d0f8dd",
+    "accent": "#16b24a"
+   },
+   {
+    "day": 2,
+    "period": 3,
+    "title": "Fizik",
+    "subtitle": "Ayşe Demir",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 102",
+    "color": "#d0f8dd",
+    "accent": "#16b24a"
+   },
+   {
+    "day": 3,
+    "period": 2,
+    "title": "Koçluk",
+    "subtitle": "Ahmet Yılmaz",
+    "type": "kocluk",
+    "typeLabel": "Koçluk",
+    "room": "",
+    "color": "#f8e5c7",
+    "accent": "#b47900"
+   }
+  ],
+  "2026-12-14": [
+   {
+    "day": 0,
+    "period": 1,
+    "title": "Matematik",
+    "subtitle": "Ahmet Yılmaz",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 101",
+    "color": "#f8ddd0",
+    "accent": "#b24a16"
+   },
+   {
+    "day": 0,
+    "period": 2,
+    "title": "Türkçe",
+    "subtitle": "Elif Ak",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 101",
+    "color": "#f8eed0",
+    "accent": "#b28b16"
+   },
+   {
+    "day": 1,
+    "period": 2,
+    "title": "Fizik",
+    "subtitle": "Ayşe Demir",
+    "type": "birebir",
+    "typeLabel": "Birebir",
+    "room": "Derslik 102",
+    "color": "#d0f8dd",
+    "accent": "#16b24a"
+   },
+   {
+    "day": 2,
+    "period": 3,
+    "title": "Fizik",
+    "subtitle": "Ayşe Demir",
+    "type": "sinif",
+    "typeLabel": "Sınıf",
+    "room": "Derslik 102",
+    "color": "#d0f8dd",
+    "accent": "#16b24a"
+   },
+   {
+    "day": 3,
+    "period": 2,
+    "title": "Koçluk",
+    "subtitle": "Ahmet Yılmaz",
+    "type": "kocluk",
+    "typeLabel": "Koçluk",
+    "room": "",
+    "color": "#f8e5c7",
+    "accent": "#b47900"
+   }
+  ]
+ },
+ "publishedAt": "2026-11-25T14:31:17"
+}

@@ -18,6 +18,7 @@ NAV_ITEMS = [
     ("derslikler", "Derslikler"),
     ("analiz", "Analiz"),
     ("odemeler", "Ödemeler"),
+    ("linkler", "Linkler"),
     ("ayarlar", "Ayarlar"),
 ]
 
@@ -33,7 +34,9 @@ class Sidebar(QWidget):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 8, 16, 8)
-        layout.setSpacing(18)
+        # Sekme sayısı arttıkça (Linkler eklendi) 1366 px genişliğindeki
+        # ekranlara sığsın diye boşluklar ve düğme iç boşlukları biraz dar.
+        layout.setSpacing(12)
 
         brand_row = QHBoxLayout()
         brand_row.setSpacing(9)
@@ -136,6 +139,6 @@ class Sidebar(QWidget):
             button.setIcon(theme.icon(theme.NAV_ICONS[i], color))
             button.setStyleSheet(
                 f"QPushButton {{ text-align:left; border:none; border-radius:9px; "
-                f"background:{bg}; color:{color}; font-size:8.9pt; font-weight:{weight}; padding:0 10px; }}"
+                f"background:{bg}; color:{color}; font-size:8.9pt; font-weight:{weight}; padding:0 7px; }}"
                 f"QPushButton:hover {{ background:{theme.SIDEBAR_ACTIVE_BG if active else '#182231'}; }}"
             )
