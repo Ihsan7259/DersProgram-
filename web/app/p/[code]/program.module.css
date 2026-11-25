@@ -1,176 +1,156 @@
+/* Uygulamadaki önizleme/"Kopyala" görselinin aynısı. Renkler uygulamanın
+   açık temasından (ui/theme.py), oranlar uygulamanın ızgarasından
+   (widgets.MiniScheduleGrid: hücre 3:2, yazılar sütun genişliğine oranlı). */
+
 .page {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 20px 16px 32px;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  color: #1c2430;
-  background: #f5f7fa;
-  min-height: 100vh;
+  padding: 20px 16px 28px;
+  background: #ffffff;
+  color: #10161f;
   box-sizing: border-box;
-}
-
-.header {
-  margin-bottom: 18px;
-}
-
-.institution {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #5b6b80;
-}
-
-.name {
-  margin: 4px 0 2px;
-  font-size: 24px;
-  line-height: 1.2;
-}
-
-.meta {
-  margin: 0;
-  font-size: 14px;
-  color: #5b6b80;
-}
-
-.week {
-  display: inline-block;
-  margin: 12px 0 0;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: #1f3a5f;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.day {
-  margin-bottom: 12px;
-  padding: 12px;
-  border-radius: 14px;
-  background: #fff;
-  border: 1px solid #e3e8ef;
-}
-
-.today {
-  border: 2px solid #2f6fd0;
-}
-
-.dayTitle {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 0 0 10px;
-  font-size: 17px;
-}
-
-.dayDate {
-  font-size: 14px;
-  font-weight: 500;
-  color: #5b6b80;
-}
-
-.todayBadge {
-  margin-left: auto;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: #2f6fd0;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.empty {
-  margin: 0;
-  font-size: 14px;
-  color: #8a97a8;
-}
-
-.lessons {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.lesson {
-  display: flex;
-  gap: 10px;
-  align-items: stretch;
-}
-
-.time {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  flex: 0 0 84px;
-  font-size: 13px;
-  white-space: nowrap;
-  color: #5b6b80;
-}
-
-.periodNo {
-  font-weight: 700;
-  color: #1c2430;
-}
-
-.card {
-  flex: 1;
-  min-width: 0;
-  padding: 9px 12px;
-  border-radius: 10px;
-  border-left: 5px solid;
 }
 
 .title {
   margin: 0;
-  font-size: 16px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 24px;
   font-weight: 700;
-  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 
 .subtitle {
-  margin: 2px 0 0;
-  font-size: 14px;
-  overflow-wrap: anywhere;
-}
-
-.tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 6px 0 0;
-}
-
-.tag {
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.7);
-  font-size: 12px;
-  font-weight: 600;
-  color: #3a4656;
-}
-
-.notice {
-  padding: 24px 16px;
-  border-radius: 14px;
-  background: #fff;
-  border: 1px solid #e3e8ef;
-  text-align: center;
-  color: #3a4656;
-}
-
-.notice h1 {
-  margin: 0 0 8px;
-  font-size: 20px;
+  margin: 4px 0 14px;
+  font-size: 15px;
+  color: #737b86;
 }
 
 .footer {
-  margin-top: 18px;
+  margin: 12px 0 0;
   font-size: 12px;
+  color: #a1a5aa;
+}
+
+/* Izgara bir resim gibi davranır: doğal genişliği sığmıyorsa her şey
+   (hücreler, yazılar) aynı oranda küçülür. --u: 1 "doğal" pikselin
+   ekrandaki karşılığı; en fazla 1px, yani geniş ekranda büyümez. */
+.frame {
+  container-type: inline-size;
+  width: 100%;
+}
+
+.sheet {
+  --w: 150; /* sütun (ders saati) genişliği */
+  --head: 64; /* gün adları sütunu */
+  --natural: calc(var(--head) + var(--cols) * var(--w) + 2);
+  --u: min(1px, calc(100cqw / var(--natural)));
+  display: grid;
+  grid-template-columns: calc(var(--u) * var(--head)) repeat(var(--cols), calc(var(--u) * var(--w)));
+  grid-template-rows: auto; /* ders saatleri başlığı kendi yüksekliğinde */
+  grid-auto-rows: minmax(calc(var(--u) * var(--w) / 1.5), auto);
+  width: calc(var(--u) * var(--natural));
+  border: 1px solid #dee1e7;
+  border-radius: calc(var(--u) * 4);
+  overflow: hidden;
+  background: #fcfcfa;
+  box-sizing: border-box;
+}
+
+.corner,
+.periodHeader,
+.dayHeader {
+  background: #f7f5f1;
+  color: #434e5e;
+  font-weight: 700;
+  font-size: calc(var(--u) * 11.25);
+  line-height: 1.25;
+}
+
+.corner,
+.periodHeader {
+  border-bottom: 1px solid #dee1e7;
+}
+
+.periodHeader {
+  padding: calc(var(--u) * 4) calc(var(--u) * 2);
   text-align: center;
-  color: #8a97a8;
+}
+
+.dayHeader {
+  display: flex;
+  align-items: center;
+  padding: 0 calc(var(--u) * 2);
+  overflow-wrap: anywhere;
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 1);
+  padding: calc(var(--u) * 1);
+  min-width: 0;
+}
+
+.card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(var(--u) * 1);
+  padding: calc(var(--u) * 4) calc(var(--u) * 3);
+  color: #4b5768;
+  overflow-wrap: anywhere;
+}
+
+.primary {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: calc(var(--u) * 15);
+  font-weight: 700;
+  line-height: 1.2;
+  color: #10161f;
+}
+
+.secondary {
+  font-size: calc(var(--u) * 12.3);
+  line-height: 1.2;
+}
+
+.tertiary {
+  font-size: calc(var(--u) * 10.2);
+  line-height: 1.2;
+}
+
+/* 4+ dersin aynı saatte olduğu kalabalık hücre: tek satırlık adlar
+   (uygulamadaki theme.MultiNameCell gibi). Ad sayısı arttıkça önce 2, sonra
+   3 sütuna geçilir ve yazı küçülür; satır gerekirse uzar. */
+.names {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(var(--name-cols, 1), minmax(0, 1fr));
+  align-content: center;
+  column-gap: calc(var(--u) * 4);
+  padding: calc(var(--u) * 4) calc(var(--u) * 3);
+  font-size: calc(var(--u) * var(--name-px, 15));
+}
+
+.name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #10161f;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: max(1px, calc(var(--u) * 1.5)) dashed #d4d8dd;
+}
+
+.unavailable {
+  color: #c92f36;
+  font-size: calc(var(--u) * 11.25);
+  font-weight: 700;
 }

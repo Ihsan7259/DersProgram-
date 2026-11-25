@@ -4,17 +4,24 @@
 // gönderilir. Sayfa her açılışta Türkiye saatine göre o haftanın programını
 // gösterir (pazartesi yeni haftaya geçer); içerik uygulamada "Siteye
 // Yayınla"ya basıldıkça güncellenir.
+//
+// Görünüm, uygulamadan alınan program görselinin ("Kopyala") aynısıdır:
+// satırlar günler, sütunlar ders saatleri. Izgara bir resim gibi ekrana
+// sığacak şekilde orantılı küçülür; telefonda iki parmakla yakınlaştırılır.
+import type { CSSProperties } from "react";
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 import {
-  addDays,
   currentWeek,
-  formatDate,
   formatPublishedAt,
   getProgramPage,
-  type LessonEntry,
   type ProgramPage,
+  type ScheduleCell,
 } from "../../../lib/ders-programi";
 import styles from "./program.module.css";
+
+// Uygulamanın kendi yazı tipi.
+const workSans = localFont({ src: "./fonts/WorkSans.ttf", weight: "100 900", display: "swap" });
 
 // Hafta, isteğin yapıldığı güne göre seçildiği için sayfa her istekte
 // yeniden çizilir; GitHub'dan okunan veri ise ayrıca önbellekte tutulur
@@ -38,118 +45,118 @@ export default async function ProgramPageView({ params }: Props) {
   const page = await getProgramPage(code);
   if (!page) {
     return (
-      <main className={styles.page}>
-        <div className={styles.notice}>
-          <h1>Link geçersiz</h1>
-          <p>Bu link geçerli değil ya da yenilenmiş olabilir. Güncel linkinizi kurumdan isteyin.</p>
-        </div>
+      <main className={`${styles.page} ${workSans.className}`}>
+        <h1 className={styles.title}>Link geçersiz</h1>
+        <p className={styles.subtitle}>
+          Bu link geçerli değil ya da yenilenmiş olabilir. Güncel linkinizi kurumdan isteyin.
+        </p>
       </main>
     );
   }
 
-  const { today, monday } = currentWeek();
-  const lessons = page.weeks[monday];
-  const lastDay = addDays(monday, Math.max(page.days.length, 1) - 1);
+  const { monday } = currentWeek();
+  const week = page.weeks[monday];
 
   return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <p className={styles.institution}>{page.institution}</p>
-        <h1 className={styles.name}>{page.name}</h1>
-        <p className={styles.meta}>
-          {page.kindLabel}
-          {page.subtitle ? ` · ${page.subtitle}` : ""}
-        </p>
-        <p className={styles.week}>
-          {formatDate(monday, { day: "numeric", month: "long" })} –{" "}
-          {formatDate(lastDay, { day: "numeric", month: "long", year: "numeric" })}
-        </p>
-      </header>
-
-      {lessons === undefined ? (
-        <div className={styles.notice}>
-          <p>Bu haftanın programı henüz yayınlanmadı.</p>
-        </div>
-      ) : (
-        page.days.map((dayName, dayIndex) => (
-          <DaySection
-            key={dayName}
-            page={page}
-            dayName={dayName}
-            date={addDays(monday, dayIndex)}
-            isToday={addDays(monday, dayIndex) === today}
-            lessons={lessons.filter((lesson) => lesson.day === dayIndex)}
-          />
-        ))
-      )}
-
-      <footer className={styles.footer}>Son güncelleme: {formatPublishedAt(page.publishedAt)}</footer>
+    <main className={`${styles.page} ${workSans.className}`}>
+      <h1 className={styles.title}>{page.name}</h1>
+      <p className={styles.subtitle}>{week ? week.label : "Bu haftanın programı henüz yayınlanmadı."}</p>
+      {week && <Grid page={page} cells={week.cells} />}
+      <p className={styles.footer}>
+        {page.institution} · Son güncelleme: {formatPublishedAt(page.publishedAt)}
+      </p>
     </main>
   );
 }
 
-function DaySection({
-  page,
-  dayName,
-  date,
-  isToday,
-  lessons,
-}: {
-  page: ProgramPage;
-  dayName: string;
-  date: string;
-  isToday: boolean;
-  lessons: LessonEntry[];
-}) {
+function Grid({ page, cells }: { page: ProgramPage; cells: ScheduleCell[] }) {
+  const byPosition = new Map(cells.map((cell) => [`${cell.day}-${cell.period}`, cell]));
+  const sheetStyle = { "--cols": page.periods.length } as CSSProperties;
   return (
-    <section className={isToday ? `${styles.day} ${styles.today}` : styles.day}>
-      <h2 className={styles.dayTitle}>
-        <span>{dayName}</span>
-        <span className={styles.dayDate}>{formatDate(date, { day: "numeric", month: "long" })}</span>
-        {isToday && <span className={styles.todayBadge}>Bugün</span>}
-      </h2>
-      {lessons.length === 0 ? (
-        <p className={styles.empty}>Ders yok</p>
-      ) : (
-        <ul className={styles.lessons}>
-          {lessons.map((lesson, index) => (
-            <LessonRow key={`${lesson.period}-${index}`} page={page} lesson={lesson} />
-          ))}
-        </ul>
-      )}
-    </section>
+    <div className={styles.frame}>
+      <div className={styles.sheet} style={sheetStyle}>
+        <div className={styles.corner} />
+        {page.periods.map((period) => (
+          <div key={period.no} className={styles.periodHeader}>
+            {period.no}.
+            {period.start && (
+              <>
+                <br />
+                {period.start}-
+                <br />
+                {period.end}
+              </>
+            )}
+          </div>
+        ))}
+        {page.days.map((dayName, day) => (
+          <Row key={dayName} dayName={dayName} day={day} page={page} byPosition={byPosition} />
+        ))}
+      </div>
+    </div>
   );
 }
 
-function LessonRow({ page, lesson }: { page: ProgramPage; lesson: LessonEntry }) {
-  const period = page.periods[lesson.period - 1];
-  // "Zümre" gibi türlerde başlık zaten türün adı; etiketi tekrar yazma.
-  const showType = lesson.typeLabel !== lesson.title;
+function Row({
+  dayName,
+  day,
+  page,
+  byPosition,
+}: {
+  dayName: string;
+  day: number;
+  page: ProgramPage;
+  byPosition: Map<string, ScheduleCell>;
+}) {
   return (
-    <li className={styles.lesson}>
-      <div className={styles.time}>
-        <span className={styles.periodNo}>{lesson.period}. ders</span>
-        {period?.start && (
-          <span>
-            {period.start}
-            {period.end ? `–${period.end}` : ""}
+    <>
+      <div className={styles.dayHeader}>{dayName}</div>
+      {page.periods.map((period) => (
+        <Cell key={period.no} cell={byPosition.get(`${day}-${period.no}`)} />
+      ))}
+    </>
+  );
+}
+
+function Cell({ cell }: { cell?: ScheduleCell }) {
+  if (cell?.cards?.length) {
+    return (
+      <div className={styles.cell}>
+        {cell.cards.map((card, index) => (
+          <div key={index} className={styles.card} style={{ background: card.color }}>
+            <span className={styles.primary}>{card.lines[0]}</span>
+            {card.lines[1] && <span className={styles.secondary}>{card.lines[1]}</span>}
+            {card.lines[2] && <span className={styles.tertiary}>{card.lines[2]}</span>}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (cell?.names?.length) {
+    const count = cell.names.length;
+    const [columns, fontPx] = count <= 5 ? [1, 15] : count <= 10 ? [2, 12.3] : [3, 10.2];
+    const namesStyle = { background: cell.color, "--name-cols": columns, "--name-px": fontPx } as CSSProperties;
+    return (
+      <div className={styles.cell}>
+        <div className={styles.names} style={namesStyle}>
+          {cell.names.map((name, index) => (
+            <span key={index} className={styles.name} title={name}>
+              {name}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className={styles.cell}>
+      <div className={styles.empty}>
+        {cell?.unavailable && (
+          <span className={styles.unavailable} title="Bu saatte müsait değil">
+            ×
           </span>
         )}
       </div>
-      <div className={styles.card} style={{ background: lesson.color, borderLeftColor: lesson.accent }}>
-        <p className={styles.title}>{lesson.title}</p>
-        {lesson.subtitle && <p className={styles.subtitle}>{lesson.subtitle}</p>}
-        {(showType || lesson.room) && (
-          <p className={styles.tags}>
-            {showType && (
-              <span className={styles.tag} style={{ color: lesson.accent }}>
-                {lesson.typeLabel}
-              </span>
-            )}
-            {lesson.room && <span className={styles.tag}>{lesson.room}</span>}
-          </p>
-        )}
-      </div>
-    </li>
+    </div>
   );
 }

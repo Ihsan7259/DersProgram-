@@ -7,16 +7,21 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-export type LessonEntry = {
+// Izgaranın bir hücresi, uygulamadaki önizlemenin ("Kopyala" görseli)
+// çizdiği haliyle. Hücrede ya kartlar, ya (4+ derslik kalabalık hücrede)
+// tek satırlık adlar, ya da öğretmenin "müsait değil" işareti olur.
+export type ScheduleCell = {
   day: number; // 0 = haftanın ilk günü (days[0], genelde Pazartesi)
   period: number; // 1'den başlar (periods[period - 1])
-  title: string;
-  subtitle: string;
-  type: string;
-  typeLabel: string;
-  room: string;
-  color: string; // kart arka planı
-  accent: string; // kartın kenar çizgisi
+  cards?: { lines: string[]; color: string }[]; // lines: [kalın satır, ikinci, küçük üçüncü]
+  names?: string[];
+  color?: string; // names için arka plan
+  unavailable?: boolean;
+};
+
+export type ProgramWeek = {
+  label: string; // "23 Kas 2026 – 27 Kas 2026"
+  cells: ScheduleCell[];
 };
 
 export type ProgramPage = {
@@ -28,8 +33,8 @@ export type ProgramPage = {
   subtitle: string;
   days: string[];
   periods: { no: number; start: string; end: string }[];
-  // Haftanın pazartesisi (YYYY-AA-GG) -> o haftanın dersleri
-  weeks: Record<string, LessonEntry[]>;
+  // Haftanın pazartesisi (YYYY-AA-GG) -> o hafta
+  weeks: Record<string, ProgramWeek>;
   publishedAt: string;
 };
 
@@ -96,18 +101,6 @@ export function currentWeek(now: Date = new Date()): { today: string; monday: st
   const daysSinceMonday = (date.getUTCDay() + 6) % 7;
   date.setUTCDate(date.getUTCDate() - daysSinceMonday);
   return { today, monday: date.toISOString().slice(0, 10) };
-}
-
-export function addDays(isoDate: string, days: number): string {
-  const date = new Date(`${isoDate}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-export function formatDate(isoDate: string, options: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat("tr-TR", { timeZone: "UTC", ...options }).format(
-    new Date(`${isoDate}T00:00:00Z`),
-  );
 }
 
 // Yayın zamanı uygulamanın çalıştığı bilgisayarın yerel saatiyle yazılır

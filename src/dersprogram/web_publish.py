@@ -179,34 +179,37 @@ def whatsapp_message(entry: dict, institution: str) -> str:
 
 
 # ---------- yayınlanacak içerik ----------
+#
+# Kullanıcı isteği: web sayfası, uygulamadan alınan ekran görüntüsünün
+# (Ana Program'da isme çift tıklanınca açılan önizleme ve "Kopyala"
+# görseli, bkz. schedule_tab.RowPreviewDialog) AYNISI olsun. Bu yüzden
+# hücreler burada o önizlemenin çizdiği haliyle hazırlanır: aynı satır
+# metinleri (BlockView.*_row_lines), aynı renkler (theme.lesson_colors_for),
+# kalabalık hücrelerde aynı tek satırlık adlar ve öğretmenin "müsait değil"
+# saatlerindeki çarpı. Site sadece bunu ızgaraya dizer.
 
-def _entry_for(block: scheduling.BlockView, kind: str) -> dict:
+def _row_lines(block: scheduling.BlockView, kind: str) -> list[str]:
+    if kind == KIND_TEACHER:
+        lines = block.teacher_row_lines()
+    elif kind == KIND_CLASS:
+        lines = block.class_row_lines()
+    else:
+        lines = block.student_row_lines()
+    return [line or "" for line in lines]
+
+
+def _cell_for(day: int, period: int, blocks: list[scheduling.BlockView], kind: str) -> dict:
     from .ui import theme
 
-    if kind == KIND_TEACHER:
-        title, subtitle, _room = block.teacher_row_lines()
-    elif kind == KIND_CLASS:
-        title = block.subject_name or block.type_label()
-        subtitle = block.teacher_name or ""
-    else:
-        title = block.subject_name or block.type_short()
-        subtitle = block.teacher_name or ""
-    bg, dot = theme.lesson_colors_for(block)
-    return {
-        "day": block.day,
-        "period": block.period,
-        "title": title or block.type_label(),
-        "subtitle": subtitle or "",
-        "type": block.type,
-        "typeLabel": block.type_short(),
-        "room": block.room_name or "",
-        "color": bg,
-        "accent": dot,
-    }
-
-
-def _sorted_entries(entries: list[dict]) -> list[dict]:
-    return sorted(entries, key=lambda e: (e["day"], e["period"], e["title"]))
+    if len(blocks) >= theme.CROWDED_CELL_LIMIT:
+        bg, _dot = theme.lesson_colors_for(blocks[0], tinted=False)
+        return {"day": day, "period": period, "color": bg,
+                "names": [block.crowded_line(kind) for block in blocks]}
+    tinted = kind in (KIND_TEACHER, KIND_STUDENT)
+    return {"day": day, "period": period, "cards": [
+        {"lines": _row_lines(block, kind), "color": theme.lesson_colors_for(block, tinted=tinted)[0]}
+        for block in blocks
+    ]}
 
 
 def build_pages(db: Database, institution: str, today: _dt.date | None = None) -> dict[str, dict]:
@@ -226,28 +229,51 @@ def build_pages(db: Database, institution: str, today: _dt.date | None = None) -
         periods.append({"no": number, "start": start, "end": end})
 
     students = [(row["id"], row["class_group_id"]) for row in db.list_students()]
-    per_entity: dict[str, dict[str, list[dict]]] = {key: {} for key in codes}
+    per_entity: dict[str, dict[str, dict]] = {key: {} for key in codes}
 
     for week in weeks:
         wkey = scheduling.week_key(week)
+        label = scheduling.week_label(week, len(day_names))
         schedule, _pool = scheduling.get_week_view(db, week)
-        buckets: dict[str, list[dict]] = {}
-        for (day, period), blocks in schedule.items():
+        cells: dict[str, list[dict]] = {}
+        busy_teacher_cells: set[tuple[int, int, int]] = set()
+        # Hücre içindeki ders sırası, önizlemedeki gibi programın kendi sırası.
+        for (day, period), blocks in sorted(schedule.items()):
+            by_teacher: dict[int, list] = {}
+            by_class: dict[int, list] = {}
             for block in blocks:
                 if block.teacher_id is not None:
-                    buckets.setdefault(_entity_key(KIND_TEACHER, block.teacher_id), []).append(
-                        _entry_for(block, KIND_TEACHER))
+                    by_teacher.setdefault(block.teacher_id, []).append(block)
                 if block.class_group_id is not None:
-                    buckets.setdefault(_entity_key(KIND_CLASS, block.class_group_id), []).append(
-                        _entry_for(block, KIND_CLASS))
+                    by_class.setdefault(block.class_group_id, []).append(block)
+            for teacher_id, matched in by_teacher.items():
+                busy_teacher_cells.add((teacher_id, day, period))
+                cells.setdefault(_entity_key(KIND_TEACHER, teacher_id), []).append(
+                    _cell_for(day, period, matched, KIND_TEACHER))
+            for class_id, matched in by_class.items():
+                cells.setdefault(_entity_key(KIND_CLASS, class_id), []).append(
+                    _cell_for(day, period, matched, KIND_CLASS))
             # Öğrencinin programı: kendi dersleri + sınıfının dersleri,
-            # uygulamadaki Öğrenciler sekmesiyle birebir aynı kuralla.
+            # uygulamadaki önizlemeyle birebir aynı kuralla.
             for student_id, class_group_id in students:
-                for block in scheduling.student_cell_blocks(blocks, student_id, class_group_id):
-                    buckets.setdefault(_entity_key(KIND_STUDENT, student_id), []).append(
-                        _entry_for(block, KIND_STUDENT))
+                matched = scheduling.student_cell_blocks(blocks, student_id, class_group_id)
+                if matched:
+                    cells.setdefault(_entity_key(KIND_STUDENT, student_id), []).append(
+                        _cell_for(day, period, matched, KIND_STUDENT))
+        # Öğretmenin "müsait değil" saatleri - önizlemedeki gibi SADECE
+        # öğretmenin kendi programında ve o saatte dersi yoksa.
+        for teacher_id, day, period in sorted(scheduling.UnavailableSlots.compute(db, week).teacher):
+            if (teacher_id, day, period) in busy_teacher_cells:
+                continue
+            if not (0 <= day < len(day_names) and 1 <= period <= len(periods)):
+                continue
+            cells.setdefault(_entity_key(KIND_TEACHER, teacher_id), []).append(
+                {"day": day, "period": period, "unavailable": True})
         for key in per_entity:
-            per_entity[key][wkey] = _sorted_entries(buckets.get(key, []))
+            per_entity[key][wkey] = {
+                "label": label,
+                "cells": sorted(cells.get(key, []), key=lambda c: (c["day"], c["period"])),
+            }
 
     pages: dict[str, dict] = {}
     for kind, entity_id, name, subtitle in _entities(db):

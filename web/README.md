@@ -8,6 +8,8 @@ https://vipparkkurs.com/p/k7q2mxp9wd
 
 Link kişiye bir kere gönderilir. Uygulamada **Linkler > Siteye Yayınla**'ya basıldıkça linkteki program güncellenir. Sayfa her açılışta Türkiye saatine göre **o haftayı** gösterir ve pazartesi yeni haftaya geçer.
 
+Sayfa, uygulamadan alınan program görselinin (önizleme penceresindeki **Kopyala**) **aynısıdır**: satırlar günler, sütunlar ders saatleri, aynı renkler ve aynı yazılar. Izgara bir resim gibi ekran genişliğine sığacak şekilde orantılı küçülür; telefonda iki parmakla yakınlaştırılır. Sayfa sitenin kendi `layout`'u içinde açılır, yani sitenin üst menüsü ve alt bilgisi etrafında görünür.
+
 Sitede veritabanı, giriş sistemi ya da veri alan bir endpoint **gerekmez**:
 
 ```
@@ -36,6 +38,7 @@ Token'ların bir son kullanma tarihi var. Süresi dolunca yenisini girmek gereki
 lib/ders-programi.ts            ->  <proje>/lib/ders-programi.ts      (src/ kullanılıyorsa src/lib/)
 app/p/[code]/page.tsx           ->  <proje>/app/p/[code]/page.tsx     (src/ kullanılıyorsa src/app/)
 app/p/[code]/program.module.css ->  <proje>/app/p/[code]/program.module.css
+app/p/[code]/fonts/WorkSans.ttf ->  <proje>/app/p/[code]/fonts/WorkSans.ttf  (uygulamanın yazı tipi, next/font/local ile yüklenir; SIL Open Font License)
 ```
 `page.tsx` lib'i göreli yolla (`../../../lib/ders-programi`) içe aktarır. Projede `@/lib/...` alias'ı varsa onu kullanabilirsiniz. Ek bir npm paketi gerekmez.
 
@@ -69,6 +72,7 @@ DERS_PROGRAMI_LOCAL_DIR=/yol/programlar npm run dev
 - **Linki yenileme:** Uygulamada "Linki Yenile" denirse bir sonraki yayında eski kodun dosyası depodan silinir ve eski link "Link geçersiz" gösterir.
 
 ## Veri formatı (`programlar/<kod>.json`)
+Hücreler, uygulamadaki önizlemenin çizdiği haliyle gelir; sitenin bir şey hesaplaması gerekmez.
 ```jsonc
 {
   "format": 1,
@@ -77,22 +81,20 @@ DERS_PROGRAMI_LOCAL_DIR=/yol/programlar npm run dev
   "kindLabel": "Öğrenci",
   "name": "Zeynep Yıldız",
   "subtitle": "9-A",              // öğrencide sınıfı, öğretmende branşları
-  "days": ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma"],
-  "periods": [{ "no": 1, "start": "08:00", "end": "08:40" }],
-  "weeks": {                      // haftanın pazartesisi -> dersler (bu hafta + 3 hafta ileri)
-    "2026-11-23": [
-      {
-        "day": 0,                 // days[0]
-        "period": 1,              // periods[0]
-        "title": "Matematik",
-        "subtitle": "Ahmet Yılmaz",
-        "type": "sinif",
-        "typeLabel": "Sınıf",
-        "room": "Derslik 101",
-        "color": "#f8ddd0",       // uygulamadaki ders rengi
-        "accent": "#b24a16"
-      }
-    ]
+  "days": ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma"],   // ızgaranın satırları
+  "periods": [{ "no": 1, "start": "08:00", "end": "08:40" }],      // ızgaranın sütunları
+  "weeks": {                      // haftanın pazartesisi -> o hafta (bu hafta + 3 hafta ileri)
+    "2026-11-23": {
+      "label": "23 Kas 2026 – 27 Kas 2026",
+      "cells": [
+        // Ders kartları (aynı saatte 1-3 ders): lines = [kalın satır, ikinci satır, küçük üçüncü satır]
+        { "day": 0, "period": 1, "cards": [{ "lines": ["Matematik", "Sınıf · A. Yılmaz", "Sınıf Dersi(Derslik 101)"], "color": "#f3c3ad" }] },
+        // Kalabalık hücre (aynı saatte 4+ ders): tek satırlık adlar
+        { "day": 4, "period": 3, "names": ["Soru Çözümü", "Soru Çözümü", "Soru Çözümü", "Soru Çözümü"], "color": "#ffdedb" },
+        // Öğretmenin "müsait değil" işaretlediği boş saat (sadece öğretmen sayfasında)
+        { "day": 2, "period": 6, "unavailable": true }
+      ]
+    }
   },
   "publishedAt": "2026-11-25T14:30:05"
 }
