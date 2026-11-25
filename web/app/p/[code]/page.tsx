@@ -13,6 +13,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import {
   currentWeek,
+  downloadFilename,
   formatPublishedAt,
   getProgramPage,
   type ProgramPage,
@@ -20,8 +21,14 @@ import {
 } from "../../../lib/ders-programi";
 import styles from "./program.module.css";
 
-// Uygulamanın kendi yazı tipi.
-const workSans = localFont({ src: "./fonts/WorkSans.ttf", weight: "100 900", display: "swap" });
+// Uygulamanın kendi yazı tipi (indirilen görsel de aynısını kullanır).
+const workSans = localFont({
+  src: [
+    { path: "./fonts/WorkSans-Regular.ttf", weight: "400", style: "normal" },
+    { path: "./fonts/WorkSans-Bold.ttf", weight: "700", style: "normal" },
+  ],
+  display: "swap",
+});
 
 // Hafta, isteğin yapıldığı güne göre seçildiği için sayfa her istekte
 // yeniden çizilir; GitHub'dan okunan veri ise ayrıca önbellekte tutulur
@@ -59,8 +66,19 @@ export default async function ProgramPageView({ params }: Props) {
 
   return (
     <main className={`${styles.page} ${workSans.className}`}>
-      <h1 className={styles.title}>{page.name}</h1>
-      <p className={styles.subtitle}>{week ? week.label : "Bu haftanın programı henüz yayınlanmadı."}</p>
+      <div className={styles.heading}>
+        <div>
+          <h1 className={styles.title}>{page.name}</h1>
+          <p className={styles.subtitle}>{week ? week.label : "Bu haftanın programı henüz yayınlanmadı."}</p>
+        </div>
+        {week && (
+          // Göreli adres: /p/<kod> -> /p/<kod>/indir (sitede /p dışında bir
+          // yola taşınsa da çalışır).
+          <a className={styles.download} href={`${code}/indir`} download={downloadFilename(page, week)}>
+            Resim olarak indir
+          </a>
+        )}
+      </div>
       {week && <Grid page={page} cells={week.cells} />}
       <p className={styles.footer}>
         {page.institution} · Son güncelleme: {formatPublishedAt(page.publishedAt)}

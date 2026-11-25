@@ -103,6 +103,23 @@ export function currentWeek(now: Date = new Date()): { today: string; monday: st
   return { today, monday: date.toISOString().slice(0, 10) };
 }
 
+// İndirilen görselin dosya adı: "Zeynep_Yildiz_23_Kas_2026.png". Türkçe
+// harfler sadeleştirilir: bazı tarayıcılar (ör. Chromium) Türkçe karakterli
+// dosya adlarını reddedip dosyayı "download" adıyla kaydediyor.
+const TURKISH_ASCII: Record<string, string> = {
+  ç: "c", Ç: "C", ğ: "g", Ğ: "G", ı: "i", İ: "I", ö: "o", Ö: "O", ş: "s", Ş: "S", ü: "u", Ü: "U",
+};
+
+export function downloadFilename(page: ProgramPage, week: ProgramWeek): string {
+  const firstDay = week.label.split("–")[0] ?? "";
+  const text = `${page.name} ${firstDay}`
+    .replace(/[çÇğĞıİöÖşŞüÜ]/g, (letter) => TURKISH_ASCII[letter])
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `${text || "ders_programi"}.png`;
+}
+
 // Yayın zamanı uygulamanın çalıştığı bilgisayarın yerel saatiyle yazılır
 // (saat dilimi bilgisi olmadan); olduğu gibi gösterilir.
 export function formatPublishedAt(value: string): string {

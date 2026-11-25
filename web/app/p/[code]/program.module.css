@@ -9,6 +9,33 @@
   box-sizing: border-box;
 }
 
+.heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.download {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 2px;
+  margin-bottom: 14px;
+  padding: 9px 16px;
+  border-radius: 8px;
+  background: #1f3a5f;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.download:hover {
+  background: #2a4b78;
+}
+
 .title {
   margin: 0;
   font-family: "Segoe UI", system-ui, sans-serif;
@@ -78,6 +105,7 @@
   display: flex;
   align-items: center;
   padding: 0 calc(var(--u) * 2);
+  font-weight: 400; /* uygulamada gün adları ince */
   overflow-wrap: anywhere;
 }
 

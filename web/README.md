@@ -10,6 +10,8 @@ Link kişiye bir kere gönderilir. Uygulamada **Linkler > Siteye Yayınla**'ya b
 
 Sayfa, uygulamadan alınan program görselinin (önizleme penceresindeki **Kopyala**) **aynısıdır**: satırlar günler, sütunlar ders saatleri, aynı renkler ve aynı yazılar. Izgara bir resim gibi ekran genişliğine sığacak şekilde orantılı küçülür; telefonda iki parmakla yakınlaştırılır. Sayfa sitenin kendi `layout`'u içinde açılır, yani sitenin üst menüsü ve alt bilgisi etrafında görünür.
 
+Sayfadaki **Resim olarak indir** düğmesi (`/p/<kod>/indir`) o haftanın programını PNG olarak indirir. Görsel, uygulamadaki "Kopyala" görselinin ölçüleriyle (300 DPI) sunucuda çizilir. Bunun için Next.js'in kendi `next/og` modülü kullanılır, ek paket gerekmez.
+
 Sitede veritabanı, giriş sistemi ya da veri alan bir endpoint **gerekmez**:
 
 ```
@@ -36,9 +38,11 @@ Token'ların bir son kullanma tarihi var. Süresi dolunca yenisini girmek gereki
 ### 3. Dosyaları projeye ekleyin
 ```
 lib/ders-programi.ts            ->  <proje>/lib/ders-programi.ts      (src/ kullanılıyorsa src/lib/)
+lib/ders-programi-gorsel.tsx    ->  <proje>/lib/ders-programi-gorsel.tsx
 app/p/[code]/page.tsx           ->  <proje>/app/p/[code]/page.tsx     (src/ kullanılıyorsa src/app/)
 app/p/[code]/program.module.css ->  <proje>/app/p/[code]/program.module.css
-app/p/[code]/fonts/WorkSans.ttf ->  <proje>/app/p/[code]/fonts/WorkSans.ttf  (uygulamanın yazı tipi, next/font/local ile yüklenir; SIL Open Font License)
+app/p/[code]/indir/route.tsx    ->  <proje>/app/p/[code]/indir/route.tsx
+app/p/[code]/fonts/             ->  <proje>/app/p/[code]/fonts/       (WorkSans-Regular/Bold.ttf: uygulamanın yazı tipi, SIL Open Font License)
 ```
 `page.tsx` lib'i göreli yolla (`../../../lib/ders-programi`) içe aktarır. Projede `@/lib/...` alias'ı varsa onu kullanabilirsiniz. Ek bir npm paketi gerekmez.
 
@@ -66,6 +70,7 @@ DERS_PROGRAMI_LOCAL_DIR=/yol/programlar npm run dev
 - **Next.js sürümü:** App Router içindir. Next.js 16.4 ile derlenip test edildi (Next 15+ uyumlu). Next 14'te `params` bir Promise değildir; `Props` tipini `{ params: { code: string } }` yapıp `await params` satırlarını `params` ile değiştirin. Pages Router kullanılıyorsa aynı mantık `getServerSideProps` ile kurulabilir.
 - **`cacheComponents`:** `next.config`'de açıksa `export const dynamic = "force-dynamic"` satırı kaldırılmalı.
 - **Middleware:** Sitede bütün sayfalara giriş isteyen bir middleware varsa `/p/` yolu hariç tutulmalı; linkler girişsiz açılır.
+- **İndirme görseli ve yazı tipleri:** `lib/ders-programi-gorsel.tsx` yazı tiplerini `app/p/[code]/fonts` (ya da `src/app/p/[code]/fonts`) klasöründen okur. Başka bir yere taşındıysa `DERS_PROGRAMI_FONT_DIR` ile klasör verilebilir. Vercel'de bu dosyaların sunucu paketine girdiğini (`outputFileTracingIncludes`) ilk kurulumda bir kere kontrol edin.
 - **Geçersiz kod:** "Link geçersiz" mesajı gösterilir. Kod formatına uymayan istekler (ör. `../`) GitHub'a hiç gitmez.
 - **Arama motorları:** Sayfalar `noindex, nofollow` döner.
 - **Cache:** Her kodun dosyası en fazla 60 saniyede bir GitHub'dan okunur (`REVALIDATE_SECONDS`). Token başına saatlik 5.000 istek sınırına uzak kalır.
