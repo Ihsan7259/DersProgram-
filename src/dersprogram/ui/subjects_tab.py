@@ -163,7 +163,10 @@ class SubjectsTab(QWidget):
         self.pdf_button.setEnabled(has_selection)
         if not has_selection:
             self.color_button.set_color(None)
-            self.grid.populate(self.db, {}, row_mode=ROW_MODE_SUBJECT)
+            self.grid.populate(
+                self.db, {}, row_mode=ROW_MODE_SUBJECT,
+                holiday_names_by_day=scheduling.holiday_names_by_day(self.db, self.navigator.week_start),
+            )
             self.summary_table.render({})
             return
 
@@ -171,7 +174,10 @@ class SubjectsTab(QWidget):
         self.color_button.set_color(self.db.get_subject_color(subject_id), default_preview=default_bg)
 
         filtered = self._week_blocks()
-        self.grid.populate(self.db, filtered, row_mode=ROW_MODE_SUBJECT)
+        self.grid.populate(
+            self.db, filtered, row_mode=ROW_MODE_SUBJECT,
+            holiday_names_by_day=scheduling.holiday_names_by_day(self.db, self.navigator.week_start),
+        )
 
         totals: dict[str, int] = {}
         for blocks in filtered.values():

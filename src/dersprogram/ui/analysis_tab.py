@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QDateEdit,
+    QComboBox,
     QPushButton,
     QTabWidget,
     QTableWidget,
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from ..db import Database, LESSON_TYPE_LABELS, TEACHERLESS_TYPES
+from ..db import Database, LESSON_TYPE_LABELS, TEACHERLESS_TYPES, TYPE_ONE_ON_ONE
 from .. import scheduling
 from . import theme
 
@@ -68,6 +69,17 @@ class AnalysisExportDialog(QDialog):
             check.setChecked(True)
             self.checks[key] = check
             layout.addWidget(check)
+
+        period_row = QHBoxLayout()
+        period_row.addWidget(QLabel("Rapor dönemi:"))
+        self.period_combo = QComboBox()
+        self.period_combo.addItem("Seçilen tarih aralığı toplamı", "total")
+        self.period_combo.addItem("Haftalara göre (her hafta ayrı sekme)", "weekly")
+        self.period_combo.addItem("Aylara göre (her ay ayrı sekme)", "monthly")
+        self.period_combo.setToolTip("Seçilen tarih aralığındaki dersleri tek toplam, hafta hafta veya ay ay raporlar.")
+        period_row.addWidget(self.period_combo)
+        period_row.addStretch()
+        layout.addLayout(period_row)
 
         buttons = QDialogButtonBox()
         self.export_button = buttons.addButton("Excel Oluştur", QDialogButtonBox.AcceptRole)
@@ -110,6 +122,7 @@ def table_export_data(table: QTableWidget) -> tuple[list[str], list[list]]:
 def write_analysis_workbook(
     path: str, sheets: list[tuple[str, list[str], list[list]]],
     start: _dt.date, end: _dt.date,
+    sheet_periods: dict[str, tuple[_dt.date, _dt.date]] | None = None,
 ) -> None:
     """Seçilen analiz tablolarını tek bir .xlsx dosyasına, her tabloyu
     AYRI SEKME olarak yazar. openpyxl zaten bir bağımlılık (öğrenci
@@ -131,7 +144,10 @@ def write_analysis_workbook(
         sheet = workbook.create_sheet(sheet_name[:31])
         sheet["A1"] = f"{sheet_name} - Ders Analizi"
         sheet["A1"].font = title_font
-        sheet["A2"] = f"Tarih aralığı: {period} (sadece programa yerleşmiş dersler)"
+        # Haftalık/aylık raporda her sekmenin kendi dönemi yazılır.
+        sheet_start, sheet_end = (sheet_periods or {}).get(sheet_name, (start, end))
+        sheet_period = f"{sheet_start.strftime('%d.%m.%Y')} - {sheet_end.strftime('%d.%m.%Y')}"
+        sheet["A2"] = f"Tarih aralığı: {sheet_period} (sadece programa yerleşmiş dersler)"
         sheet.append([])
         sheet.append(headers)
         header_row = sheet.max_row
@@ -207,6 +223,11 @@ class AnalysisTab(QWidget):
             self.tabs.addTab(table, label)
         layout.addWidget(self.tabs, 1)
 
+        self.one_on_one_total_label = QLabel()
+        self.one_on_one_total_label.setObjectName("analysisTotal")
+        self.one_on_one_total_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(self.one_on_one_total_label)
+
         self.refresh_button.clicked.connect(self.refresh)
         self.refresh()
 
@@ -246,6 +267,8 @@ class AnalysisTab(QWidget):
 
         for _key, _label, table, field, source in self._sections:
             self._fill_table(table, source(), start, end, field)
+        one_on_one_hours = scheduling.summarize_hours_range(self.db, start, end).get(TYPE_ONE_ON_ONE, 0)
+        self.one_on_one_total_label.setText(f"Seçilen aralıkta toplam birebir ders: {one_on_one_hours} saat")
 
     def _fill_table(self, table: QTableWidget, entities, start: _dt.date, end: _dt.date, key: str) -> None:
         types = table.lesson_types
@@ -259,8 +282,14 @@ class AnalysisTab(QWidget):
             totals = by_id.get(entity["id"], empty)
             rows.append((entity["name"], totals, sum(totals.get(t, 0) for t in types)))
         rows.sort(key=lambda row: (-row[2], row[0]))
+        # En altta her sütunun toplamını gösteren "Toplam" satırı.
+        totals_by_type = {t: 0 for t in types}
+        for _name, totals, _grand_total in rows:
+            for t in types:
+                totals_by_type[t] += totals.get(t, 0)
+        total_row_index = len(rows)
 
-        table.setRowCount(len(rows))
+        table.setRowCount(total_row_index + 1)
         total_col = len(types) + 1
         for r, (name, totals, grand_total) in enumerate(rows):
             table.setItem(r, 0, QTableWidgetItem(name))
@@ -274,6 +303,29 @@ class AnalysisTab(QWidget):
             font.setBold(True)
             total_item.setFont(font)
             table.setItem(r, total_col, total_item)
+
+        total_label = QTableWidgetItem("Toplam")
+        total_label.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        font = total_label.font()
+        font.setBold(True)
+        total_label.setFont(font)
+        table.setItem(total_row_index, 0, total_label)
+        grand_total = 0
+        for c, t in enumerate(types, start=1):
+            total_value = totals_by_type.get(t, 0)
+            grand_total += total_value
+            cell = QTableWidgetItem(str(total_value))
+            cell.setTextAlignment(Qt.AlignCenter)
+            font = cell.font()
+            font.setBold(True)
+            cell.setFont(font)
+            table.setItem(total_row_index, c, cell)
+        total_cell = QTableWidgetItem(str(grand_total))
+        total_cell.setTextAlignment(Qt.AlignCenter)
+        font = total_cell.font()
+        font.setBold(True)
+        total_cell.setFont(font)
+        table.setItem(total_row_index, total_col, total_cell)
 
     # ---------- Excel ----------
     def handle_export_excel(self) -> None:
@@ -297,6 +349,46 @@ class AnalysisTab(QWidget):
         if start > end:
             start, end = end, start
 
+        sheets = []
+        sheet_periods = {}
+        period_mode = dialog.period_combo.currentData()
+        if period_mode in {"weekly", "monthly"}:
+            # Her hafta/ay ayrı sekme: tablo ekrandakiyle aynı sütunlarda,
+            # o dönemin toplamlarıyla yeniden hesaplanır.
+            for key, label, table, field, source in self._sections:
+                if key not in chosen:
+                    continue
+                entities = source()
+                types = table.lesson_types
+                headers = [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
+                if period_mode == "weekly":
+                    periods = scheduling.summarize_hours_range_by_week(self.db, start, end, field)
+                else:
+                    periods = scheduling.summarize_hours_range_by_month(self.db, start, end, field)
+                for period_start, period_end, totals_by_id in periods:
+                    weekly_rows = []
+                    for entity in entities:
+                        totals = totals_by_id.get(entity["id"], {})
+                        visible_totals = [totals.get(lesson_type, 0) for lesson_type in types]
+                        weekly_rows.append((entity["name"], visible_totals, sum(visible_totals)))
+                    weekly_rows.sort(key=lambda row: (-row[2], row[0]))
+                    rows = [[name, *lesson_totals, total] for name, lesson_totals, total in weekly_rows]
+                    period_label = f"{period_start:%d.%m.%Y}" if period_mode == "weekly" else f"{period_start:%m.%Y}"
+                    sheet_name = f"{label} {period_label}"
+                    sheets.append((sheet_name, headers, rows))
+                    sheet_periods[sheet_name] = (period_start, period_end)
+            if not sheets:
+                QMessageBox.information(
+                    self, "Dönem verisi yok", "Seçilen tarih aralığında dışa aktarılacak hafta veya ay verisi yok."
+                )
+                return
+        else:
+            for key, label, table, _field, _source in self._sections:
+                if key not in chosen:
+                    continue
+                headers, rows = table_export_data(table)
+                sheets.append((label, headers, rows))
+
         default_name = f"analiz_{start:%Y%m%d}_{end:%Y%m%d}.xlsx"
         path, _filter = QFileDialog.getSaveFileName(
             self, "Excel Olarak Kaydet", default_name, "Excel Dosyası (*.xlsx)",
@@ -306,15 +398,8 @@ class AnalysisTab(QWidget):
         if not path.lower().endswith(".xlsx"):
             path += ".xlsx"
 
-        sheets = []
-        for key, label, table, _field, _source in self._sections:
-            if key not in chosen:
-                continue
-            headers, rows = table_export_data(table)
-            sheets.append((label, headers, rows))
-
         try:
-            write_analysis_workbook(path, sheets, start, end)
+            write_analysis_workbook(path, sheets, start, end, sheet_periods=sheet_periods)
         except OSError as error:
             # En sık sebep: dosya Excel'de açık olduğu için üzerine yazılamıyor.
             QMessageBox.warning(

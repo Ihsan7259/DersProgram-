@@ -299,6 +299,7 @@ class MiniScheduleGrid(QTableWidget):
         blocks_by_cell: dict[tuple[int, int], list],
         row_mode: str | None = None,
         unavailable_cells: set[tuple[int, int]] | None = None,
+        holiday_names_by_day: dict[int, str] | None = None,
     ) -> None:
         """Not: bilerek 'render' değil 'populate' adında - QWidget'ın
         kendi render() metodunu (bir widget'ı QPaintDevice'a çizip pixmap
@@ -315,7 +316,8 @@ class MiniScheduleGrid(QTableWidget):
         unavailable_cells verilirse (ör. öğretmenin müsait olmadığı saatler),
         o hücrelerde ders yoksa ortasında küçük kırmızı bir çarpı görünür
         (bkz. theme.make_unavailable_cell)."""
-        self._last_populate_args = (db, blocks_by_cell, row_mode, unavailable_cells)
+        holiday_names_by_day = holiday_names_by_day or {}
+        self._last_populate_args = (db, blocks_by_cell, row_mode, unavailable_cells, holiday_names_by_day)
         # Hücreler bu çağrıda BAŞTAN oluşturuluyor - _apply_grid_sizing'in
         # "zaten bu boyuttaydı" önbelleği (bkz. aşağıda, titreme önleme
         # amaçlı) burada geçersiz kılınmalı, aksi halde yeni hücreler Qt'nin
@@ -371,7 +373,10 @@ class MiniScheduleGrid(QTableWidget):
         for row, day in enumerate(day_indices):
             for col, period in enumerate(periods):
                 blocks = blocks_by_cell.get((day, period), [])
-                if not blocks and (day, period) in unavailable_cells:
+                # Resmî tatil olan gün: o günün bütün saatleri kapalı.
+                if day in holiday_names_by_day:
+                    widget = theme.make_holiday_cell(holiday_names_by_day[day], compact=True, font_px=primary_px)
+                elif not blocks and (day, period) in unavailable_cells:
                     widget = theme.make_unavailable_cell(compact=True, mark_px=mark_px)
                 else:
                     widget = theme.make_multi_cell(
@@ -396,8 +401,11 @@ class MiniScheduleGrid(QTableWidget):
             return
         self._fixed_col_width = width_px
         if self._last_populate_args is not None:
-            db, blocks_by_cell, row_mode, unavailable_cells = self._last_populate_args
-            self.populate(db, blocks_by_cell, row_mode=row_mode, unavailable_cells=unavailable_cells)
+            db, blocks_by_cell, row_mode, unavailable_cells, holiday_names_by_day = self._last_populate_args
+            self.populate(
+                db, blocks_by_cell, row_mode=row_mode, unavailable_cells=unavailable_cells,
+                holiday_names_by_day=holiday_names_by_day,
+            )
         else:
             self._apply_grid_sizing()
 
@@ -516,6 +524,8 @@ class AvailabilityGrid(QTableWidget):
         self._row_mode: str | None = None
         self._day_header_state: dict[int, str | None] = {}
         self._period_header_state: dict[int, str | None] = {}
+        # Resmî tatil olan günler (sütunlar) tıklamayla değiştirilemez.
+        self._holiday_days: set[int] = set()
         self._day_count = 1
         self._period_count = 1
         self.cellClicked.connect(self._handle_click)
@@ -530,8 +540,11 @@ class AvailabilityGrid(QTableWidget):
         blocks_by_cell: dict[tuple[int, int], list],
         availability: dict[tuple[int, int], str],
         row_mode: str | None = None,
+        holiday_names_by_day: dict[int, str] | None = None,
     ) -> None:
         self._row_mode = row_mode
+        holiday_names_by_day = holiday_names_by_day or {}
+        self._holiday_days = set(holiday_names_by_day)
         day_names = db.day_names
         period_count = db.period_count
         self._day_count = max(len(day_names), 1)
@@ -552,7 +565,9 @@ class AvailabilityGrid(QTableWidget):
             for day in range(len(day_names)):
                 cell = (day, period)
                 blocks = blocks_by_cell.get(cell, [])
-                if blocks:
+                if day in holiday_names_by_day:
+                    widget = theme.make_holiday_cell(holiday_names_by_day[day], compact=True)
+                elif blocks:
                     widget = theme.make_multi_cell(blocks, compact=True, row_mode=row_mode)
                 else:
                     widget = self._availability_cell(self._state.get(cell))
@@ -636,7 +651,7 @@ class AvailabilityGrid(QTableWidget):
 
     def _handle_click(self, row: int, col: int) -> None:
         cell = (col, row + 1)  # (day, period)
-        if cell in self._occupied:
+        if cell in self._occupied or cell[0] in self._holiday_days:
             return
         next_status = self._ORDER[self._state.get(cell)]
         self._apply(cell[0], cell[1], next_status)
@@ -644,6 +659,8 @@ class AvailabilityGrid(QTableWidget):
     def _handle_day_header_click(self, day: int) -> None:
         next_status = self._ORDER[self._day_header_state.get(day)]
         self._day_header_state[day] = next_status
+        if day in self._holiday_days:
+            return
         for period in range(1, self.rowCount() + 1):
             if (day, period) in self._occupied:
                 continue
@@ -659,7 +676,7 @@ class AvailabilityGrid(QTableWidget):
         next_status = self._ORDER[self._period_header_state.get(period)]
         self._period_header_state[period] = next_status
         for day in range(self.columnCount()):
-            if (day, period) in self._occupied:
+            if (day, period) in self._occupied or day in self._holiday_days:
                 continue
             self._apply(day, period, next_status)
 

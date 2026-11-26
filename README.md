@@ -20,6 +20,11 @@ Windows için, tek kullanıcılı, internete ihtiyaç duymadan (offline) çalı�
   - **Oto Ata**: kalan atanmamış dersleri, günlere dengeli dağıtarak ve
     aynı gruptan art arda en fazla 2 saat gelecek şekilde otomatik yerleştirir
   - Sağ/sol oklarla haftalar arasında gezinilir
+  - Yerleşmiş bir dersi tutup başka bir güne/saate sürükleyerek taşıma;
+    havuza düşürülen dersleri **Geri Al (Ctrl+Z)**
+  - **Resmî Tatil** (o günün dersleri havuza düşer), **Geçen Haftadan
+    Telafi**, **Haftayı Kopyala**
+  - Kurs başlangıcından (Ayarlar) önceki haftalar boş görünür
 - **Öğretmenler / Öğrenciler / Sınıflar** sekmelerinde seçilen kişinin/sınıfın
   o haftaki filtrelenmiş programı ve ders tipine göre saat özeti görünür
 - **Analiz**: seçilen tarih aralığında, öğretmen/öğrenci bazında ders
@@ -32,9 +37,6 @@ Windows için, tek kullanıcılı, internete ihtiyaç duymadan (offline) çalı�
 - Veriler bilgisayarınızda `%USERPROFILE%\DersProgrami\veri.db` dosyasında
   otomatik saklanır; ayrı kaydet/aç derdi yoktur.
 
-Henüz yok: gerçek sürükle-bırakla program içi taşıma (şu an yerleştirilmiş
-bir dersi taşımak için önce kaldırıp sonra yeniden sürüklemeniz gerekir),
-yazdırma/Excel'e aktarma.
 
 ## Geliştirme ortamında çalıştırma (Linux/Mac/Windows, Python ile)
 

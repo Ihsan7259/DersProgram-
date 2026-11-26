@@ -15,6 +15,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QLabel,
     QMessageBox,
+    QPushButton,
+    QHBoxLayout,
+    QInputDialog,
 )
 
 from ..db import (
@@ -115,7 +118,15 @@ class AddLessonDialog(QDialog):
         if self.student_combo.count() > 1:
             self.student_combo.setCurrentIndex(1)
         self.student_label = QLabel("Öğrenci:")
-        layout.addRow(self.student_label, self.student_combo)
+        # Öğrenci listede yoksa buradan adıyla hızlıca açılabilir.
+        student_row = QWidget()
+        student_row_layout = QHBoxLayout(student_row)
+        student_row_layout.setContentsMargins(0, 0, 0, 0)
+        student_row_layout.addWidget(self.student_combo, 1)
+        self.add_student_button = QPushButton("Yeni öğrenci...")
+        self.add_student_button.clicked.connect(self.handle_add_student)
+        student_row_layout.addWidget(self.add_student_button)
+        layout.addRow(self.student_label, student_row)
 
         self.room_combo = QComboBox()
         self.room_combo.addItem("(Yok)", None)
@@ -198,6 +209,7 @@ class AddLessonDialog(QDialog):
         show_student = is_one_on_one or is_coaching or is_study or is_parent_meeting
         self.student_label.setVisible(show_student)
         self.student_combo.setVisible(show_student)
+        self.add_student_button.setVisible(show_student)
         if is_parent_meeting:
             self.student_label.setText("Velisi (öğrenci, isteğe bağlı):")
         else:
@@ -208,6 +220,44 @@ class AddLessonDialog(QDialog):
         show_room = is_class or is_one_on_one or is_group or is_teacherless or is_parent_meeting
         self.room_label.setVisible(show_room)
         self.room_combo.setVisible(show_room)
+
+    def handle_add_student(self) -> None:
+        name, accepted = QInputDialog.getText(
+            self,
+            "Yeni Öğrenci",
+            "Öğrenci adı:\nDiğer bilgileri daha sonra Öğrenciler bölümünden tamamlayabilirsiniz.",
+        )
+        if not accepted:
+            return
+        self.add_student_to_lesson(name)
+
+    def add_student_to_lesson(self, name: str) -> bool:
+        """Create a master student record and select it for this lesson."""
+        normalized_name = name.strip()
+        if not normalized_name:
+            QMessageBox.warning(self, "Eksik bilgi", "Öğrenci adı boş bırakılamaz.")
+            return False
+        matches = [
+            student for student in self.db.list_students()
+            if student["name"].strip().casefold() == normalized_name.casefold()
+        ]
+        if len(matches) > 1:
+            QMessageBox.warning(
+                self,
+                "Öğrenci seçimi belirsiz",
+                "Bu isimde birden fazla öğrenci kayıtlı. Yeni kayıt oluşturmadan önce öğrenci listesinden "
+                "doğru kaydı seçin.",
+            )
+            return False
+        if matches:
+            student_id = matches[0]["id"]
+        else:
+            student_id = self.db.add_student(normalized_name, None, None)
+            self.student_combo.addItem(normalized_name, student_id)
+        index = self.student_combo.findData(student_id)
+        if index >= 0:
+            self.student_combo.setCurrentIndex(index)
+        return True
 
     def _on_accept(self) -> None:
         t = self.type_combo.currentData()

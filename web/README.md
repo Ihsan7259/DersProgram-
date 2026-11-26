@@ -8,7 +8,7 @@ https://vipparkkurs.com/p/k7q2mxp9wd
 
 Link kişiye bir kere gönderilir. Uygulamada **Linkler > Siteye Yayınla**'ya basıldıkça linkteki program güncellenir. Sayfa her açılışta Türkiye saatine göre **o haftayı** gösterir ve pazartesi yeni haftaya geçer.
 
-Sayfa, uygulamadan alınan program görselinin (önizleme penceresindeki **Kopyala**) **aynısıdır**: satırlar günler, sütunlar ders saatleri, aynı renkler ve aynı yazılar. Izgara bir resim gibi ekran genişliğine sığacak şekilde orantılı küçülür; telefonda iki parmakla yakınlaştırılır. Sayfa sitenin kendi `layout`'u içinde açılır, yani sitenin üst menüsü ve alt bilgisi etrafında görünür.
+Sayfa, uygulamadan alınan program görselinin (önizleme penceresindeki **Kopyala**) **aynısıdır**: satırlar günler, sütunlar ders saatleri, aynı renkler ve aynı yazılar. Uygulamada resmî tatil olarak kapatılan günler sayfada da "RESMÎ TATİL" yazan hücrelerle görünür. Izgara bir resim gibi ekran genişliğine sığacak şekilde orantılı küçülür; telefonda iki parmakla yakınlaştırılır. Sayfa sitenin kendi `layout`'u içinde açılır, yani sitenin üst menüsü ve alt bilgisi etrafında görünür.
 
 Sayfadaki **Resim olarak indir** düğmesi (`/p/<kod>/indir`) o haftanın programını PNG olarak indirir. Görsel, uygulamadaki "Kopyala" görselinin ölçüleriyle (300 DPI) sunucuda çizilir. Bunun için Next.js'in kendi `next/og` modülü kullanılır, ek paket gerekmez.
 
@@ -64,7 +64,7 @@ DERS_PROGRAMI_LOCAL_DIR=/yol/programlar npm run dev
 # http://localhost:3000/p/<kod>
 ```
 Örnek bir dosya: [`ornek-veri/ornekkod01.json`](ornek-veri/ornekkod01.json). `DERS_PROGRAMI_LOCAL_DIR=web/ornek-veri` ile `http://localhost:3000/p/ornekkod01` açılır.
-Örnek dosyada 23 Kasım - 14 Aralık 2026 haftaları var; başka bir tarihte "henüz yayınlanmadı" görünür. Denemek için `weeks` içindeki bir anahtarı o haftanın pazartesisiyle değiştirin.
+Örnek dosyada 23 Kasım - 14 Aralık 2026 haftaları var (ilk haftanın cuması örnek bir resmî tatil); başka bir tarihte "henüz yayınlanmadı" görünür. Denemek için `weeks` içindeki bir anahtarı o haftanın pazartesisiyle değiştirin.
 
 ## Notlar
 - **Next.js sürümü:** App Router içindir. Next.js 16.4 ile derlenip test edildi (Next 15+ uyumlu). Next 14'te `params` bir Promise değildir; `Props` tipini `{ params: { code: string } }` yapıp `await params` satırlarını `params` ile değiştirin. Pages Router kullanılıyorsa aynı mantık `getServerSideProps` ile kurulabilir.
@@ -97,7 +97,9 @@ Hücreler, uygulamadaki önizlemenin çizdiği haliyle gelir; sitenin bir şey h
         // Kalabalık hücre (aynı saatte 4+ ders): tek satırlık adlar
         { "day": 4, "period": 3, "names": ["Soru Çözümü", "Soru Çözümü", "Soru Çözümü", "Soru Çözümü"], "color": "#ffdedb" },
         // Öğretmenin "müsait değil" işaretlediği boş saat (sadece öğretmen sayfasında)
-        { "day": 2, "period": 6, "unavailable": true }
+        { "day": 2, "period": 6, "unavailable": true },
+        // Resmî tatil: o günün her ders saati için bir hücre, tatilin adıyla (herkesin sayfasında)
+        { "day": 3, "period": 1, "holiday": "Örnek Tatil" }
       ]
     }
   },

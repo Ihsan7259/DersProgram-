@@ -33,6 +33,7 @@ const SURFACE = "#fcfcfa";
 const BORDER = "#dee1e7";
 const DASHED = "#d4d8dd";
 const UNAVAILABLE = "#c92f36";
+const HOLIDAY_INK = "#3c434d";
 
 // Yazı tipleri sayfanın kendi klasöründe (app/p/[code]/fonts). Proje src/
 // klasörü kullanıyorsa ikinci yol denenir; başka bir yere taşındıysa
@@ -75,6 +76,10 @@ function nameLayout(count: number): { columns: number; fontPx: number } {
 
 function cellHeight(cell: ScheduleCell | undefined): number {
   const inner = COL - 2 * CARD_PAD_X - 4;
+  if (cell?.holiday !== undefined) {
+    const lines = 1 + (cell.holiday ? textLines(cell.holiday, PRIMARY, inner) : 0);
+    return lines * PRIMARY * 1.25 + 2 * CARD_PAD_Y + 6;
+  }
   if (cell?.cards?.length) {
     const cards = cell.cards.map((card) => {
       const [primary = "", secondary = "", tertiary = ""] = card.lines;
@@ -100,6 +105,32 @@ function Cell({ cell, height }: { cell?: ScheduleCell; height: number }) {
     height,
     padding: 2,
   };
+  if (cell?.holiday !== undefined) {
+    return (
+      <div style={box}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            flexGrow: 1,
+            padding: `${CARD_PAD_Y}px ${CARD_PAD_X}px`,
+            border: `1px solid ${BORDER}`,
+            background: SURFACE,
+            color: HOLIDAY_INK,
+            fontSize: PRIMARY,
+            fontWeight: 700,
+            lineHeight: 1.25,
+            textAlign: "center",
+          }}
+        >
+          <div>RESMÎ TATİL</div>
+          {cell.holiday ? <div>{cell.holiday}</div> : null}
+        </div>
+      </div>
+    );
+  }
   if (cell?.cards?.length) {
     return (
       <div style={{ ...box, gap: 2 }}>

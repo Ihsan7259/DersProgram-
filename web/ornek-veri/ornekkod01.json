@@ -1,404 +1,433 @@
 {
- "format": 1,
- "institution": "Örnek Kurum",
- "kind": "student",
- "kindLabel": "Öğrenci",
- "name": "Zeynep Yıldız",
- "subtitle": "9-A",
- "days": [
-  "Pazartesi",
-  "Salı",
-  "Çarşamba",
-  "Perşembe",
-  "Cuma"
- ],
- "periods": [
-  {
-   "no": 1,
-   "start": "08:00",
-   "end": "08:40"
-  },
-  {
-   "no": 2,
-   "start": "09:00",
-   "end": "09:40"
-  },
-  {
-   "no": 3,
-   "start": "10:00",
-   "end": "10:40"
-  },
-  {
-   "no": 4,
-   "start": "11:00",
-   "end": "11:40"
-  },
-  {
-   "no": 5,
-   "start": "12:00",
-   "end": "12:40"
-  },
-  {
-   "no": 6,
-   "start": "13:00",
-   "end": "13:40"
-  },
-  {
-   "no": 7,
-   "start": "14:00",
-   "end": "14:40"
-  },
-  {
-   "no": 8,
-   "start": "15:00",
-   "end": "15:40"
-  }
- ],
- "weeks": {
-  "2026-11-23": {
-   "label": "23 Kas 2026 – 27 Kas 2026",
-   "cells": [
+  "format": 1,
+  "institution": "VIP Park Kurs",
+  "kind": "student",
+  "kindLabel": "Öğrenci",
+  "name": "Zeynep Yıldız",
+  "subtitle": "9-A",
+  "days": [
+    "Pazartesi",
+    "Salı",
+    "Çarşamba",
+    "Perşembe",
+    "Cuma"
+  ],
+  "periods": [
     {
-     "day": 0,
-     "period": 1,
-     "cards": [
-      {
-       "lines": [
-        "Matematik",
-        "Sınıf · A. Yılmaz",
-        "Sınıf Dersi(Derslik 101)"
-       ],
-       "color": "#f3c3ad"
-      }
-     ]
+      "no": 1,
+      "start": "08:00",
+      "end": "08:40"
     },
     {
-     "day": 0,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Türkçe",
-        "Sınıf · E. Ak",
-        "Sınıf Dersi(Derslik 101)"
-       ],
-       "color": "#f3e1ad"
-      }
-     ]
+      "no": 2,
+      "start": "09:00",
+      "end": "09:40"
     },
     {
-     "day": 1,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Fizik",
-        "Birebir · A. Demir",
-        "Birebir Ders(Derslik 102)"
-       ],
-       "color": "#adf3c3"
-      }
-     ]
+      "no": 3,
+      "start": "10:00",
+      "end": "10:40"
     },
     {
-     "day": 2,
-     "period": 3,
-     "cards": [
-      {
-       "lines": [
-        "Fizik",
-        "Sınıf · A. Demir",
-        "Sınıf Dersi(Derslik 102)"
-       ],
-       "color": "#adf3c3"
-      }
-     ]
+      "no": 4,
+      "start": "11:00",
+      "end": "11:40"
     },
     {
-     "day": 3,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Koçluk",
-        "A. Yılmaz",
-        ""
-       ],
-       "color": "#f4d4a4"
-      }
-     ]
+      "no": 5,
+      "start": "12:00",
+      "end": "12:40"
     },
     {
-     "day": 4,
-     "period": 3,
-     "color": "#ffdedb",
-     "names": [
-      "Soru Çözümü",
-      "Soru Çözümü",
-      "Soru Çözümü",
-      "Soru Çözümü"
-     ]
+      "no": 6,
+      "start": "13:00",
+      "end": "13:40"
+    },
+    {
+      "no": 7,
+      "start": "14:00",
+      "end": "14:40"
+    },
+    {
+      "no": 8,
+      "start": "15:00",
+      "end": "15:40"
     }
-   ]
-  },
-  "2026-11-30": {
-   "label": "30 Kas 2026 – 04 Ara 2026",
-   "cells": [
-    {
-     "day": 0,
-     "period": 1,
-     "cards": [
-      {
-       "lines": [
-        "Matematik",
-        "Sınıf · A. Yılmaz",
-        "Sınıf Dersi(Derslik 101)"
-       ],
-       "color": "#f3c3ad"
-      }
-     ]
+  ],
+  "weeks": {
+    "2026-11-23": {
+      "label": "23 Kas 2026 – 27 Kas 2026",
+      "cells": [
+        {
+          "day": 0,
+          "period": 1,
+          "cards": [
+            {
+              "lines": [
+                "Matematik",
+                "Sınıf · A. Yılmaz",
+                "Sınıf Dersi(Derslik 101)"
+              ],
+              "color": "#f3c3ad"
+            }
+          ]
+        },
+        {
+          "day": 0,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Türkçe",
+                "Sınıf · E. Ak",
+                "Sınıf Dersi(Derslik 101)"
+              ],
+              "color": "#f3e1ad"
+            }
+          ]
+        },
+        {
+          "day": 1,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Fizik",
+                "Birebir · A. Demir",
+                "Birebir Ders(Derslik 102)"
+              ],
+              "color": "#adf3c3"
+            }
+          ]
+        },
+        {
+          "day": 2,
+          "period": 3,
+          "cards": [
+            {
+              "lines": [
+                "Fizik",
+                "Sınıf · A. Demir",
+                "Sınıf Dersi(Derslik 102)"
+              ],
+              "color": "#adf3c3"
+            }
+          ]
+        },
+        {
+          "day": 3,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Koçluk",
+                "A. Yılmaz",
+                "Etüt Salonu: Etüt Salonu A"
+              ],
+              "color": "#f4d4a4"
+            }
+          ]
+        },
+        {
+          "day": 4,
+          "period": 1,
+          "holiday": "Örnek Tatil"
+        },
+        {
+          "day": 4,
+          "period": 2,
+          "holiday": "Örnek Tatil"
+        },
+        {
+          "day": 4,
+          "period": 3,
+          "holiday": "Örnek Tatil"
+        },
+        {
+          "day": 4,
+          "period": 4,
+          "holiday": "Örnek Tatil"
+        },
+        {
+          "day": 4,
+          "period": 5,
+          "holiday": "Örnek Tatil"
+        },
+        {
+          "day": 4,
+          "period": 6,
+          "holiday": "Örnek Tatil"
+        },
+        {
+          "day": 4,
+          "period": 7,
+          "holiday": "Örnek Tatil"
+        },
+        {
+          "day": 4,
+          "period": 8,
+          "holiday": "Örnek Tatil"
+        }
+      ]
     },
-    {
-     "day": 0,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Türkçe",
-        "Sınıf · E. Ak",
-        "Sınıf Dersi(Derslik 101)"
-       ],
-       "color": "#f3e1ad"
-      }
-     ]
+    "2026-11-30": {
+      "label": "30 Kas 2026 – 04 Ara 2026",
+      "cells": [
+        {
+          "day": 0,
+          "period": 1,
+          "cards": [
+            {
+              "lines": [
+                "Matematik",
+                "Sınıf · A. Yılmaz",
+                "Sınıf Dersi(Derslik 101)"
+              ],
+              "color": "#f3c3ad"
+            }
+          ]
+        },
+        {
+          "day": 0,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Türkçe",
+                "Sınıf · E. Ak",
+                "Sınıf Dersi(Derslik 101)"
+              ],
+              "color": "#f3e1ad"
+            }
+          ]
+        },
+        {
+          "day": 1,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Fizik",
+                "Birebir · A. Demir",
+                "Birebir Ders(Derslik 102)"
+              ],
+              "color": "#adf3c3"
+            }
+          ]
+        },
+        {
+          "day": 2,
+          "period": 3,
+          "cards": [
+            {
+              "lines": [
+                "Fizik",
+                "Sınıf · A. Demir",
+                "Sınıf Dersi(Derslik 102)"
+              ],
+              "color": "#adf3c3"
+            }
+          ]
+        },
+        {
+          "day": 3,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Koçluk",
+                "A. Yılmaz",
+                "Etüt Salonu: Etüt Salonu A"
+              ],
+              "color": "#f4d4a4"
+            }
+          ]
+        },
+        {
+          "day": 4,
+          "period": 3,
+          "color": "#ffdedb",
+          "names": [
+            "Soru Çözümü",
+            "Soru Çözümü",
+            "Soru Çözümü",
+            "Soru Çözümü"
+          ]
+        }
+      ]
     },
-    {
-     "day": 1,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Fizik",
-        "Birebir · A. Demir",
-        "Birebir Ders(Derslik 102)"
-       ],
-       "color": "#adf3c3"
-      }
-     ]
+    "2026-12-07": {
+      "label": "07 Ara 2026 – 11 Ara 2026",
+      "cells": [
+        {
+          "day": 0,
+          "period": 1,
+          "cards": [
+            {
+              "lines": [
+                "Matematik",
+                "Sınıf · A. Yılmaz",
+                "Sınıf Dersi(Derslik 101)"
+              ],
+              "color": "#f3c3ad"
+            }
+          ]
+        },
+        {
+          "day": 0,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Türkçe",
+                "Sınıf · E. Ak",
+                "Sınıf Dersi(Derslik 101)"
+              ],
+              "color": "#f3e1ad"
+            }
+          ]
+        },
+        {
+          "day": 1,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Fizik",
+                "Birebir · A. Demir",
+                "Birebir Ders(Derslik 102)"
+              ],
+              "color": "#adf3c3"
+            }
+          ]
+        },
+        {
+          "day": 2,
+          "period": 3,
+          "cards": [
+            {
+              "lines": [
+                "Fizik",
+                "Sınıf · A. Demir",
+                "Sınıf Dersi(Derslik 102)"
+              ],
+              "color": "#adf3c3"
+            }
+          ]
+        },
+        {
+          "day": 3,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Koçluk",
+                "A. Yılmaz",
+                "Etüt Salonu: Etüt Salonu A"
+              ],
+              "color": "#f4d4a4"
+            }
+          ]
+        },
+        {
+          "day": 4,
+          "period": 3,
+          "color": "#ffdedb",
+          "names": [
+            "Soru Çözümü",
+            "Soru Çözümü",
+            "Soru Çözümü",
+            "Soru Çözümü"
+          ]
+        }
+      ]
     },
-    {
-     "day": 2,
-     "period": 3,
-     "cards": [
-      {
-       "lines": [
-        "Fizik",
-        "Sınıf · A. Demir",
-        "Sınıf Dersi(Derslik 102)"
-       ],
-       "color": "#adf3c3"
-      }
-     ]
-    },
-    {
-     "day": 3,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Koçluk",
-        "A. Yılmaz",
-        ""
-       ],
-       "color": "#f4d4a4"
-      }
-     ]
-    },
-    {
-     "day": 4,
-     "period": 3,
-     "color": "#ffdedb",
-     "names": [
-      "Soru Çözümü",
-      "Soru Çözümü",
-      "Soru Çözümü",
-      "Soru Çözümü"
-     ]
+    "2026-12-14": {
+      "label": "14 Ara 2026 – 18 Ara 2026",
+      "cells": [
+        {
+          "day": 0,
+          "period": 1,
+          "cards": [
+            {
+              "lines": [
+                "Matematik",
+                "Sınıf · A. Yılmaz",
+                "Sınıf Dersi(Derslik 101)"
+              ],
+              "color": "#f3c3ad"
+            }
+          ]
+        },
+        {
+          "day": 0,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Türkçe",
+                "Sınıf · E. Ak",
+                "Sınıf Dersi(Derslik 101)"
+              ],
+              "color": "#f3e1ad"
+            }
+          ]
+        },
+        {
+          "day": 1,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Fizik",
+                "Birebir · A. Demir",
+                "Birebir Ders(Derslik 102)"
+              ],
+              "color": "#adf3c3"
+            }
+          ]
+        },
+        {
+          "day": 2,
+          "period": 3,
+          "cards": [
+            {
+              "lines": [
+                "Fizik",
+                "Sınıf · A. Demir",
+                "Sınıf Dersi(Derslik 102)"
+              ],
+              "color": "#adf3c3"
+            }
+          ]
+        },
+        {
+          "day": 3,
+          "period": 2,
+          "cards": [
+            {
+              "lines": [
+                "Koçluk",
+                "A. Yılmaz",
+                "Etüt Salonu: Etüt Salonu A"
+              ],
+              "color": "#f4d4a4"
+            }
+          ]
+        },
+        {
+          "day": 4,
+          "period": 3,
+          "color": "#ffdedb",
+          "names": [
+            "Soru Çözümü",
+            "Soru Çözümü",
+            "Soru Çözümü",
+            "Soru Çözümü"
+          ]
+        }
+      ]
     }
-   ]
   },
-  "2026-12-07": {
-   "label": "07 Ara 2026 – 11 Ara 2026",
-   "cells": [
-    {
-     "day": 0,
-     "period": 1,
-     "cards": [
-      {
-       "lines": [
-        "Matematik",
-        "Sınıf · A. Yılmaz",
-        "Sınıf Dersi(Derslik 101)"
-       ],
-       "color": "#f3c3ad"
-      }
-     ]
-    },
-    {
-     "day": 0,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Türkçe",
-        "Sınıf · E. Ak",
-        "Sınıf Dersi(Derslik 101)"
-       ],
-       "color": "#f3e1ad"
-      }
-     ]
-    },
-    {
-     "day": 1,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Fizik",
-        "Birebir · A. Demir",
-        "Birebir Ders(Derslik 102)"
-       ],
-       "color": "#adf3c3"
-      }
-     ]
-    },
-    {
-     "day": 2,
-     "period": 3,
-     "cards": [
-      {
-       "lines": [
-        "Fizik",
-        "Sınıf · A. Demir",
-        "Sınıf Dersi(Derslik 102)"
-       ],
-       "color": "#adf3c3"
-      }
-     ]
-    },
-    {
-     "day": 3,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Koçluk",
-        "A. Yılmaz",
-        ""
-       ],
-       "color": "#f4d4a4"
-      }
-     ]
-    },
-    {
-     "day": 4,
-     "period": 3,
-     "color": "#ffdedb",
-     "names": [
-      "Soru Çözümü",
-      "Soru Çözümü",
-      "Soru Çözümü",
-      "Soru Çözümü"
-     ]
-    }
-   ]
-  },
-  "2026-12-14": {
-   "label": "14 Ara 2026 – 18 Ara 2026",
-   "cells": [
-    {
-     "day": 0,
-     "period": 1,
-     "cards": [
-      {
-       "lines": [
-        "Matematik",
-        "Sınıf · A. Yılmaz",
-        "Sınıf Dersi(Derslik 101)"
-       ],
-       "color": "#f3c3ad"
-      }
-     ]
-    },
-    {
-     "day": 0,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Türkçe",
-        "Sınıf · E. Ak",
-        "Sınıf Dersi(Derslik 101)"
-       ],
-       "color": "#f3e1ad"
-      }
-     ]
-    },
-    {
-     "day": 1,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Fizik",
-        "Birebir · A. Demir",
-        "Birebir Ders(Derslik 102)"
-       ],
-       "color": "#adf3c3"
-      }
-     ]
-    },
-    {
-     "day": 2,
-     "period": 3,
-     "cards": [
-      {
-       "lines": [
-        "Fizik",
-        "Sınıf · A. Demir",
-        "Sınıf Dersi(Derslik 102)"
-       ],
-       "color": "#adf3c3"
-      }
-     ]
-    },
-    {
-     "day": 3,
-     "period": 2,
-     "cards": [
-      {
-       "lines": [
-        "Koçluk",
-        "A. Yılmaz",
-        ""
-       ],
-       "color": "#f4d4a4"
-      }
-     ]
-    },
-    {
-     "day": 4,
-     "period": 3,
-     "color": "#ffdedb",
-     "names": [
-      "Soru Çözümü",
-      "Soru Çözümü",
-      "Soru Çözümü",
-      "Soru Çözümü"
-     ]
-    }
-   ]
-  }
- },
- "publishedAt": "2026-11-25T14:38:50"
+  "publishedAt": "2026-11-26T09:08:25"
 }

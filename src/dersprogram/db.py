@@ -22,6 +22,9 @@ TYPE_PROBLEM_SOLVING = "soru_cozum"  # soru çözümü
 TYPE_TRIAL = "deneme"        # deneme sınavı (öğretmen zorunlu değil)
 TYPE_STUDY = "etut"          # etüt (öğretmen zorunlu değil)
 
+# Dönem başlangıcı ayarlanmamışsa kullanılan varsayılan.
+DEFAULT_COURSE_START = "2026-09-14"
+
 LESSON_TYPES = [
     TYPE_CLASS, TYPE_ONE_ON_ONE, TYPE_COACHING, TYPE_PARENT_MEETING, TYPE_DEPARTMENT,
     TYPE_MEETING, TYPE_PROBLEM_SOLVING, TYPE_TRIAL, TYPE_STUDY,
@@ -116,6 +119,8 @@ CREATE TABLE IF NOT EXISTS rooms (
 CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    student_number TEXT,
+    study_room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
     class_group_id INTEGER REFERENCES class_groups(id) ON DELETE SET NULL,
     coach_teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
     total_program_fee REAL NOT NULL DEFAULT 0,
@@ -184,6 +189,22 @@ CREATE TABLE IF NOT EXISTS lesson_block_positions (
     UNIQUE(lesson_block_id, from_week)
 );
 
+-- Derse ait değişebilen bilgiler haftaya göre saklanır; böylece öğretmen,
+-- ders, derslik veya tür değişikliği önceki haftaların kaydını değiştirmez.
+CREATE TABLE IF NOT EXISTS lesson_block_details (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lesson_block_id INTEGER NOT NULL REFERENCES lesson_blocks(id) ON DELETE CASCADE,
+    from_week TEXT NOT NULL,
+    type TEXT NOT NULL,
+    teacher_id INTEGER,
+    teacher_name TEXT NOT NULL DEFAULT '',
+    subject_id INTEGER,
+    subject_name TEXT NOT NULL DEFAULT '',
+    room_id INTEGER,
+    room_name TEXT NOT NULL DEFAULT '',
+    UNIQUE(lesson_block_id, from_week)
+);
+
 -- Belirli bir haftaya özel istisna: o blok o hafta template'teki yerinde
 -- DEĞİL, burada belirtilen gün/saatte görünür. day/period NULL ise o
 -- hafta hiç görünmez (havuza geri düşer).
@@ -194,6 +215,19 @@ CREATE TABLE IF NOT EXISTS week_exceptions (
     day INTEGER,
     period INTEGER,
     UNIQUE(week_start, lesson_block_id)
+);
+
+CREATE TABLE IF NOT EXISTS holidays (
+    holiday_date TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS week_makeup_lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_week TEXT NOT NULL,
+    source_block_id INTEGER NOT NULL REFERENCES lesson_blocks(id) ON DELETE CASCADE,
+    makeup_block_id INTEGER NOT NULL REFERENCES lesson_blocks(id) ON DELETE CASCADE,
+    UNIQUE(target_week, source_block_id)
 );
 
 CREATE TABLE IF NOT EXISTS payments (
@@ -303,7 +337,7 @@ DEFAULT_SETTINGS = {
     "day_names": ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma"],
     "period_count": 8,
     "theme": "light",
-    "term_start": None,
+    "term_start": DEFAULT_COURSE_START,
     "term_end": None,
     # Her ders saatinin başlangıç/bitiş saati (ör. "1. ders 08:30-09:20").
     # Liste index'i period-1'e karşılık gelir; bir saat için henüz
@@ -338,6 +372,8 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "class_groups": [("note", "TEXT DEFAULT ''"), ("sort_order", "INTEGER NOT NULL DEFAULT 0")],
     "rooms": [("note", "TEXT DEFAULT ''")],
     "students": [
+        ("student_number", "TEXT"),
+        ("study_room_id", "INTEGER REFERENCES rooms(id) ON DELETE SET NULL"),
         ("class_group_id", "INTEGER REFERENCES class_groups(id) ON DELETE SET NULL"),
         ("coach_teacher_id", "INTEGER REFERENCES teachers(id) ON DELETE SET NULL"),
         ("total_program_fee", "REAL NOT NULL DEFAULT 0"),
@@ -385,6 +421,18 @@ MIGRATION_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "student_curriculum": [("lesson_type", "TEXT NOT NULL DEFAULT 'birebir'")],
 }
 
+# Bir dersin yerleşim durumu (geri alma için): blok id -> (şablon gün,
+# şablon saat, (from_week, gün, saat) geçmişi, o haftanın istisnası).
+BlockScheduleState = dict[
+    int,
+    tuple[
+        int | None,
+        int | None,
+        tuple[tuple[str, int | None, int | None], ...],
+        tuple[int | None, int | None] | None,
+    ],
+]
+
 
 class Database:
     def __init__(self, path: Path | str | None = None):
@@ -421,6 +469,14 @@ class Database:
         # yolundan eklenirse eklensin (Ders Ekle, sınıf/öğrenci hedefleri,
         # zümre/toplantı, koç ataması...). Geçmiş haftalarda "henüz yoktu"
         # kararı bu tarihe göre verilir (bkz. scheduling.get_week_view).
+        # Öğrenci numarası boş değilse benzersiz olmalı (büyük/küçük harf farkı yok).
+        self.conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_students_student_number
+            ON students(student_number COLLATE NOCASE)
+            WHERE student_number IS NOT NULL AND trim(student_number) != ''
+            """
+        )
         self.conn.execute(
             """
             CREATE TRIGGER IF NOT EXISTS lesson_blocks_created_at
@@ -531,7 +587,7 @@ class Database:
 
     @property
     def term_start(self) -> str | None:
-        return self.get_setting("term_start")
+        return self.get_setting("term_start") or DEFAULT_COURSE_START
 
     @property
     def term_end(self) -> str | None:
@@ -698,6 +754,20 @@ class Database:
     def get_student(self, student_id: int) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
 
+    def find_student_by_number(self, student_number: str) -> sqlite3.Row | None:
+        number = student_number.strip().casefold()
+        if not number:
+            return None
+        rows = [
+            row for row in self.conn.execute(
+                "SELECT * FROM students WHERE student_number IS NOT NULL AND trim(student_number) != ''"
+            )
+            if row["student_number"].strip().casefold() == number
+        ]
+        if len(rows) > 1:
+            raise ValueError(f"Birden fazla öğrencide '{student_number.strip()}' numarası kayıtlı.")
+        return rows[0] if rows else None
+
     def add_student(
         self,
         name: str,
@@ -706,15 +776,23 @@ class Database:
         total_program_fee: float = 0,
         total_one_on_one_fee: float = 0,
         note: str = "",
+        student_number: str | None = None,
+        study_room_id: int | None = None,
     ) -> int:
+        student_number = student_number.strip() if student_number and student_number.strip() else None
+        if student_number and self.find_student_by_number(student_number):
+            raise ValueError(f"'{student_number}' öğrenci numarası başka bir öğrencide kayıtlı.")
         row = self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS m FROM students").fetchone()
         next_order = row["m"] + 1
         cur = self.conn.execute(
             """
-            INSERT INTO students(name, class_group_id, coach_teacher_id, total_program_fee, total_one_on_one_fee, note, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO students(name, student_number, study_room_id, class_group_id, coach_teacher_id, total_program_fee, total_one_on_one_fee, note, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, class_group_id, coach_teacher_id, total_program_fee, total_one_on_one_fee, note, next_order),
+            (
+                name, student_number, study_room_id, class_group_id, coach_teacher_id,
+                total_program_fee, total_one_on_one_fee, note, next_order,
+            ),
         )
         self.conn.commit()
         student_id = cur.lastrowid
@@ -742,14 +820,23 @@ class Database:
         total_program_fee: float = 0,
         total_one_on_one_fee: float = 0,
         note: str = "",
+        student_number: str | None = None,
+        study_room_id: int | None = None,
     ) -> None:
+        student_number = student_number.strip() if student_number and student_number.strip() else None
+        existing = self.find_student_by_number(student_number) if student_number else None
+        if existing and existing["id"] != student_id:
+            raise ValueError(f"'{student_number}' öğrenci numarası başka bir öğrencide kayıtlı.")
         self.conn.execute(
             """
-            UPDATE students SET name=?, class_group_id=?, coach_teacher_id=?,
+            UPDATE students SET name=?, student_number=?, study_room_id=?, class_group_id=?, coach_teacher_id=?,
                 total_program_fee=?, total_one_on_one_fee=?, note=?
             WHERE id=?
             """,
-            (name, class_group_id, coach_teacher_id, total_program_fee, total_one_on_one_fee, note, student_id),
+            (
+                name, student_number, study_room_id, class_group_id, coach_teacher_id,
+                total_program_fee, total_one_on_one_fee, note, student_id,
+            ),
         )
         self.conn.commit()
         self._ensure_coaching_block(student_id, coach_teacher_id)
@@ -773,7 +860,7 @@ class Database:
         'koçluk' ders bloğu bulunmasını garanti eder (yoksa oluşturur,
         koç değiştiyse öğretmenini günceller)."""
         existing = self.conn.execute(
-            "SELECT id FROM lesson_blocks WHERE type=? AND student_id=?",
+            "SELECT id, teacher_id, subject_id, room_id, type FROM lesson_blocks WHERE type=? AND student_id=?",
             (TYPE_COACHING, student_id),
         ).fetchone()
         if coach_teacher_id is None:
@@ -787,9 +874,14 @@ class Database:
                 (TYPE_COACHING, coach_teacher_id, student_id),
             )
         else:
-            self.conn.execute(
-                "UPDATE lesson_blocks SET teacher_id=? WHERE id=?",
-                (coach_teacher_id, existing["id"]),
+            # Koç değişikliği bu haftadan itibaren geçerli; geçmiş haftalar eski koçla kalır.
+            self.set_lesson_block_details_from_week(
+                existing["id"],
+                self._effective_schedule_change_week(None),
+                existing["type"],
+                coach_teacher_id,
+                existing["subject_id"],
+                existing["room_id"],
             )
         self.conn.commit()
 
@@ -948,6 +1040,15 @@ class Database:
         if lesson_type not in CLASS_CURRICULUM_TYPES:
             raise ValueError(f"Sınıf hedefi bu tipte olamaz: {lesson_type}")
 
+        # Bağlı derslerin bilgileri bu haftadan itibaren değişir; geçmiş haftalar korunur.
+        existing_rows = self.conn.execute(
+            "SELECT id FROM lesson_blocks WHERE curriculum_id=?", (curriculum_id,)
+        ).fetchall()
+        effective_week = self._effective_schedule_change_week(from_week)
+        for block_row in existing_rows:
+            self.set_lesson_block_details_from_week(
+                block_row["id"], effective_week, lesson_type, teacher_id, subject_id, room_id,
+            )
         self.conn.execute(
             "UPDATE class_curriculum SET subject_id=?, teacher_id=?, room_id=?, weekly_hours=?, lesson_type=? WHERE id=?",
             (subject_id, teacher_id, room_id, weekly_hours, lesson_type, curriculum_id),
@@ -1102,6 +1203,15 @@ class Database:
         if lesson_type not in STUDENT_CURRICULUM_TYPES:
             raise ValueError(f"Öğrenci hedefi bu tipte olamaz: {lesson_type}")
 
+        # Bağlı derslerin bilgileri bu haftadan itibaren değişir; geçmiş haftalar korunur.
+        existing_rows = self.conn.execute(
+            "SELECT id FROM lesson_blocks WHERE student_curriculum_id=?", (curriculum_id,)
+        ).fetchall()
+        effective_week = self._effective_schedule_change_week(from_week)
+        for block_row in existing_rows:
+            self.set_lesson_block_details_from_week(
+                block_row["id"], effective_week, lesson_type, teacher_id, subject_id, room_id,
+            )
         self.conn.execute(
             "UPDATE student_curriculum SET subject_id=?, teacher_id=?, room_id=?, weekly_hours=?, lesson_type=? WHERE id=?",
             (subject_id, teacher_id, room_id, weekly_hours, lesson_type, curriculum_id),
@@ -1226,6 +1336,7 @@ class Database:
           önceki haftalarda yapıldığı yerde görünmeye (analizde ve birebir
           paket hesabında sayılmaya) devam eder. Artık bir hedefe (sınıf/
           öğrenci ders hedefi) sayılmaması için hedef bağlantısı koparılır."""
+        from_week = self._effective_schedule_change_week(from_week)
         if not self.block_was_placed_before(block_id, from_week):
             self.delete_lesson_block(block_id)
             return "deleted"
@@ -1245,7 +1356,8 @@ class Database:
             SELECT lb.*, t.name AS teacher_name, s.name AS subject_name,
                    cg.name AS class_name, st.name AS student_name, r.name AS room_name,
                    st.class_group_id AS student_class_group_id,
-                   scg.name AS student_class_name
+                   scg.name AS student_class_name,
+                   student_room.name AS student_study_room_name
             FROM lesson_blocks lb
             LEFT JOIN teachers t ON t.id = lb.teacher_id
             LEFT JOIN subjects s ON s.id = lb.subject_id
@@ -1255,6 +1367,7 @@ class Database:
             -- birebir derste öğretmene "Öğrenci/12-A" diye göstermek için.
             LEFT JOIN class_groups scg ON scg.id = st.class_group_id
             LEFT JOIN rooms r ON r.id = lb.room_id
+            LEFT JOIN rooms student_room ON student_room.id = st.study_room_id
             {where}
         """
         return self.conn.execute(query, params).fetchall()
@@ -1263,6 +1376,130 @@ class Database:
     # anahtarları 'YYYY-MM-DD' metni olduğu için metin karşılaştırması
     # tarih sırasıyla aynıdır).
     POSITION_EPOCH = "0001-01-01"
+
+    @staticmethod
+    def _effective_schedule_change_week(from_week: str | None) -> str:
+        """Schedule edits cannot be backdated into an already elapsed week."""
+        current_week = _dt.date.today() - _dt.timedelta(days=_dt.date.today().weekday())
+        requested_week = _dt.date.fromisoformat(from_week) if from_week else current_week
+        effective_week = max(requested_week, current_week)
+        return (effective_week - _dt.timedelta(days=effective_week.weekday())).isoformat()
+
+    def set_lesson_block_details_from_week(
+        self,
+        block_id: int,
+        from_week: str,
+        type_: str,
+        teacher_id: int | None,
+        subject_id: int | None,
+        room_id: int | None,
+    ) -> None:
+        """Change mutable lesson details from a week forward, preserving history."""
+        from_week = self._effective_schedule_change_week(from_week)
+        row = self.conn.execute(
+            """
+            SELECT lb.*, t.name AS teacher_name, s.name AS subject_name, r.name AS room_name
+            FROM lesson_blocks lb
+            LEFT JOIN teachers t ON t.id=lb.teacher_id
+            LEFT JOIN subjects s ON s.id=lb.subject_id
+            LEFT JOIN rooms r ON r.id=lb.room_id
+            WHERE lb.id=?
+            """,
+            (block_id,),
+        ).fetchone()
+        if row is None:
+            return
+        has_history = self.conn.execute(
+            "SELECT 1 FROM lesson_block_details WHERE lesson_block_id=? LIMIT 1", (block_id,)
+        ).fetchone()
+        if not has_history:
+            # İlk değişiklik: mevcut bilgiler "başlangıçtan beri" geçerli taban kayıt olur.
+            self.conn.execute(
+                """
+                INSERT INTO lesson_block_details(
+                    lesson_block_id, from_week, type, teacher_id, teacher_name,
+                    subject_id, subject_name, room_id, room_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    block_id, self.POSITION_EPOCH, row["type"],
+                    row["teacher_id"], row["teacher_name"] or "",
+                    row["subject_id"], row["subject_name"] or "",
+                    row["room_id"], row["room_name"] or "",
+                ),
+            )
+
+        def name_for(table: str, entity_id: int | None) -> str:
+            if entity_id is None:
+                return ""
+            name_row = self.conn.execute(f"SELECT name FROM {table} WHERE id=?", (entity_id,)).fetchone()
+            return name_row["name"] if name_row is not None else ""
+
+        self.conn.execute(
+            "DELETE FROM lesson_block_details WHERE lesson_block_id=? AND from_week>?",
+            (block_id, from_week),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO lesson_block_details(
+                lesson_block_id, from_week, type, teacher_id, teacher_name,
+                subject_id, subject_name, room_id, room_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(lesson_block_id, from_week) DO UPDATE SET
+                type=excluded.type,
+                teacher_id=excluded.teacher_id,
+                teacher_name=excluded.teacher_name,
+                subject_id=excluded.subject_id,
+                subject_name=excluded.subject_name,
+                room_id=excluded.room_id,
+                room_name=excluded.room_name
+            """,
+            (
+                block_id, from_week, type_,
+                teacher_id, name_for("teachers", teacher_id),
+                subject_id, name_for("subjects", subject_id),
+                room_id, name_for("rooms", room_id),
+            ),
+        )
+        self.conn.execute(
+            "UPDATE lesson_blocks SET type=?, teacher_id=?, subject_id=?, room_id=? WHERE id=?",
+            (type_, teacher_id, subject_id, room_id, block_id),
+        )
+
+    def get_lesson_block_details_history(self) -> dict[int, list[sqlite3.Row]]:
+        history = {}
+        for row in self.conn.execute("SELECT * FROM lesson_block_details ORDER BY lesson_block_id, from_week"):
+            history.setdefault(row["lesson_block_id"], []).append(row)
+        return history
+
+    def resolve_lesson_block_details(
+        self, row, week: str, history: dict[int, list[sqlite3.Row]],
+    ) -> dict:
+        # Bir dersin o haftaki bilgileri: from_week <= hafta olan en son kayıt;
+        # hiç kaydı yoksa dersin kendi (güncel) bilgileri.
+        entries = history.get(row["id"])
+        if not entries:
+            return {
+                "type": row["type"],
+                "teacher_id": row["teacher_id"],
+                "teacher_name": row["teacher_name"] or "",
+                "subject_id": row["subject_id"],
+                "subject_name": row["subject_name"] or "",
+                "room_id": row["room_id"],
+                "room_name": row["room_name"] or "",
+            }
+        for entry in reversed(entries):
+            if entry["from_week"] <= week:
+                return dict(entry)
+        return {
+            "type": row["type"],
+            "teacher_id": row["teacher_id"],
+            "teacher_name": row["teacher_name"] or "",
+            "subject_id": row["subject_id"],
+            "subject_name": row["subject_name"] or "",
+            "room_id": row["room_id"],
+            "room_name": row["room_name"] or "",
+        }
 
     def set_block_position_from_week(
         self, block_id: int, from_week: str, day: int | None, period: int | None,
@@ -1277,6 +1514,14 @@ class Database:
           itibaren kalıcı" demek, ileriye dönük eski planların yerine geçer.
         - template_day/template_period her zaman EN SON (ileriye dönük)
           konumu tutar; "kaç saat yerleşti" gibi haftasız özetler onu okur."""
+        self._set_block_position_from_week(block_id, from_week, day, period)
+        self.conn.commit()
+
+    def _set_block_position_from_week(
+        self, block_id: int, from_week: str, day: int | None, period: int | None,
+    ) -> None:
+        # set_block_position_from_week'in commit etmeyen hali - birden çok
+        # bloğu tek işlemde değiştiren yerler (bkz. copy_week_schedule) için.
         has_history = self.conn.execute(
             "SELECT 1 FROM lesson_block_positions WHERE lesson_block_id=? LIMIT 1", (block_id,)
         ).fetchone()
@@ -1306,7 +1551,6 @@ class Database:
             "UPDATE lesson_blocks SET template_day=?, template_period=? WHERE id=?",
             (day, period, block_id),
         )
-        self.conn.commit()
 
     def get_block_position_history(self) -> dict[int, list[tuple[str, int | None, int | None]]]:
         """{blok_id: [(from_week, day, period), ...]} - from_week'e göre
@@ -1356,6 +1600,205 @@ class Database:
             (week_start, block_id),
         )
         self.conn.commit()
+
+    # ---------- haftayı kopyala / geri al / telafi ----------
+    def copy_week_schedule(
+        self,
+        target_week: str,
+        target_block_ids: list[int],
+        source_positions: dict[int, tuple[int | None, int | None] | None],
+    ) -> int:
+        """Apply copied positions from the target week onward, atomically."""
+        ids = sorted(set(target_block_ids))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        existing = {row["id"] for row in self.conn.execute(f"SELECT id FROM lesson_blocks WHERE id IN ({placeholders})", ids)}
+        if existing != set(ids):
+            raise ValueError("Hafta kopyalanırken bazı dersler artık mevcut değil.")
+        with self.conn:
+            for block_id in ids:
+                day, period = source_positions.get(block_id) or (None, None)
+                self._set_block_position_from_week(block_id, target_week, day, period)
+            self.conn.execute(
+                f"DELETE FROM week_exceptions WHERE week_start=? AND lesson_block_id IN ({placeholders})",
+                [target_week, *ids],
+            )
+        return len(ids)
+
+    def get_block_schedule_state(self, block_ids: list[int], week_start: str) -> BlockScheduleState:
+        """Capture a block's template, full position history, and one week's exception."""
+        ids = sorted(set(block_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        blocks = self.conn.execute(
+            f"SELECT id, template_day, template_period FROM lesson_blocks WHERE id IN ({placeholders})", ids
+        ).fetchall()
+        positions = {row["id"]: [] for row in blocks}
+        for row in self.conn.execute(
+            f"SELECT lesson_block_id, from_week, day, period FROM lesson_block_positions WHERE lesson_block_id IN ({placeholders}) ORDER BY lesson_block_id, from_week",
+            ids,
+        ):
+            positions[row["lesson_block_id"]].append((row["from_week"], row["day"], row["period"]))
+        exceptions = {
+            row["lesson_block_id"]: (row["day"], row["period"])
+            for row in self.conn.execute(
+                f"SELECT lesson_block_id, day, period FROM week_exceptions WHERE week_start=? AND lesson_block_id IN ({placeholders})",
+                [week_start, *ids],
+            )
+        }
+        return {
+            row["id"]: (row["template_day"], row["template_period"], tuple(positions[row["id"]]), exceptions.get(row["id"]))
+            for row in blocks
+        }
+
+    def restore_block_schedule_state(
+        self, state: BlockScheduleState, week_start: str,
+    ) -> None:
+        """Restore captured schedule state atomically without changing lesson details."""
+        ids = sorted(state)
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        existing = {row["id"] for row in self.conn.execute(f"SELECT id FROM lesson_blocks WHERE id IN ({placeholders})", ids)}
+        if existing != set(ids):
+            raise ValueError("Geri alınacak derslerden biri artık mevcut değil.")
+        with self.conn:
+            self.conn.execute(f"DELETE FROM lesson_block_positions WHERE lesson_block_id IN ({placeholders})", ids)
+            self.conn.execute(
+                f"DELETE FROM week_exceptions WHERE week_start=? AND lesson_block_id IN ({placeholders})",
+                [week_start, *ids],
+            )
+            for block_id, (template_day, template_period, positions, exception) in state.items():
+                self.conn.execute(
+                    "UPDATE lesson_blocks SET template_day=?, template_period=? WHERE id=?",
+                    (template_day, template_period, block_id),
+                )
+                self.conn.executemany(
+                    "INSERT INTO lesson_block_positions(lesson_block_id, from_week, day, period) VALUES (?, ?, ?, ?)",
+                    [(block_id, from_week, day, period) for from_week, day, period in positions],
+                )
+                if exception is not None:
+                    self.conn.execute(
+                        "INSERT INTO week_exceptions(week_start, lesson_block_id, day, period) VALUES (?, ?, ?, ?)",
+                        (week_start, block_id, exception[0], exception[1]),
+                    )
+
+    def add_makeup_lessons(self, source_block_ids: list[int], target_week: str) -> list[int]:
+        """Create one-week, unplaced copies of lessons missed in a prior week.
+
+        A source lesson is copied at most once per target week. Multi-teacher
+        meeting groups are copied as a complete group when any member is chosen.
+        """
+        target = _dt.date.fromisoformat(target_week)
+        source_week = (target - _dt.timedelta(days=7)).isoformat()
+        next_week = (target + _dt.timedelta(days=7)).isoformat()
+        if not source_block_ids:
+            return []
+        created_ids = []
+        detailed_by_id = {row["id"]: row for row in self.list_lesson_blocks_detailed()}
+        details_history = self.get_lesson_block_details_history()
+        self.conn.execute("BEGIN")
+        try:
+            for source_id in dict.fromkeys(source_block_ids):
+                source = detailed_by_id.get(source_id)
+                if source is None:
+                    raise ValueError(f"Kaynak ders bulunamadı (#{source_id}).")
+                if source["zumre_group_id"] is not None:
+                    # Zümre/toplantı: grubun bütün öğretmenleri birlikte telafi edilir.
+                    sources = [
+                        row for row in detailed_by_id.values()
+                        if row["zumre_group_id"] == source["zumre_group_id"]
+                    ]
+                else:
+                    sources = [source]
+                copies = []
+                for member in sources:
+                    existing = self.conn.execute(
+                        "SELECT makeup_block_id FROM week_makeup_lessons WHERE target_week=? AND source_block_id=?",
+                        (target_week, member["id"]),
+                    ).fetchone()
+                    if existing is not None:
+                        continue
+                    # Telafi kopyası sadece hedef haftada var (ended_week = sonraki hafta).
+                    details = self.resolve_lesson_block_details(member, source_week, details_history)
+                    cursor = self.conn.execute(
+                        """
+                        INSERT INTO lesson_blocks(
+                            type, teacher_id, subject_id, class_group_id, student_id,
+                            room_id, note, template_day, template_period, created_at, ended_week
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                        """,
+                        (
+                            details["type"], details["teacher_id"], details["subject_id"],
+                            member["class_group_id"], member["student_id"], details["room_id"],
+                            f"Telafi dersi (kaynak #{member['id']})", target_week, next_week,
+                        ),
+                    )
+                    copies.append((member["id"], cursor.lastrowid))
+                    created_ids.append(cursor.lastrowid)
+                if copies and source["zumre_group_id"] is not None:
+                    new_group_id = min(copy_id for _original_id, copy_id in copies)
+                    self.conn.executemany(
+                        "UPDATE lesson_blocks SET zumre_group_id=? WHERE id=?",
+                        [(new_group_id, copy_id) for _original_id, copy_id in copies],
+                    )
+                self.conn.executemany(
+                    "INSERT INTO week_makeup_lessons(target_week, source_block_id, makeup_block_id) VALUES (?, ?, ?)",
+                    [(target_week, original_id, copy_id) for original_id, copy_id in copies],
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return created_ids
+
+    # ---------- resmî tatiller ----------
+    def list_holidays(
+        self, start_date: _dt.date | str | None = None, end_date: _dt.date | str | None = None,
+    ) -> list[sqlite3.Row]:
+        query = "SELECT holiday_date, name FROM holidays"
+        conditions = []
+        params = []
+        if start_date is not None:
+            conditions.append("holiday_date >= ?")
+            params.append(start_date.isoformat() if isinstance(start_date, _dt.date) else start_date)
+        if end_date is not None:
+            conditions.append("holiday_date <= ?")
+            params.append(end_date.isoformat() if isinstance(end_date, _dt.date) else end_date)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY holiday_date"
+        return self.conn.execute(query, params).fetchall()
+
+    def get_holiday(self, holiday_date: _dt.date | str) -> sqlite3.Row | None:
+        date_key = holiday_date.isoformat() if isinstance(holiday_date, _dt.date) else holiday_date
+        return self.conn.execute("SELECT holiday_date, name FROM holidays WHERE holiday_date=?", (date_key,)).fetchone()
+
+    def add_holiday(self, holiday_date: _dt.date | str, name: str) -> None:
+        date_key = holiday_date.isoformat() if isinstance(holiday_date, _dt.date) else holiday_date
+        try:
+            _dt.date.fromisoformat(date_key)
+        except ValueError as exc:
+            raise ValueError("Geçerli bir tatil tarihi seçin.") from exc
+        holiday_name = name.strip()
+        if not holiday_name:
+            raise ValueError("Resmî tatil adı boş olamaz.")
+        if self.get_holiday(date_key) is not None:
+            raise ValueError("Bu tarih için zaten resmî tatil tanımlanmış.")
+        try:
+            self.conn.execute("INSERT INTO holidays(holiday_date, name) VALUES (?, ?)", (date_key, holiday_name))
+            self.conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Bu tarih için zaten resmî tatil tanımlanmış.") from exc
+
+    def delete_holiday(self, holiday_date: _dt.date | str) -> bool:
+        date_key = holiday_date.isoformat() if isinstance(holiday_date, _dt.date) else holiday_date
+        cursor = self.conn.execute("DELETE FROM holidays WHERE holiday_date=?", (date_key,))
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     # ---------- müsaitlik (öğretmen/öğrenci/sınıf ortak deseni) ----------
     # Üç varlık türü de aynı "şablon (kalıcı) + haftalık istisna" desenini

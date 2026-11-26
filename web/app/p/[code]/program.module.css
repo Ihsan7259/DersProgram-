@@ -177,6 +177,23 @@
   border: max(1px, calc(var(--u) * 1.5)) dashed #d4d8dd;
 }
 
+/* Resmî tatil günü (uygulamadaki theme.make_holiday_cell). */
+.holiday {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--u) * 2) calc(var(--u) * 3);
+  border: 1px solid #dee1e7;
+  background: #fcfcfa;
+  color: #3c434d;
+  font-size: calc(var(--u) * 15);
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
 .unavailable {
   color: #c92f36;
   font-size: calc(var(--u) * 11.25);

@@ -9,7 +9,8 @@ import path from "node:path";
 
 // Izgaranın bir hücresi, uygulamadaki önizlemenin ("Kopyala" görseli)
 // çizdiği haliyle. Hücrede ya kartlar, ya (4+ derslik kalabalık hücrede)
-// tek satırlık adlar, ya da öğretmenin "müsait değil" işareti olur.
+// tek satırlık adlar, ya öğretmenin "müsait değil" işareti, ya da resmî
+// tatil olan günlerde tatilin adı olur.
 export type ScheduleCell = {
   day: number; // 0 = haftanın ilk günü (days[0], genelde Pazartesi)
   period: number; // 1'den başlar (periods[period - 1])
@@ -17,6 +18,7 @@ export type ScheduleCell = {
   names?: string[];
   color?: string; // names için arka plan
   unavailable?: boolean;
+  holiday?: string; // resmî tatil: o günün bütün saatleri, tatilin adıyla
 };
 
 export type ProgramWeek = {

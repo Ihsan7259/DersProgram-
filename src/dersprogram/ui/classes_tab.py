@@ -230,13 +230,18 @@ class ClassesTab(QWidget):
         self.clear_button.clicked.connect(self.clear_form)
         self.table_widget.itemSelectionChanged.connect(self.handle_selection)
         self.curriculum_table.itemSelectionChanged.connect(self._handle_curriculum_selection)
-        self.navigator.week_changed.connect(lambda _w: self.refresh_detail())
+        self.navigator.week_changed.connect(self._handle_week_changed)
         self.name_edit.returnPressed.connect(self._handle_return_pressed)
 
         self.refresh()
 
     def _handle_return_pressed(self) -> None:
         self.handle_update() if self.selected_id is not None else self.handle_add()
+
+    def _handle_week_changed(self, _week) -> None:
+        # Hedef tablosu da haftaya bağlı (dönem başlangıcından önceki haftalar).
+        self.refresh_detail()
+        self.refresh_curriculum()
 
     def _select_row_by_id(self, row_id: int) -> None:
         for r in range(self.table_widget.rowCount()):
@@ -326,6 +331,9 @@ class ClassesTab(QWidget):
     def refresh_curriculum(self) -> None:
         self.curriculum_table.setRowCount(0)
         self.curriculum_status_label.setText("")
+        if scheduling.week_is_before_course_start(self.db, self.navigator.week_start):
+            self.curriculum_status_label.setText("Dönem başlangıcından önce haftalık ders saatleri gösterilmez.")
+            return
         if self.selected_id is None:
             return
         rows = self.db.list_class_curriculum(self.selected_id)
@@ -470,7 +478,12 @@ class ClassesTab(QWidget):
             from_week=scheduling.week_key(self.navigator.week_start),
         )
         self.refresh_curriculum()
-        QMessageBox.information(self, "Güncellendi", "Ders hedefi güncellendi.")
+        QMessageBox.information(
+            self,
+            "Güncellendi",
+            "Ders hedefi güncellendi. Değişiklikler bu haftadan itibaren geçerli olur; önceki haftaların "
+            "programı ve analizleri korunur.",
+        )
         if self.on_change:
             self.on_change()
 
@@ -654,7 +667,10 @@ class ClassesTab(QWidget):
             if matched:
                 filtered[cell] = matched
         availability = scheduling.get_class_availability(self.db, self.selected_id, self.navigator.week_start)
-        self.mini_grid.render(self.db, filtered, availability, row_mode="class")
+        self.mini_grid.render(
+            self.db, filtered, availability, row_mode="class",
+            holiday_names_by_day=scheduling.holiday_names_by_day(self.db, self.navigator.week_start),
+        )
         totals = scheduling.summarize_hours(self.db, self.navigator.week_start, class_group_id=self.selected_id)
         self.summary_table.render(totals)
 

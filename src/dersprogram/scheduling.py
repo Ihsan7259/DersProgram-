@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .db import (
     Database,
@@ -40,6 +40,15 @@ def week_key(week_start: _dt.date) -> str:
     return week_start.isoformat()
 
 
+def week_is_before_course_start(db: Database, week_start: _dt.date) -> bool:
+    """Whether the week contains no day on or after the configured start."""
+    if not db.term_start:
+        return False
+    course_start = _dt.date.fromisoformat(db.term_start)
+    last_displayed_day = week_start + _dt.timedelta(days=max(len(db.day_names) - 1, 0))
+    return last_displayed_day < course_start
+
+
 _MONTH_ABBREV_TR = {
     1: "Oca", 2: "Şub", 3: "Mar", 4: "Nis", 5: "May", 6: "Haz",
     7: "Tem", 8: "Ağu", 9: "Eyl", 10: "Eki", 11: "Kas", 12: "Ara",
@@ -57,6 +66,15 @@ def _format_date_tr(d: _dt.date) -> str:
 def week_label(week_start: _dt.date, day_count: int) -> str:
     end = week_start + _dt.timedelta(days=max(day_count - 1, 0))
     return f"{_format_date_tr(week_start)} – {_format_date_tr(end)}"
+
+
+def holiday_names_by_day(db: Database, week_start: _dt.date) -> dict[int, str]:
+    """Return holiday names indexed by their day column in this week."""
+    day_count = len(db.day_names)
+    return {
+        (_dt.date.fromisoformat(row["holiday_date"]) - week_start).days: row["name"]
+        for row in db.list_holidays(week_start, week_start + _dt.timedelta(days=max(day_count - 1, 0)))
+    }
 
 
 _DAY_ABBREV = {
@@ -122,6 +140,8 @@ class BlockView:
     # ayrı) - öğretmenin programında birebir dersi "Öğrenci/12-A" diye
     # göstermek için (bkz. student_with_class).
     student_class_name: str | None = None
+    # Öğrencinin kendi etüt salonu (dersin dersliği yoksa öğrenciye gösterilir).
+    student_study_room_name: str | None = None
     zumre_group_id: int | None = None
 
     def type_label(self) -> str:
@@ -222,6 +242,14 @@ class BlockView:
         type_label = LESSON_TYPE_LABELS.get(self.type, self.type)
         return f"{type_label}({self.room_name})"
 
+    def student_room_line(self) -> str:
+        """Prefer this lesson's assigned room, otherwise show the student's study room."""
+        if self.room_name:
+            return self.room_line()
+        if self.student_study_room_name:
+            return f"Etüt Salonu: {self.student_study_room_name}"
+        return ""
+
     def class_row_lines(self) -> tuple[str, str, str]:
         """Sınıfın kendi haftalık programında gösterilecek satırlar:
         ders adı, öğretmen adı (sınıf adı zaten belli, tekrar edilmez) ve
@@ -263,15 +291,16 @@ class BlockView:
         if self.type == TYPE_ONE_ON_ONE:
             # Kullanıcı isteği: öğretmenin programında birebir bloğunda
             # öğrencinin kayıtlı olduğu sınıf da yazsın ("Mustafa Yürek/12-A").
-            return self.student_with_class() or "Birebir", self.subject_name or "", self.room_line()
+            return self.student_with_class() or "Birebir", self.subject_name or "", self.student_room_line()
         if self.type == TYPE_COACHING:
-            return "Öğrenci Koçluk", self.student_with_class(), self.room_line()
+            return "Öğrenci Koçluk", self.student_with_class(), self.student_room_line()
         if self.type == TYPE_PARENT_MEETING:
             # Öğretmenin programında: kimin velisiyle görüşüleceği.
-            return "Veli Görüşmesi", self.student_with_class(), self.room_line()
+            return "Veli Görüşmesi", self.student_with_class(), self.student_room_line()
         if self.type in GROUP_TYPES:
             return self.type_label(), self.subject_name or "", self.room_line()
-        return self.type_label(), self.subject_name or "", self.room_line()
+        room_line = self.student_room_line() if self.student_id is not None else self.room_line()
+        return self.type_label(), self.subject_name or "", room_line
 
     def student_row_lines(self) -> tuple[str, str, str]:
         """Öğrencinin kendi haftalık programında (ve önizlemesinde)
@@ -288,10 +317,10 @@ class BlockView:
         teacher = short_teacher_name(self.teacher_name)
         if self.subject_name:
             secondary = f"{self.type_short()} · {teacher}" if teacher else self.type_short()
-            return self.subject_name, secondary, self.room_line()
+            return self.subject_name, secondary, self.student_room_line()
         # Dersi/branşı olmayan türlerde (koçluk, zümre...) tür adı zaten
         # ilk satırda - ikinci satırda tekrar edilmez.
-        return self.type_short(), teacher, self.room_line()
+        return self.type_short(), teacher, self.student_room_line()
 
     def subject_row_lines(self) -> tuple[str, str, str]:
         """Bir DERSİN (branşın) kendi haftalık programında gösterilecek
@@ -418,23 +447,26 @@ class BlockView:
         return (self.type, self.teacher_id, self.class_group_id, self.student_id, self.subject_id)
 
 
-def _row_to_blockview(row) -> BlockView:
+def _row_to_blockview(row, details: dict | None = None) -> BlockView:
+    # details: dersin o haftaki bilgileri (bkz. Database.resolve_lesson_block_details).
+    details = details or {}
     return BlockView(
         id=row["id"],
-        type=row["type"],
-        teacher_id=row["teacher_id"],
-        teacher_name=row["teacher_name"],
-        subject_id=row["subject_id"],
-        subject_name=row["subject_name"],
+        type=details.get("type", row["type"]),
+        teacher_id=details.get("teacher_id", row["teacher_id"]),
+        teacher_name=details.get("teacher_name", row["teacher_name"]),
+        subject_id=details.get("subject_id", row["subject_id"]),
+        subject_name=details.get("subject_name", row["subject_name"]),
         class_group_id=row["class_group_id"],
         class_name=row["class_name"],
         student_id=row["student_id"],
         student_name=row["student_name"],
-        room_id=row["room_id"],
-        room_name=row["room_name"],
+        room_id=details.get("room_id", row["room_id"]),
+        room_name=details.get("room_name", row["room_name"]),
         note=row["note"] or "",
         student_class_group_id=row["student_class_group_id"],
         student_class_name=row["student_class_name"],
+        student_study_room_name=row["student_study_room_name"],
         zumre_group_id=row["zumre_group_id"],
     )
 
@@ -476,17 +508,116 @@ def _created_week_key(row) -> str | None:
         return None
 
 
+@dataclass(frozen=True)
+class OneOnOneOccurrence:
+    date: _dt.date
+    period: int
+    teacher_name: str
+    subject_name: str
+    room_name: str
+
+
+class _OneOnOneHistoryContext:
+    # Birebir geçmişi hesaplanırken tekrar tekrar okunan veriler (öğrenci
+    # başına değil, bir kere okunur).
+    def __init__(self, db: Database):
+        self.db = db
+        self.history = db.get_block_position_history()
+        self.details_history = db.get_lesson_block_details_history()
+        term_start = db.term_start
+        self.course_start = _dt.date.fromisoformat(term_start) if term_start else None
+        self.exceptions = {}
+        self.holidays = {}
+
+    def week_exceptions(self, week: str) -> dict:
+        if week not in self.exceptions:
+            self.exceptions[week] = self.db.get_week_exceptions(week)
+        return self.exceptions[week]
+
+    def is_holiday(self, date: _dt.date) -> bool:
+        if date not in self.holidays:
+            self.holidays[date] = self.db.get_holiday(date) is not None
+        return self.holidays[date]
+
+
+def list_one_on_one_occurrences(
+    db: Database,
+    student_id: int,
+    as_of: _dt.date | None = None,
+) -> list[OneOnOneOccurrence]:
+    """Return each historically scheduled one-on-one lesson occurrence.
+
+    Uses the same creation dates, weekly position history, exceptions, and
+    course-start boundary as the one-on-one package ledger.
+    """
+    today = as_of or _dt.date.today()
+    rows = db.list_lesson_blocks_detailed(where="WHERE lb.student_id=?", params=(student_id,))
+    return _one_on_one_occurrences_for_rows(rows, today, _OneOnOneHistoryContext(db))
+
+
+def _one_on_one_occurrences_for_rows(
+    rows: list,
+    today: _dt.date,
+    context: _OneOnOneHistoryContext,
+) -> list[OneOnOneOccurrence]:
+    # Her hafta, dersin O HAFTAKİ konumuna ve türüne bakılır: sonradan havuza
+    # düşürülmüş bir birebirin geçmişte yapılmış saatleri de sayılır, kalıcı
+    # olarak yeni eklenen birinin eklenmeden önceki haftaları sayılmaz.
+    start_dates = [_dt.date.fromisoformat(row["created_at"]) for row in rows if row["created_at"]]
+    if not start_dates:
+        return []
+    occurrences = []
+    week = monday_of(min(start_dates))
+    last_week = monday_of(today)
+    while week <= last_week:
+        wkey = week_key(week)
+        exceptions = context.week_exceptions(wkey)
+        for row in rows:
+            created = _dt.date.fromisoformat(row["created_at"]) if row["created_at"] else today
+            if created > week + _dt.timedelta(days=6):
+                continue  # bu blok o hafta henüz eklenmemişti
+            details = context.db.resolve_lesson_block_details(row, wkey, context.details_history)
+            if details["type"] != TYPE_ONE_ON_ONE:
+                continue
+            day, period = resolve_week_position(row, wkey, exceptions, context.history)
+            if day is None or period is None:
+                continue  # o hafta havuzdaydı
+            occurrence_date = week + _dt.timedelta(days=day)
+            if context.course_start is not None and occurrence_date < context.course_start:
+                continue
+            if context.is_holiday(occurrence_date):
+                continue
+            if created <= occurrence_date <= today:
+                occurrences.append(OneOnOneOccurrence(
+                    date=occurrence_date,
+                    period=period,
+                    teacher_name=details["teacher_name"],
+                    subject_name=details["subject_name"],
+                    room_name=details["room_name"] or row["student_study_room_name"] or "",
+                ))
+        week += _dt.timedelta(days=7)
+    occurrences.sort(key=lambda item: (item.date, item.period, item.subject_name, item.teacher_name))
+    return occurrences
+
+
 def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, int], list[BlockView]], list[BlockView]]:
     """Verilen haftanın efektif programını döner: (gün,saat) -> [BlockView,...]
-    ve o hafta atanmamış (havuzdaki) blokların listesi."""
+    ve o hafta atanmamış (havuzdaki) blokların listesi. Dönem başlangıcından
+    önceki günlere ait dersler gösterilmez."""
     wkey = week_key(week_start)
+    course_start = _dt.date.fromisoformat(db.term_start) if db.term_start else None
+    day_count = len(db.day_names)
+    # Dönem başlamadan önceki haftalarda program boş görünür.
+    if week_is_before_course_start(db, week_start):
+        return {}, []
     exceptions = db.get_week_exceptions(wkey)
     history = db.get_block_position_history()
+    details_history = db.get_lesson_block_details_history()
     all_blocks = db.list_lesson_blocks_detailed()
+    holidays = holiday_names_by_day(db, week_start)
 
     schedule: dict[tuple[int, int], list[BlockView]] = {}
     pool: list[BlockView] = []
-    day_count = len(db.day_names)
     period_count = db.period_count
 
     for row in all_blocks:
@@ -494,7 +625,9 @@ def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, i
         ended = row["ended_week"] if "ended_week" in row.keys() else None
         if ended is not None and wkey >= ended:
             continue
-        block = _row_to_blockview(row)
+        # Dersin o haftaki öğretmen/ders/derslik/tür bilgisi (geçmiş korunur).
+        details = db.resolve_lesson_block_details(row, wkey, details_history)
+        block = _row_to_blockview(row, details)
         day, period = resolve_week_position(row, wkey, exceptions, history)
 
         # Gün/ders saati sayısı Ayarlar'dan KÜÇÜLTÜLMÜŞ olabilir (ör. 6
@@ -517,9 +650,19 @@ def get_week_view(db: Database, week_start: _dt.date) -> tuple[dict[tuple[int, i
             if created_wkey is not None and created_wkey > wkey:
                 continue
             pool.append(block)
-        else:
-            block.day, block.period = day, period
-            schedule.setdefault((day, period), []).append(block)
+            continue
+        lesson_date = week_start + _dt.timedelta(days=day)
+        # Dönem başlangıcından önceki günler gösterilmez.
+        if course_start is not None and lesson_date < course_start:
+            continue
+        # Resmî tatile denk gelen ders o hafta havuza düşer.
+        if day in holidays:
+            created_wkey = _created_week_key(row)
+            if created_wkey is None or created_wkey <= wkey:
+                pool.append(block)
+            continue
+        block.day, block.period = day, period
+        schedule.setdefault((day, period), []).append(block)
 
     return schedule, pool
 
@@ -626,21 +769,32 @@ def place_block(db: Database, week_start: _dt.date, block_id: int, day: int, per
     """SCOPE_ALWAYS: week_start haftasından İTİBAREN her hafta (geçmiş
     haftalar olduğu gibi kalır - bkz. db.set_block_position_from_week).
     SCOPE_WEEK_ONLY: sadece week_start haftası."""
+    # Geçmiş bir haftaya yerleştirme yapılmaz; en erken bu hafta.
+    current_week = monday_of(_dt.date.today())
+    week_start = max(monday_of(week_start), current_week)
+    lesson_date = week_start + _dt.timedelta(days=day)
+    holiday = db.get_holiday(lesson_date)
+    if holiday is not None:
+        raise ValueError(f"{lesson_date.strftime('%d.%m.%Y')} resmî tatil: {holiday['name']}.")
+    wkey = week_key(week_start)
     if scope == SCOPE_ALWAYS:
-        db.set_block_position_from_week(block_id, week_key(week_start), day, period)
-        db.clear_week_exception(week_key(week_start), block_id)
+        db.set_block_position_from_week(block_id, wkey, day, period)
+        db.clear_week_exception(wkey, block_id)
     else:
-        db.set_week_exception(week_key(week_start), block_id, day, period)
+        db.set_week_exception(wkey, block_id, day, period)
 
 
 def clear_block(db: Database, week_start: _dt.date, block_id: int, scope: str) -> None:
     """place_block'un tersi: SCOPE_ALWAYS'te ders week_start haftasından
     İTİBAREN havuza düşer; geçmiş haftalarda yerleştiği yerde kalır."""
+    current_week = monday_of(_dt.date.today())
+    week_start = max(monday_of(week_start), current_week)
+    wkey = week_key(week_start)
     if scope == SCOPE_ALWAYS:
-        db.set_block_position_from_week(block_id, week_key(week_start), None, None)
-        db.clear_week_exception(week_key(week_start), block_id)
+        db.set_block_position_from_week(block_id, wkey, None, None)
+        db.clear_week_exception(wkey, block_id)
     else:
-        db.set_week_exception(week_key(week_start), block_id, None, None)
+        db.set_week_exception(wkey, block_id, None, None)
 
 
 def get_teacher_availability(db: Database, teacher_id: int, week_start: _dt.date) -> dict[tuple[int, int], str]:
@@ -781,6 +935,7 @@ class AutoAssignResult:
 
 def _teacher_capacity_warnings(
     db: Database,
+    week_start: _dt.date,
     pool: list[BlockView],
     schedule: dict[tuple[int, int], list[BlockView]],
     unavailable: "UnavailableSlots",
@@ -801,7 +956,9 @@ def _teacher_capacity_warnings(
     if not demand_by_teacher:
         return []
 
-    total_slots = day_count * period_count
+    # Resmî tatil günleri kapasiteden düşülür.
+    holiday_count = len(db.list_holidays(week_start, week_start + _dt.timedelta(days=max(day_count - 1, 0))))
+    total_slots = max(0, day_count - holiday_count) * period_count
     occupied_by_teacher: dict[int, int] = {}
     for blocks in schedule.values():
         for b in blocks:
@@ -926,7 +1083,7 @@ def auto_assign(
     # En bariz imkansızlığı (bir öğretmenin haftalık boş kapasitesinden
     # fazla ders istenmesi) çözücüyü hiç çalıştırmadan tespit et - bkz.
     # _teacher_capacity_warnings docstring'i.
-    warnings.extend(_teacher_capacity_warnings(db, pool, schedule, unavailable, day_count, period_count))
+    warnings.extend(_teacher_capacity_warnings(db, week_start, pool, schedule, unavailable, day_count, period_count))
 
     report(5, f"{len(pool)} ders saati için uygun yerler hesaplanıyor...")
 
@@ -945,7 +1102,12 @@ def auto_assign(
         else:
             units.append([block])
 
-    all_slots = [(d, p) for d in range(day_count) for p in range(1, period_count + 1)]
+    # Resmî tatil günlerine hiç ders konmaz.
+    holiday_days = {
+        (_dt.date.fromisoformat(row["holiday_date"]) - week_start).days
+        for row in db.list_holidays(week_start, week_start + _dt.timedelta(days=day_count - 1))
+    }
+    all_slots = [(d, p) for d in range(day_count) if d not in holiday_days for p in range(1, period_count + 1)]
 
     # Her birim için, sabit (zaten yerleşmiş) derslerle çakışmayan ve
     # müsaitlik kurallarını ihlal etmeyen (day, period) adayları -
@@ -1369,6 +1531,7 @@ def explain_unplaced_lessons(
     period_count = db.period_count
     schedule, pool = get_week_view(db, week_start)
     unavailable = UnavailableSlots.compute(db, week_start)
+    holiday_names = holiday_names_by_day(db, week_start)
 
     seen_zumre: set[int] = set()
     zumre_units: list[list[BlockView]] = []
@@ -1397,6 +1560,9 @@ def explain_unplaced_lessons(
         for d in range(day_count):
             existing = fixed_days.get(d, set())
             for p in range(1, period_count + 1):
+                if d in holiday_names:
+                    slot_notes.append({"day": d, "period": p, "open": False, "reason": f"resmî tatil: {holiday_names[d]}"})
+                    continue
                 conflicts = find_group_conflicts(schedule, d, p, unit, unavailable)
                 if conflicts:
                     slot_notes.append({"day": d, "period": p, "open": False, "reason": conflicts[0]})
@@ -1486,8 +1652,18 @@ def student_effective_blocks(
     programında görünür."""
     schedule, _pool = get_week_view(db, week_start)
     filtered: dict[tuple[int, int], list[BlockView]] = {}
+    # Dersin dersliği yoksa öğrencinin kendi etüt salonu gösterilir.
+    student = db.get_student(student_id)
+    study_room = (
+        db.conn.execute("SELECT name FROM rooms WHERE id=?", (student["study_room_id"],)).fetchone()
+        if student and student["study_room_id"] is not None else None
+    )
+    study_room_name = study_room["name"] if study_room else None
     for cell, blocks in schedule.items():
-        matched = student_cell_blocks(blocks, student_id, class_group_id)
+        matched = [
+            replace(block, student_study_room_name=study_room_name)
+            for block in student_cell_blocks(blocks, student_id, class_group_id)
+        ]
         if matched:
             filtered[cell] = matched
     return filtered
@@ -1552,36 +1728,7 @@ def compute_one_on_one_ledger(db: Database, student_id: int, as_of: _dt.date | N
     dönük sayım yapılamaz (o bloklar için sayaç güncellemenin kurulduğu
     günden itibaren işler)."""
     today = as_of or _dt.date.today()
-    rows = db.list_lesson_blocks_detailed(
-        where="WHERE lb.type=? AND lb.student_id=?", params=(TYPE_ONE_ON_ONE, student_id)
-    )
-    # Her hafta, dersin O HAFTAKİ konumuna bakılır (bkz. resolve_week_position):
-    # sonradan havuza düşürülmüş bir birebirin geçmişte yapılmış saatleri
-    # de sayılır, kalıcı olarak yeni eklenen birinin eklenmeden önceki
-    # haftaları sayılmaz.
-    history = db.get_block_position_history()
-    active = list(rows)
-
-    occurred = 0
-    if active:
-        start_dates = [_dt.date.fromisoformat(r["created_at"]) for r in active if r["created_at"]]
-        if start_dates:
-            week = monday_of(min(start_dates))
-            last_week = monday_of(today)
-            while week <= last_week:
-                wkey = week_key(week)
-                exceptions = db.get_week_exceptions(wkey)
-                for r in active:
-                    created = _dt.date.fromisoformat(r["created_at"]) if r["created_at"] else today
-                    if created > week + _dt.timedelta(days=6):
-                        continue  # bu blok o hafta henüz eklenmemişti
-                    day, period = resolve_week_position(r, wkey, exceptions, history)
-                    if day is None or period is None:
-                        continue  # o hafta havuzdaydı
-                    occurrence_date = week + _dt.timedelta(days=day)
-                    if created <= occurrence_date <= today:
-                        occurred += 1
-                week += _dt.timedelta(days=7)
+    occurred = len(list_one_on_one_occurrences(db, student_id, today))
 
     student = db.get_student(student_id)
     package = float(student["one_on_one_package_hours"]) if student is not None else 0.0
@@ -1592,6 +1739,33 @@ def compute_one_on_one_ledger(db: Database, student_id: int, as_of: _dt.date | N
         "paid_hours": paid,
         "remaining_hours": max(package - occurred, 0.0),
         "debt_hours": max(occurred - package, 0.0),
+    }
+
+
+def one_on_one_debt_student_ids(
+    db: Database,
+    student_ids: set[int],
+    as_of: _dt.date | None = None,
+) -> set[int]:
+    """Return students whose past lessons exceed their package, sharing history reads."""
+    if not student_ids:
+        return set()
+    rows_by_student = {}
+    for row in db.list_lesson_blocks_detailed(where="WHERE lb.student_id IS NOT NULL"):
+        if row["student_id"] in student_ids:
+            rows_by_student.setdefault(row["student_id"], []).append(row)
+    packages = {
+        row["id"]: float(row["one_on_one_package_hours"])
+        for row in db.list_students()
+        if row["id"] in student_ids
+    }
+    context = _OneOnOneHistoryContext(db)
+    today = as_of or _dt.date.today()
+    return {
+        student_id
+        for student_id in student_ids
+        if len(_one_on_one_occurrences_for_rows(rows_by_student.get(student_id, []), today, context))
+        > packages.get(student_id, 0.0)
     }
 
 
@@ -1676,6 +1850,86 @@ def summarize_hours_range_by(
                 bucket[block.type] = bucket.get(block.type, 0) + 1
         week += _dt.timedelta(days=7)
     return totals
+
+
+def summarize_hours_range_by_week(
+    db: Database,
+    start_date: _dt.date,
+    end_date: _dt.date,
+    attribute: str,
+) -> list[tuple[_dt.date, _dt.date, dict[int, dict[str, int]]]]:
+    """Return weekly totals for each entity, clipped to the selected dates.
+
+    Weeks before the configured course start are omitted. A partial first or
+    last week keeps its actual inclusive date range.
+    """
+    course_start = _dt.date.fromisoformat(db.term_start) if db.term_start else None
+    effective_start = max(start_date, course_start) if course_start else start_date
+    if effective_start > end_date:
+        return []
+    weekly_totals = []
+    week = monday_of(effective_start)
+    last_week = monday_of(end_date)
+    while week <= last_week:
+        period_start = max(week, effective_start)
+        period_end = min(week + _dt.timedelta(days=6), end_date)
+        schedule, _pool = get_week_view(db, week)
+        totals = {}
+        for (day, _period), blocks in schedule.items():
+            cell_date = week + _dt.timedelta(days=day)
+            if not (period_start <= cell_date <= period_end):
+                continue
+            for block in blocks:
+                key = getattr(block, attribute, None)
+                if key is None:
+                    continue
+                bucket = totals.setdefault(key, {t: 0 for t in LESSON_TYPE_LABELS})
+                bucket[block.type] = bucket.get(block.type, 0) + 1
+        weekly_totals.append((period_start, period_end, totals))
+        week += _dt.timedelta(days=7)
+    return weekly_totals
+
+
+def summarize_hours_range_by_month(
+    db: Database,
+    start_date: _dt.date,
+    end_date: _dt.date,
+    attribute: str,
+) -> list[tuple[_dt.date, _dt.date, dict[int, dict[str, int]]]]:
+    """Return monthly totals for each entity, clipped to the selected dates."""
+    course_start = _dt.date.fromisoformat(db.term_start) if db.term_start else None
+    effective_start = max(start_date, course_start) if course_start else start_date
+    if effective_start > end_date:
+        return []
+    monthly_totals = []
+    month_start = effective_start.replace(day=1)
+    while month_start <= end_date:
+        next_month = (
+            _dt.date(month_start.year + 1, 1, 1)
+            if month_start.month == 12
+            else _dt.date(month_start.year, month_start.month + 1, 1)
+        )
+        month_end = next_month - _dt.timedelta(days=1)
+        period_start = max(month_start, effective_start)
+        period_end = min(month_end, end_date)
+        totals = {}
+        week = monday_of(period_start)
+        while week <= monday_of(period_end):
+            schedule, _pool = get_week_view(db, week)
+            for (day, _period), blocks in schedule.items():
+                cell_date = week + _dt.timedelta(days=day)
+                if not (period_start <= cell_date <= period_end):
+                    continue
+                for block in blocks:
+                    key = getattr(block, attribute, None)
+                    if key is None:
+                        continue
+                    bucket = totals.setdefault(key, {t: 0 for t in LESSON_TYPE_LABELS})
+                    bucket[block.type] = bucket.get(block.type, 0) + 1
+            week += _dt.timedelta(days=7)
+        monthly_totals.append((period_start, period_end, totals))
+        month_start = next_month
+    return monthly_totals
 
 
 def room_usage_for_week(db: Database, week_start: _dt.date) -> list[dict]:

@@ -137,6 +137,21 @@ function Row({
 }
 
 function Cell({ cell }: { cell?: ScheduleCell }) {
+  if (cell?.holiday !== undefined) {
+    return (
+      <div className={styles.cell}>
+        <div className={styles.holiday} title={`Kapalı: ${cell.holiday}`}>
+          RESMÎ TATİL
+          {cell.holiday && (
+            <>
+              <br />
+              {cell.holiday}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
   if (cell?.cards?.length) {
     return (
       <div className={styles.cell}>

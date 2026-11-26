@@ -201,12 +201,18 @@ class RoomsTab(QWidget):
         self.usage_table.render(scheduling.room_usage_for_week(self.db, self.navigator.week_start))
 
         if not has_selection:
-            self.grid.populate(self.db, {}, row_mode=ROW_MODE_ROOM)
+            self.grid.populate(
+                self.db, {}, row_mode=ROW_MODE_ROOM,
+                holiday_names_by_day=scheduling.holiday_names_by_day(self.db, self.navigator.week_start),
+            )
             self.summary_table.render({})
             return
 
         filtered = self._week_blocks()
-        self.grid.populate(self.db, filtered, row_mode=ROW_MODE_ROOM)
+        self.grid.populate(
+            self.db, filtered, row_mode=ROW_MODE_ROOM,
+            holiday_names_by_day=scheduling.holiday_names_by_day(self.db, self.navigator.week_start),
+        )
 
         totals: dict[str, int] = {}
         for blocks in filtered.values():

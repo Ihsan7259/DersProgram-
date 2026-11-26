@@ -589,6 +589,26 @@ def make_unavailable_cell(compact: bool = False, mark_px: int | None = None) -> 
     return frame
 
 
+def make_holiday_cell(name: str, compact: bool = False, font_px: int | None = None) -> QWidget:
+    # Resmî tatil olarak kapatılmış gün: hücrede tatilin adı yazar.
+    frame = QWidget()
+    frame.setObjectName("cellFrame")
+    radius = 0 if compact else 8
+    frame.setStyleSheet(f"#cellFrame {{ background:{SURFACE}; border:1px solid {BORDER_SUBTLE}; border-radius:{radius}px; }}")
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(3, 2, 3, 2)
+    label = QLabel(f"RESMÎ TATİL\n{name}")
+    label.setAlignment(Qt.AlignCenter)
+    label.setWordWrap(True)
+    label.setToolTip(f"Kapalı: {name}")
+    font_size = f"{font_px}px" if font_px else "7pt"
+    label.setStyleSheet(
+        f"color:{INK_MUTED_38}; font-size:{font_size}; font-weight:700; background:transparent; border:none;"
+    )
+    layout.addWidget(label)
+    return frame
+
+
 # Bir (gün, saat) hücresinde bu kadar ya da daha fazla ders varsa artık
 # üç satırlık kartlar üst üste dizilmez; sadece tek satırlık adlar yazılır
 # (bkz. MultiNameCell). Kullanıcı bildirimi: "Extra Soru Çözümü" dersinde
