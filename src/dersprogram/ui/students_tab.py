@@ -61,6 +61,9 @@ class StudentsTab(QWidget):
         form_row.addWidget(QLabel("Ad:"))
         self.name_edit = QLineEdit()
         form_row.addWidget(self.name_edit)
+        form_row.addWidget(QLabel("Öğrenci No:"))
+        self.student_number_edit = QLineEdit()
+        form_row.addWidget(self.student_number_edit)
         form_row.addWidget(QLabel("Sınıf:"))
         self.class_combo = QComboBox()
         form_row.addWidget(self.class_combo)
@@ -68,6 +71,14 @@ class StudentsTab(QWidget):
         self.coach_combo = QComboBox()
         form_row.addWidget(self.coach_combo)
         left_layout.addLayout(form_row)
+
+        # Öğrencinin kendi etüt salonu (dersin dersliği yoksa programında görünür).
+        study_room_row = QHBoxLayout()
+        study_room_row.addWidget(QLabel("Etüt Salonu:"))
+        self.study_room_combo = QComboBox()
+        study_room_row.addWidget(self.study_room_combo)
+        study_room_row.addStretch()
+        left_layout.addLayout(study_room_row)
 
         fee_row = QHBoxLayout()
         fee_row.addWidget(QLabel("Program Ücreti:"))
@@ -167,7 +178,7 @@ class StudentsTab(QWidget):
         right_layout.addWidget(self.search_edit)
 
         sort_hint = QLabel(
-            "Başlıklara (Ad/Sınıf/Ünvan/Koç) tıklayarak o alana göre sıralayabilirsiniz "
+            "Başlıklara (Öğrenci No/Ad/Sınıf/Ünvan/Koç) tıklayarak o alana göre sıralayabilirsiniz "
             "(tekrar tıklayınca elle belirlediğiniz ana sıraya döner)."
         )
         sort_hint.setWordWrap(True)
@@ -185,17 +196,17 @@ class StudentsTab(QWidget):
         bulk_row.addWidget(self.bulk_delete_button)
         right_layout.addLayout(bulk_row)
 
-        self.table_widget = QTableWidget(0, 7)
-        self.table_widget.setHorizontalHeaderLabels(["", "Ad", "Sınıf", "Ünvan", "Koç", "", ""])
+        self.table_widget = QTableWidget(0, 8)
+        self.table_widget.setHorizontalHeaderLabels(["", "Öğrenci No", "Ad", "Sınıf", "Ünvan", "Koç", "", ""])
         header = self.table_widget.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed)
-        for col in range(1, 5):
+        for col in range(1, 6):
             header.setSectionResizeMode(col, QHeaderView.Stretch)
-        header.setSectionResizeMode(5, QHeaderView.Fixed)
         header.setSectionResizeMode(6, QHeaderView.Fixed)
+        header.setSectionResizeMode(7, QHeaderView.Fixed)
         self.table_widget.setColumnWidth(0, 26)
-        self.table_widget.setColumnWidth(5, 30)
         self.table_widget.setColumnWidth(6, 30)
+        self.table_widget.setColumnWidth(7, 30)
         header.setSortIndicatorShown(False)
         header.sectionClicked.connect(self._handle_header_clicked)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
@@ -295,7 +306,7 @@ class StudentsTab(QWidget):
         self.clear_button.clicked.connect(self.clear_form)
         self.table_widget.itemSelectionChanged.connect(self.handle_selection)
         self.curriculum_table.itemSelectionChanged.connect(self._handle_curriculum_selection)
-        self.navigator.week_changed.connect(lambda _w: self.refresh_detail())
+        self.navigator.week_changed.connect(self._handle_week_changed)
         self.name_edit.returnPressed.connect(self._handle_return_pressed)
 
         self.refresh()
@@ -303,9 +314,13 @@ class StudentsTab(QWidget):
     def _handle_return_pressed(self) -> None:
         self.handle_update() if self.selected_id is not None else self.handle_add()
 
+    def _handle_week_changed(self, _week) -> None:
+        self.refresh_detail()
+        self.refresh_curriculum()
+
     def _select_row_by_id(self, row_id: int) -> None:
         for r in range(self.table_widget.rowCount()):
-            item = self.table_widget.item(r, 1)
+            item = self.table_widget.item(r, 2)
             if item is not None and item.data(Qt.UserRole) == row_id:
                 self.table_widget.selectRow(r)
                 self.table_widget.scrollToItem(item)
@@ -321,6 +336,10 @@ class StudentsTab(QWidget):
         self.coach_combo.addItem("(Yok)", None)
         for t in self.db.list_teachers():
             self.coach_combo.addItem(t["name"], t["id"])
+        self.study_room_combo.clear()
+        self.study_room_combo.addItem("(Yok)", None)
+        for room in self.db.list_rows("rooms"):
+            self.study_room_combo.addItem(room["name"], room["id"])
 
     def _refresh_title_choices(self, checked_ids: set[int] | None = None) -> None:
         checked_ids = checked_ids or set()
@@ -366,6 +385,7 @@ class StudentsTab(QWidget):
     # diğerleri doğrudan sütun - hepsi tek yerden erişilsin diye burada.
     def _sort_key_fns(self) -> dict[str, "callable"]:
         return {
+            "student_number": lambda r: (r["student_number"] or "").lower(),
             "name": lambda r: r["name"].lower(),
             "class": lambda r: (r["class_name"] or "").lower(),
             "title": lambda r: self.db.student_titles_summary(r["id"]).lower(),
@@ -393,24 +413,25 @@ class StudentsTab(QWidget):
             checkbox.toggled.connect(lambda checked, sid=row["id"]: self._handle_row_check_toggled(sid, checked))
             check_layout.addWidget(checkbox)
             self._set_cell_widget(r, 0, check_container)
+            self.table_widget.setItem(r, 1, QTableWidgetItem(row["student_number"] or ""))
 
             item_name = QTableWidgetItem(row["name"])
             item_name.setData(Qt.UserRole, row["id"])
-            self.table_widget.setItem(r, 1, item_name)
-            self.table_widget.setItem(r, 2, QTableWidgetItem(row["class_name"] or ""))
+            self.table_widget.setItem(r, 2, item_name)
+            self.table_widget.setItem(r, 3, QTableWidgetItem(row["class_name"] or ""))
             titles_text = self.db.student_titles_summary(row["id"])
             titles_item = QTableWidgetItem(titles_text)
             titles_item.setToolTip(titles_text)
-            self.table_widget.setItem(r, 3, titles_item)
-            self.table_widget.setItem(r, 4, QTableWidgetItem(row["coach_name"] or ""))
+            self.table_widget.setItem(r, 4, titles_item)
+            self.table_widget.setItem(r, 5, QTableWidgetItem(row["coach_name"] or ""))
 
             up_btn = self._move_button("up", enabled=not locked and r > 0, tooltip=tip)
             up_btn.clicked.connect(lambda _checked=False, sid=row["id"]: self.handle_move(sid, -1))
-            self._set_cell_widget(r, 5, up_btn)
+            self._set_cell_widget(r, 6, up_btn)
 
             down_btn = self._move_button("down", enabled=not locked and r < len(rows) - 1, tooltip=tip)
             down_btn.clicked.connect(lambda _checked=False, sid=row["id"]: self.handle_move(sid, 1))
-            self._set_cell_widget(r, 6, down_btn)
+            self._set_cell_widget(r, 7, down_btn)
 
         self._update_bulk_delete_state()
 
@@ -422,7 +443,7 @@ class StudentsTab(QWidget):
             self._select_row_by_id(selected)
 
     def _handle_header_clicked(self, column: int) -> None:
-        target = {1: "name", 2: "class", 3: "title", 4: "coach"}.get(column)
+        target = {1: "student_number", 2: "name", 3: "class", 4: "title", 5: "coach"}.get(column)
         if target is None:
             return
         self._active_sort = None if self._active_sort == target else target
@@ -439,7 +460,10 @@ class StudentsTab(QWidget):
 
     def _apply_search_filter(self, text: str = "") -> None:
         query = self.search_edit.text().strip().lower()
-        rows = self._all_rows if not query else [r for r in self._all_rows if query in r["name"].lower()]
+        rows = self._all_rows if not query else [
+            r for r in self._all_rows
+            if query in r["name"].lower() or query in (r["student_number"] or "").lower()
+        ]
         if self._active_sort is not None:
             rows = sorted(rows, key=self._sort_key_fns()[self._active_sort])
         self._populate_table(rows)
@@ -471,7 +495,10 @@ class StudentsTab(QWidget):
         # Önceden row_mode verilmediği için (Sınıflar/Öğretmenler sekmesinin
         # aksine) kartlarda tür hiç görünmüyordu ve öğrencinin programında
         # aynı dersin sınıf hâli ile birebir hâli ayırt edilemiyordu.
-        self.mini_grid.render(self.db, filtered, availability, row_mode="student")
+        self.mini_grid.render(
+            self.db, filtered, availability, row_mode="student",
+            holiday_names_by_day=scheduling.holiday_names_by_day(self.db, self.navigator.week_start),
+        )
         totals = scheduling.summarize_student_hours(
             self.db, self.navigator.week_start, self.selected_id, class_group_id
         )
@@ -543,12 +570,14 @@ class StudentsTab(QWidget):
             self.refresh_curriculum()
             return
         row = items[0].row()
-        name_item = self.table_widget.item(row, 1)
+        name_item = self.table_widget.item(row, 2)
         self.selected_id = name_item.data(Qt.UserRole)
         student = self.db.get_student(self.selected_id)
         self.name_edit.setText(student["name"])
+        self.student_number_edit.setText(student["student_number"] or "")
         self._select_combo(self.class_combo, student["class_group_id"])
         self._select_combo(self.coach_combo, student["coach_teacher_id"])
+        self._select_combo(self.study_room_combo, student["study_room_id"])
         self.program_fee_spin.setValue(student["total_program_fee"])
         self.one_on_one_fee_spin.setValue(student["total_one_on_one_fee"])
         self._refresh_title_choices(checked_ids=set(self.db.get_student_title_ids(self.selected_id)))
@@ -562,8 +591,10 @@ class StudentsTab(QWidget):
     def clear_form(self) -> None:
         self.selected_id = None
         self.name_edit.clear()
+        self.student_number_edit.clear()
         self.class_combo.setCurrentIndex(0)
         self.coach_combo.setCurrentIndex(0)
+        self.study_room_combo.setCurrentIndex(0)
         self.program_fee_spin.setValue(0)
         self.one_on_one_fee_spin.setValue(0)
         self._refresh_title_choices()
@@ -576,12 +607,18 @@ class StudentsTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğrenci adı boş olamaz.")
             return
+        student_number = self.student_number_edit.text().strip()
+        if student_number and self.db.find_student_by_number(student_number):
+            QMessageBox.warning(self, "Öğrenci numarası kullanılıyor", "Bu öğrenci numarası başka bir kayıtta kullanılıyor.")
+            return
         new_id = self.db.add_student(
             name,
             self.class_combo.currentData(),
             self.coach_combo.currentData(),
             self.program_fee_spin.value(),
             self.one_on_one_fee_spin.value(),
+            student_number=student_number,
+            study_room_id=self.study_room_combo.currentData(),
         )
         self.db.set_student_titles(new_id, self._selected_title_ids())
         self.clear_form()
@@ -598,6 +635,11 @@ class StudentsTab(QWidget):
         if not name:
             QMessageBox.warning(self, "Eksik bilgi", "Öğrenci adı boş olamaz.")
             return
+        student_number = self.student_number_edit.text().strip()
+        existing_student = self.db.find_student_by_number(student_number) if student_number else None
+        if existing_student and existing_student["id"] != self.selected_id:
+            QMessageBox.warning(self, "Öğrenci numarası kullanılıyor", "Bu öğrenci numarası başka bir kayıtta kullanılıyor.")
+            return
         self.db.update_student(
             self.selected_id,
             name,
@@ -605,6 +647,8 @@ class StudentsTab(QWidget):
             self.coach_combo.currentData(),
             self.program_fee_spin.value(),
             self.one_on_one_fee_spin.value(),
+            student_number=student_number,
+            study_room_id=self.study_room_combo.currentData(),
         )
         self.db.set_student_titles(self.selected_id, self._selected_title_ids())
         self.clear_form()
@@ -699,6 +743,9 @@ class StudentsTab(QWidget):
     def refresh_curriculum(self) -> None:
         self.curriculum_table.setRowCount(0)
         self.curriculum_status_label.setText("")
+        if scheduling.week_is_before_course_start(self.db, self.navigator.week_start):
+            self.curriculum_status_label.setText("Dönem başlangıcından önce haftalık ders saatleri gösterilmez.")
+            return
         if self.selected_id is None:
             return
         rows = self.db.list_student_curriculum(self.selected_id)
@@ -837,7 +884,12 @@ class StudentsTab(QWidget):
             from_week=scheduling.week_key(self.navigator.week_start),
         )
         self.refresh_curriculum()
-        QMessageBox.information(self, "Güncellendi", "Ders hedefi güncellendi.")
+        QMessageBox.information(
+            self,
+            "Güncellendi",
+            "Ders hedefi güncellendi. Öğretmen ve ders bilgisi değişiklikleri bu haftadan itibaren "
+            "geçerli olur; önceki haftaların programı ve analizleri korunur.",
+        )
         if self.on_change:
             self.on_change()
 

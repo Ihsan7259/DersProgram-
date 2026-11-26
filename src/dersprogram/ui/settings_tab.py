@@ -257,8 +257,8 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(page)
         layout.addWidget(_section_label("Dönem Tarihleri"))
         layout.addWidget(QLabel(
-            "Bu tarihler bilgilendirme amaçlıdır; program yerleştirmelerinde "
-            "'kalıcı' seçeneği bu dönem boyunca geçerli olur şeklinde gösterilir."
+            "Dönem başlangıcından önceki günlerde ders programı ve ders saatleri gösterilmez. "
+            "Başlangıç tarihi ayrıca kalıcı program değişikliklerinde kullanılır."
         ))
         term_form = QFormLayout()
         self.term_start_edit = QDateEdit()

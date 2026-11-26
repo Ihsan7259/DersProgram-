@@ -41,9 +41,10 @@ class ImportStudentsDialog(QDialog):
 
         intro = QLabel(
             "Bir Excel (.xlsx) dosyası seçin. Sütun başlıkları esnek eşleşir "
-            "(ör. 'Ad', 'İsim', 'Sınıf', 'Koç', 'Program Ücreti', 'Birebir Ücreti', 'Ünvan'). "
-            "Zorunlu olan tek sütun öğrenci adıdır. Hazır bir şablonla başlamak için "
-            "'Şablon İndir' butonunu kullanabilirsiniz."
+            "(ör. 'Öğrenci No', 'Ad', 'Sınıf', 'Koç', 'Program Ücreti', 'Birebir Ücreti', 'Ünvan'). "
+            "Öğrenci numarası eşleşirse kayıt güncellenir; boş numaralı satırlar yeni öğrenci olarak "
+            "eklenir. Excel'de boş bırakılan isteğe bağlı alanlar mevcut öğrencide korunur. Hazır "
+            "şablon için 'Şablon İndir' butonunu kullanabilirsiniz."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -63,7 +64,8 @@ class ImportStudentsDialog(QDialog):
 
         self.missing_classes_label = QLabel(
             "Excel'de olup sistemde henüz olmayan sınıflar - işaretli olanlar yeni "
-            "oluşturulacak, işareti kaldırdıklarınız için öğrenci SINIFSIZ eklenecek:"
+            "oluşturulacak; oluşturulmayan sınıflar yeni öğrencilerde boş kalır, mevcut "
+            "öğrencilerin sınıfı korunur:"
         )
         self.missing_classes_label.setWordWrap(True)
         self.missing_classes_label.setVisible(False)
@@ -80,9 +82,9 @@ class ImportStudentsDialog(QDialog):
         self.missing_classes_scroll.setVisible(False)
         layout.addWidget(self.missing_classes_scroll)
 
-        self.preview_table = QTableWidget(0, 7)
+        self.preview_table = QTableWidget(0, 9)
         self.preview_table.setHorizontalHeaderLabels(
-            ["Ad", "Sınıf", "Koç", "Program Ücreti", "Birebir Ücreti", "Ünvan", "Uyarılar"]
+            ["Öğrenci No", "Ad", "Sınıf", "Koç", "Program Ücreti", "Birebir Ücreti", "Ünvan", "İşlem", "Uyarılar"]
         )
         self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -169,17 +171,19 @@ class ImportStudentsDialog(QDialog):
         rows = self._rows
         self.preview_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
-            self.preview_table.setItem(r, 0, QTableWidgetItem(row.name))
-            self.preview_table.setItem(r, 1, QTableWidgetItem(row.class_name or ""))
-            self.preview_table.setItem(r, 2, QTableWidgetItem(row.coach_name or ""))
-            self.preview_table.setItem(r, 3, QTableWidgetItem(f"{row.program_fee:g}"))
-            self.preview_table.setItem(r, 4, QTableWidgetItem(f"{row.one_on_one_fee:g}"))
-            self.preview_table.setItem(r, 5, QTableWidgetItem(", ".join(row.title_names)))
+            self.preview_table.setItem(r, 0, QTableWidgetItem(row.student_number or ""))
+            self.preview_table.setItem(r, 1, QTableWidgetItem(row.name))
+            self.preview_table.setItem(r, 2, QTableWidgetItem(row.class_name or ""))
+            self.preview_table.setItem(r, 3, QTableWidgetItem(row.coach_name or ""))
+            self.preview_table.setItem(r, 4, QTableWidgetItem("" if row.program_fee is None else f"{row.program_fee:g}"))
+            self.preview_table.setItem(r, 5, QTableWidgetItem("" if row.one_on_one_fee is None else f"{row.one_on_one_fee:g}"))
+            self.preview_table.setItem(r, 6, QTableWidgetItem(", ".join(row.title_names)))
+            self.preview_table.setItem(r, 7, QTableWidgetItem("Güncelle" if row.existing_student_id else "Ekle"))
             warning_text = "; ".join(row.warnings)
             warning_item = QTableWidgetItem(warning_text)
             if row.warnings:
                 warning_item.setForeground(Qt.darkYellow)
-            self.preview_table.setItem(r, 6, warning_item)
+            self.preview_table.setItem(r, 8, warning_item)
 
         if not rows:
             self.summary_label.setText("Dosyada içe aktarılacak öğrenci bulunamadı.")
@@ -187,7 +191,9 @@ class ImportStudentsDialog(QDialog):
             return
 
         warning_count = sum(1 for row in rows if row.warnings)
-        text = f"{len(rows)} öğrenci bulundu."
+        update_count = sum(1 for row in rows if row.existing_student_id is not None)
+        add_count = len(rows) - update_count
+        text = f"{add_count} yeni öğrenci eklenecek, {update_count} mevcut öğrenci güncellenecek."
         if warning_count:
             text += (
                 f" ({warning_count} tanesinde eksik sınıf/koç/ünvan uyarısı var - eksik sınıflar için "
@@ -203,19 +209,23 @@ class ImportStudentsDialog(QDialog):
         create_class_names = {name.lower() for name, cb in self.class_checks.items() if cb.isChecked()}
         skipped_classes = [name for name, cb in self.class_checks.items() if not cb.isChecked()]
 
-        confirm_text = f"{len(self._rows)} öğrenci veritabanına eklensin mi?"
+        update_count = sum(1 for row in self._rows if row.existing_student_id is not None)
+        add_count = len(self._rows) - update_count
+        confirm_text = f"{add_count} yeni öğrenci eklensin ve {update_count} mevcut öğrenci güncellensin mi?"
         if skipped_classes:
             confirm_text += (
                 "\n\nİşaretini kaldırdığınız şu sınıflar OLUŞTURULMAYACAK, bu sınıflardaki öğrenciler "
-                "sınıfsız eklenecek:\n- " + "\n- ".join(skipped_classes)
+                "yeni kayıtlarda sınıfsız kalacak (mevcut kayıtların sınıfı korunur):\n- " + "\n- ".join(skipped_classes)
             )
         confirm = QMessageBox.question(self, "Onay", confirm_text)
         if confirm != QMessageBox.Yes:
             return
         try:
-            imported = excel_import.apply_import(self.db, self._rows, create_class_names=create_class_names)
+            result = excel_import.apply_import(self.db, self._rows, create_class_names=create_class_names)
         except Exception as exc:
             QMessageBox.critical(self, "Hata", f"İçe aktarma sırasında bir hata oluştu:\n{exc}")
             return
-        QMessageBox.information(self, "Tamamlandı", f"{imported} öğrenci başarıyla içe aktarıldı.")
+        QMessageBox.information(
+            self, "Tamamlandı", f"{result.added} yeni öğrenci eklendi, {result.updated} öğrenci güncellendi."
+        )
         self.accept()

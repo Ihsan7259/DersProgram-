@@ -12,9 +12,13 @@ ya da yanlış satırdaki hücreler kırmızı görünür.
 from __future__ import annotations
 
 import datetime as _dt
+from dataclasses import dataclass
 
 from PySide6.QtCore import QMarginsF, QPointF, QRectF, QSizeF, Qt, QMimeData, QRect, QSize, QThread, Signal
-from PySide6.QtGui import QBrush, QColor, QCursor, QDrag, QFont, QFontMetrics, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QPixmap
+from PySide6.QtGui import (
+    QBrush, QColor, QCursor, QDrag, QFont, QFontMetrics, QKeySequence, QPageLayout, QPageSize, QPainter,
+    QPdfWriter, QPen, QPixmap, QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -45,6 +49,7 @@ from PySide6.QtWidgets import (
 
 from ..db import (
     Database,
+    BlockScheduleState,
     LESSON_TYPES,
     TYPE_CLASS,
     TYPE_ONE_ON_ONE,
@@ -61,14 +66,30 @@ from ..db import (
 from .. import scheduling
 from .widgets import WeekNavigator, ScopeDialog, MiniScheduleGrid, divider as _divider
 from .add_lesson_dialog import AddLessonDialog
+from .holidays_dialog import HolidaysDialog
+from .makeup_lessons_dialog import MakeupLessonsDialog
+from .copy_week_dialog import CopyWeekDialog
 from .unplaced_report_dialog import UnplacedReportDialog
 from . import theme
 
 MIME_PREFIX = "lesson-block:"
+# Programdaki bir dersi sürükleyip başka bir hücreye taşırken kullanılan veri türü.
+MOVE_MIME_PREFIX = "move-lesson-block:"
 
 MODE_CLASS = "class"
 MODE_TEACHER = "teacher"
 MODE_STUDENT = "student"
+
+
+@dataclass
+class _ClearAssignmentsUndo:
+    # "Geri Al (Ctrl+Z)" için: havuza düşürülen derslerin önceki ve sonraki durumu.
+    week_start: _dt.date
+    scope: str
+    block_positions: dict[int, tuple[int, int]]
+    before_state: BlockScheduleState
+    after_state: BlockScheduleState
+    other_schedule_positions: dict[int, tuple[int, int]]
 
 
 class _CellDelegate(QStyledItemDelegate):
@@ -182,6 +203,19 @@ class _CellDelegate(QStyledItemDelegate):
             painter.setFont(font)
             painter.setPen(QColor(theme.CONFLICT_BORDER))
             painter.drawText(rect, Qt.AlignCenter, "×")
+        elif kind == "holiday":
+            # Resmî tatil olan gün: hücrede tatilin adı.
+            font = QFont(painter.font())
+            font.setBold(True)
+            font.setPointSizeF(max(5.0, min(8.0, rect.height() * 0.15)))
+            painter.setFont(font)
+            painter.setPen(QColor(theme.INK_MUTED_58))
+            holiday_name = payload.get("name", "")
+            painter.drawText(
+                rect.adjusted(1, 1, -1, -1),
+                Qt.AlignCenter | Qt.TextWordWrap,
+                f"RESMÎ TATİL\n{holiday_name}" if holiday_name else "RESMÎ TATİL",
+            )
         elif kind == "chip":
             # line1 yerine, en uzundan en kısaya sıralanmış adaylar gelir
             # (bkz. BlockView.dense_keywords): sütun ne kadar darsa o kadar
@@ -516,6 +550,14 @@ class MainGrid(QTableWidget):
         self._on_drop = on_drop
         self._on_remove_request = on_remove_request
         self._on_cell_click = on_cell_click
+        # Yerleşmiş bir dersi sürükleyip taşıma (bkz. ScheduleTab):
+        # ScheduleTab bu geri çağrıları __init__ sonrasında atar.
+        self._get_drag_block_id = None
+        self._get_move_block_ids = None
+        self._on_move_drop = None
+        self._on_move_started = None
+        self._drag_start_pos = None
+        self._drag_block_id = None
         self._period_time_label = period_time_label
         self._hover_cell = None
         self._hover_original_state = "normal"
@@ -685,7 +727,7 @@ class MainGrid(QTableWidget):
 
     def dragEnterEvent(self, event):
         text = event.mimeData().text()
-        if text.startswith(MIME_PREFIX):
+        if text.startswith((MIME_PREFIX, MOVE_MIME_PREFIX)):
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -704,11 +746,16 @@ class MainGrid(QTableWidget):
             if item is not None:
                 payload = dict(item.data(Qt.UserRole) or {})
                 self._hover_original_state = payload.get("border_state", "normal")
-                block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
+                text = event.mimeData().text()
+                is_move = text.startswith(MOVE_MIME_PREFIX)
+                prefix = MOVE_MIME_PREFIX if is_move else MIME_PREFIX
+                block_id = int(text[len(prefix):])
                 block = self._get_block_by_id(block_id)
                 entity_id = self.row_to_entity(row)
                 day, period = self.col_to_day_period(col)
-                valid = block is not None and self._validate_drop(block, entity_id, day, period)
+                # Taşımada dersin kendi eski yeri çakışma sayılmasın.
+                excluded_ids = self._get_move_block_ids(block_id) if is_move and self._get_move_block_ids else ()
+                valid = block is not None and self._validate_drop(block, entity_id, day, period, excluded_ids)
                 payload["border_state"] = "valid" if valid else "invalid"
                 item.setData(Qt.UserRole, payload)
                 self.viewport().update()
@@ -736,12 +783,50 @@ class MainGrid(QTableWidget):
         if cell is None:
             event.ignore()
             return
-        block_id = int(event.mimeData().text()[len(MIME_PREFIX):])
+        text = event.mimeData().text()
+        is_move = text.startswith(MOVE_MIME_PREFIX)
+        prefix = MOVE_MIME_PREFIX if is_move else MIME_PREFIX
+        block_id = int(text[len(prefix):])
         row, col = cell
         entity_id = self.row_to_entity(row)
         day, period = self.col_to_day_period(col)
         event.acceptProposedAction()
+        if is_move and self._on_move_drop is not None:
+            self._on_move_drop(block_id, entity_id, day, period)
+            return
         self._on_drop(block_id, entity_id, day, period)
+
+    def mousePressEvent(self, event):
+        self._drag_start_pos = None
+        self._drag_block_id = None
+        if event.button() == Qt.LeftButton and self._get_drag_block_id is not None:
+            cell = self._cell_of(event.position().toPoint() if hasattr(event, "position") else event.pos())
+            if cell is not None:
+                row, col = cell
+                entity_id = self.row_to_entity(row)
+                day, period = self.col_to_day_period(col)
+                self._drag_block_id = self._get_drag_block_id(entity_id, day, period)
+                if self._drag_block_id is not None:
+                    self._drag_start_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_pos is None or self._drag_block_id is None or not (event.buttons() & Qt.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        if (pos - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            return
+        block_id = self._drag_block_id
+        self._drag_start_pos = None
+        self._drag_block_id = None
+        if self._on_move_started is not None:
+            self._on_move_started()
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(f"{MOVE_MIME_PREFIX}{block_id}")
+        drag.setMimeData(mime)
+        drag.exec(Qt.MoveAction)
 
     def _handle_double_click(self, row: int, col: int) -> None:
         entity_id = self.row_to_entity(row)
@@ -924,12 +1009,6 @@ def export_table_as_pdf(parent: QWidget, grid: "MiniScheduleGrid", default_filen
 def copy_table_as_image(parent: QWidget, grid: "MiniScheduleGrid", title: str, subtitle: str) -> None:
     pixmap = _render_row_pixmap(grid, title, subtitle)
     QApplication.clipboard().setPixmap(pixmap)
-    QMessageBox.information(
-        parent,
-        "Panoya Kopyalandı",
-        "Görsel olarak panoya kopyalandı.\n"
-        "Artık başka bir programa (Word, WhatsApp, e-posta vb.) yapıştırabilirsiniz.",
-    )
 
 
 def sanitize_filename(name: str) -> str:
@@ -1031,6 +1110,7 @@ def _export_rows_as_multi_page_pdf(
             temp_grid.populate(
                 db, filtered, row_mode=mode,
                 unavailable_cells=teacher_unavailable_cells(db, week_start, mode, entity_id, unavailable),
+                holiday_names_by_day=scheduling.holiday_names_by_day(db, week_start),
             )
             # revert=False: bu geçici ızgara hiç ekranda gösterilmiyor,
             # sayfalar arasında sabit dışa aktarım genişliğinde KALMALI
@@ -1401,7 +1481,10 @@ class RowPreviewDialog(QDialog):
                     filtered[cell] = matched
 
         grid = MiniScheduleGrid()
-        grid.populate(db, filtered, row_mode=mode, unavailable_cells=teacher_unavailable_cells(db, week_start, mode, entity_id))
+        grid.populate(
+            db, filtered, row_mode=mode, unavailable_cells=teacher_unavailable_cells(db, week_start, mode, entity_id),
+            holiday_names_by_day=scheduling.holiday_names_by_day(db, week_start),
+        )
         layout.addWidget(grid, 1)
 
         button_row = QHBoxLayout()
@@ -1467,12 +1550,14 @@ class ScheduleTab(QWidget):
         self._row_entities: list[tuple[int, str]] = []
         self._student_class_group_ids: dict[int, int | None] = {}
         self._unavailable = scheduling.UnavailableSlots()
+        self._holiday_names_by_day: dict[int, str] = {}
         self._selected_row_entity_id: int | None = None
         self._preview_highlighted: list[tuple[int, int]] = []
         self._preview_header_rows: list[int] = []
         self._selected_pool_block_id: int | None = None
         self._pool_chips: dict[int, PoolChip] = {}
         self._last_auto_assign_block_ids: list[int] = []
+        self._clear_assignments_undo: _ClearAssignmentsUndo | None = None
         self._auto_assign_worker: "_AutoAssignWorker | None" = None
         self._auto_assign_progress_dialog: QProgressDialog | None = None
 
@@ -1526,17 +1611,42 @@ class ScheduleTab(QWidget):
         self.add_lesson_button = QPushButton("  Ders Ekle")
         self.add_lesson_button.setObjectName("outlineButton")
         self.add_lesson_button.setIcon(theme.icon(theme.NAV_ICONS["plus"], theme.ACCENT_HOVER))
+        self.holiday_button = QPushButton("  Resmî Tatil")
+        self.holiday_button.setObjectName("outlineButton")
+        self.holiday_button.setToolTip("Belirli bir tarihi resmî tatil olarak kapatın.")
+        self.makeup_button = QPushButton("  Geçen Haftadan Telafi")
+        self.makeup_button.setObjectName("outlineButton")
+        self.makeup_button.setToolTip(
+            "Seçili öğretmenin geçen haftaki derslerinden telafi edilecekleri bu haftanın havuzuna ekleyin."
+        )
+        self.makeup_button.setVisible(False)
+        self.makeup_button.setEnabled(False)
+        self.copy_week_button = QPushButton("  Haftayı Kopyala")
+        self.copy_week_button.setObjectName("outlineButton")
+        self.copy_week_button.setToolTip(
+            "Bir haftanın programını hedef haftadan itibaren uygular; önceki haftalara dokunmaz."
+        )
         self.auto_assign_button = QPushButton("  Oto Ata")
         self.auto_assign_button.setObjectName("primaryButton")
         self.auto_assign_button.setIcon(theme.icon(theme.NAV_ICONS["bolt"], theme.AMBER_TEXT))
         self.undo_auto_assign_button = QPushButton("  Son Oto Atamayı Geri Al")
         self.undo_auto_assign_button.setObjectName("outlineButton")
         self.undo_auto_assign_button.setVisible(False)
+        self.undo_clear_assignments_button = QPushButton("  Geri Al (Ctrl+Z)")
+        self.undo_clear_assignments_button.setObjectName("outlineButton")
+        self.undo_clear_assignments_button.setToolTip(
+            "Son dersleri havuza düşürme işlemini geri alır; önceki program yerleşimleri korunur."
+        )
+        self.undo_clear_assignments_button.setVisible(False)
         toolbar.addStretch()
         toolbar.addWidget(self.export_pdf_button)
         toolbar.addWidget(self.add_lesson_button)
+        toolbar.addWidget(self.holiday_button)
+        toolbar.addWidget(self.makeup_button)
+        toolbar.addWidget(self.copy_week_button)
         toolbar.addWidget(self.auto_assign_button)
         toolbar.addWidget(self.undo_auto_assign_button)
+        toolbar.addWidget(self.undo_clear_assignments_button)
         layout.addLayout(toolbar)
 
         legend = QHBoxLayout()
@@ -1566,6 +1676,11 @@ class ScheduleTab(QWidget):
             on_cell_click=self._handle_grid_cell_clicked,
             period_time_label=self.db.period_time_label,
         )
+        # Programdaki bir dersi tutup başka bir hücreye sürükleyerek taşıma.
+        self.grid._get_drag_block_id = self._get_drag_block_id
+        self.grid._get_move_block_ids = self._get_move_block_ids
+        self.grid._on_move_drop = self._handle_move_drop
+        self.grid._on_move_started = self._clear_pool_selection
         splitter.addWidget(self.grid)
 
         self.pool_container = pool_container = QWidget()
@@ -1585,6 +1700,11 @@ class ScheduleTab(QWidget):
         self.pool_filter_clear_button.setVisible(False)
         self.pool_filter_clear_button.clicked.connect(self._clear_row_filter)
         pool_header.addWidget(self.pool_filter_clear_button)
+        self.pool_selection_clear_button = QPushButton("Ders Seçimini İptal Et")
+        self.pool_selection_clear_button.setObjectName("outlineButton")
+        self.pool_selection_clear_button.setEnabled(False)
+        self.pool_selection_clear_button.clicked.connect(self._clear_pool_selection)
+        pool_header.addWidget(self.pool_selection_clear_button)
         pool_header.addStretch()
         self.unplaced_report_button = QPushButton("Neden Yerleşmedi?")
         self.unplaced_report_button.setObjectName("outlineButton")
@@ -1641,8 +1761,15 @@ class ScheduleTab(QWidget):
 
         self.export_pdf_button.clicked.connect(self.handle_export_pdf)
         self.add_lesson_button.clicked.connect(self.handle_add_lesson)
+        self.holiday_button.clicked.connect(self.handle_manage_holidays)
+        self.makeup_button.clicked.connect(self.handle_add_makeup_lessons)
+        self.copy_week_button.clicked.connect(self.handle_copy_week)
         self.auto_assign_button.clicked.connect(self.handle_auto_assign)
         self.undo_auto_assign_button.clicked.connect(self.handle_undo_auto_assign)
+        self.undo_clear_assignments_button.clicked.connect(self.handle_undo_clear_assignments)
+        self.undo_clear_assignments_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.undo_clear_assignments_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.undo_clear_assignments_shortcut.activated.connect(self.handle_undo_clear_assignments)
         self.navigator.week_changed.connect(lambda _w: self.refresh())
         self.class_mode_button.toggled.connect(self._handle_mode_change)
         self.teacher_mode_button.toggled.connect(self._handle_mode_change)
@@ -1819,6 +1946,88 @@ class ScheduleTab(QWidget):
         menu.exec(global_pos)
         menu.deleteLater()
 
+    @staticmethod
+    def _schedule_positions(schedule: dict[tuple[int, int], list]) -> dict[int, tuple[int, int]]:
+        return {block.id: (day, period) for (day, period), blocks in schedule.items() for block in blocks}
+
+    def _clear_blocks_with_undo(self, blocks: list, scope: str) -> None:
+        week_start = self.navigator.week_start
+        schedule_positions = self._schedule_positions(self._schedule)
+        block_positions = {
+            block.id: schedule_positions[block.id]
+            for block in blocks
+            if block.id in schedule_positions
+        }
+        block_ids = sorted(block_positions)
+        if not block_ids:
+            return
+        if len(block_ids) != len({block.id for block in blocks}):
+            QMessageBox.warning(
+                self, "Geri Alma Kullanılamıyor",
+                "Seçilen derslerin tamamı programda bulunamadı; işlem yapılmadı.",
+            )
+            return
+        before_state = self.db.get_block_schedule_state(block_ids, scheduling.week_key(week_start))
+        if set(before_state) != set(block_ids):
+            QMessageBox.warning(
+                self, "Geri Alma Kullanılamıyor",
+                "Ders programı değişmiş. Güvenli geri alma kaydı oluşturulamadı.",
+            )
+            return
+        other_positions = {
+            block_id: position
+            for block_id, position in schedule_positions.items()
+            if block_id not in block_ids
+        }
+        # Önceki geri alma kaydı artık geçersiz.
+        self._clear_assignments_undo = None
+        self.undo_clear_assignments_button.setVisible(False)
+        for block_id in block_ids:
+            scheduling.clear_block(self.db, week_start, block_id, scope)
+        self._clear_assignments_undo = _ClearAssignmentsUndo(
+            week_start=week_start,
+            scope=scope,
+            block_positions=block_positions,
+            before_state=before_state,
+            after_state=self.db.get_block_schedule_state(block_ids, scheduling.week_key(week_start)),
+            other_schedule_positions=other_positions,
+        )
+        self.undo_clear_assignments_button.setVisible(True)
+        self.refresh()
+
+    def handle_undo_clear_assignments(self) -> None:
+        undo = self._clear_assignments_undo
+        if undo is None:
+            return
+        current_schedule, _pool = scheduling.get_week_view(self.db, undo.week_start)
+        current_positions = self._schedule_positions(current_schedule)
+        affected_ids = set(undo.block_positions)
+        other_positions = {
+            block_id: position
+            for block_id, position in current_positions.items()
+            if block_id not in affected_ids
+        }
+        current_state = self.db.get_block_schedule_state(list(affected_ids), scheduling.week_key(undo.week_start))
+        # Arada başka bir değişiklik olduysa körlemesine geri yüklemek
+        # başka derslerin üzerine yazabilir: güvenli değil.
+        if current_state != undo.after_state or other_positions != undo.other_schedule_positions:
+            QMessageBox.warning(
+                self, "Geri Alma Kullanılamıyor",
+                "Bu işlemden sonra programda başka değişiklikler yapıldığı için önceki yerleşimleri "
+                "güvenle geri yükleyemiyorum.",
+            )
+            self._clear_assignments_undo = None
+            self.undo_clear_assignments_button.setVisible(False)
+            return
+        try:
+            self.db.restore_block_schedule_state(undo.before_state, scheduling.week_key(undo.week_start))
+        except Exception as exc:
+            QMessageBox.critical(self, "Geri Alma", f"Program geri alınamadı:\n{exc}")
+            return
+        self._clear_assignments_undo = None
+        self.undo_clear_assignments_button.setVisible(False)
+        self.refresh()
+
     def _clear_row_assignments(self, entity_id: int, name: str, lesson_type: str | None = None) -> None:
         type_label = theme.lesson_type_label(lesson_type) if lesson_type else None
         matching_blocks = self._row_placed_blocks(entity_id, lesson_type)
@@ -1842,9 +2051,7 @@ class ScheduleTab(QWidget):
         if dialog.exec() != ScopeDialog.Accepted:
             return
         scope = dialog.scope()
-        for block_id in all_members:
-            scheduling.clear_block(self.db, self.navigator.week_start, block_id, scope)
-        self.refresh()
+        self._clear_blocks_with_undo(list(all_members.values()), scope)
 
     def _handle_mode_change(self, checked: bool) -> None:
         if not checked:
@@ -1868,6 +2075,8 @@ class ScheduleTab(QWidget):
         self.pool_container.setVisible(True)
         self.add_lesson_button.setVisible(True)
         self.auto_assign_button.setVisible(True)
+        # Telafi, seçili öğretmenin geçen haftaki derslerinden yapılır.
+        self.makeup_button.setVisible(self.mode == MODE_TEACHER)
         self.undo_auto_assign_button.setVisible(bool(self._last_auto_assign_block_ids))
 
         self._selected_row_entity_id = None
@@ -1878,18 +2087,27 @@ class ScheduleTab(QWidget):
     def _handle_row_header_click(self, entity_id: int) -> None:
         self._selected_row_entity_id = None if self._selected_row_entity_id == entity_id else entity_id
         self._render_pool()
+        self.makeup_button.setEnabled(
+            self.mode == MODE_TEACHER
+            and self._selected_row_entity_id is not None
+            and self.navigator.week_start == scheduling.monday_of(_dt.date.today())
+        )
 
     def _clear_row_filter(self) -> None:
         self._selected_row_entity_id = None
         self._render_pool()
+        self.makeup_button.setEnabled(False)
 
     def _handle_pool_chip_clicked(self, block_id: int) -> None:
         if self._selected_pool_block_id == block_id:
+            # Aynı derse tekrar tıklamak seçimi kaldırır.
+            self._clear_pool_selection()
             return
         previous = self._pool_chips.get(self._selected_pool_block_id)
         if previous is not None:
             previous.set_selected(False)
         self._selected_pool_block_id = block_id
+        self.pool_selection_clear_button.setEnabled(True)
         chip = self._pool_chips.get(block_id)
         if chip is not None:
             chip.set_selected(True)
@@ -1898,6 +2116,14 @@ class ScheduleTab(QWidget):
         if block is not None:
             self._apply_row_preview(block)
             self._scroll_to_matching_row(block)
+
+    def _clear_pool_selection(self) -> None:
+        chip = self._pool_chips.get(self._selected_pool_block_id)
+        if chip is not None:
+            chip.set_selected(False)
+        self._selected_pool_block_id = None
+        self.pool_selection_clear_button.setEnabled(False)
+        self._clear_row_preview()
 
     def _scroll_to_matching_row(self, block) -> None:
         """Havuzdan bir ders seçilince, o dersin ait olduğu satır (ör. o
@@ -1975,11 +2201,13 @@ class ScheduleTab(QWidget):
             self.hint_label.setText(
                 "Sürükleyip yukarıya bırakın (sadece kendi sınıfının satırına). "
                 "Birebir/koçluk/zümre/soru çözümü dersleri için 'Öğretmenlere Göre' görünümüne geçin. "
+                "Yerleşmiş dersi başka güne/saate taşımak için kutucuğu sürükleyin. "
                 "Kaldırmak için hücreye çift tıklayın."
             )
         elif self.mode == MODE_TEACHER:
             self.hint_label.setText(
                 "Sürükleyip yukarıya bırakın (sadece kendi öğretmeninin satırına). "
+                "Yerleşmiş dersi başka güne/saate taşımak için kutucuğu sürükleyin. "
                 "Kaldırmak için hücreye çift tıklayın."
             )
         else:
@@ -1987,11 +2215,13 @@ class ScheduleTab(QWidget):
                 "Sürükleyip yukarıya bırakın (sadece kendi öğrencisinin satırına). "
                 "Buradan öğrencinin KENDİ dersleri (birebir, koçluk, ona yazılan etüt/deneme) "
                 "yerleştirilir; sınıfın ortak dersleri 'Sınıflara Göre' görünümüne aittir. "
+                "Kendi dersini başka güne/saate taşımak için kutucuğu sürükleyin. "
                 "Kaldırmak için hücreye çift tıklayın."
             )
 
     # ---------- veri yenileme ----------
     def refresh(self) -> None:
+        self._holiday_names_by_day = scheduling.holiday_names_by_day(self.db, self.navigator.week_start)
         self._schedule, self._pool = scheduling.get_week_view(self.db, self.navigator.week_start)
         self._unavailable = scheduling.UnavailableSlots.compute(self.db, self.navigator.week_start)
         self._blocks_by_id = {b.id: b for b in self._pool}
@@ -2022,6 +2252,11 @@ class ScheduleTab(QWidget):
 
         self._render_grid()
         self._render_pool()
+        self.makeup_button.setEnabled(
+            self.mode == MODE_TEACHER
+            and self._selected_row_entity_id is not None
+            and self.navigator.week_start == scheduling.monday_of(_dt.date.today())
+        )
 
     def _cell_blocks(self, entity_id: int, day: int, period: int) -> list:
         blocks = self._schedule.get((day, period), [])
@@ -2050,10 +2285,7 @@ class ScheduleTab(QWidget):
             for block in blocks:
                 if block.type == TYPE_ONE_ON_ONE and block.student_id is not None:
                     student_ids.add(block.student_id)
-        return {
-            sid for sid in student_ids
-            if scheduling.compute_one_on_one_ledger(self.db, sid)["debt_hours"] > 0
-        }
+        return scheduling.one_on_one_debt_student_ids(self.db, student_ids)
 
     def _render_grid(self) -> None:
         day_names = self.db.day_names
@@ -2085,7 +2317,12 @@ class ScheduleTab(QWidget):
                     col = day * period_count + (period - 1)
                     blocks = self._cell_blocks(entity_id, day, period)
                     if not blocks:
-                        if self.mode == MODE_TEACHER and (entity_id, day, period) in self._unavailable.teacher:
+                        if day in self._holiday_names_by_day:
+                            holiday_name = self._holiday_names_by_day[day]
+                            holiday_date = self.navigator.week_start + _dt.timedelta(days=day)
+                            payload = {"kind": "holiday", "bg": theme.SURFACE, "name": holiday_name}
+                            tooltip = f"Kapalı: {holiday_name} ({holiday_date.strftime('%d.%m.%Y')})"
+                        elif self.mode == MODE_TEACHER and (entity_id, day, period) in self._unavailable.teacher:
                             payload = {"kind": "unavailable", "bg": theme.APP_BG}
                             tooltip = "Öğretmen bu saatte müsait değil olarak işaretlenmiş"
                         elif self.mode == MODE_CLASS and (entity_id, day, period) in self._unavailable.class_:
@@ -2191,8 +2428,8 @@ class ScheduleTab(QWidget):
         # Seçili kart artık (yerleştirildi/silindi/filtrelendi diye)
         # havuzda yoksa seçim geçersiz kalır.
         visible_ids = {rep.id for rep, _members in pool_items}
-        if self._selected_pool_block_id not in visible_ids:
-            self._selected_pool_block_id = None
+        if self._selected_pool_block_id is not None and self._selected_pool_block_id not in visible_ids:
+            self._clear_pool_selection()
 
         self._clear_pool_content()
 
@@ -2276,7 +2513,30 @@ class ScheduleTab(QWidget):
             return block.student_id == entity_id and block.type not in STUDENT_LABEL_ONLY_TYPES
         return any(m.teacher_id == entity_id for m in self._block_group(block))
 
-    def _stack_overflow(self, members: list, day: int, period: int) -> str | None:
+    def _get_drag_block_id(self, entity_id, day: int, period: int) -> int | None:
+        # Hücredeki ilk ders sürüklenir; satıra ait değilse (ör. öğrenci
+        # satırında sınıfın ortak dersi) taşınamaz.
+        blocks = self._cell_blocks(entity_id, day, period)
+        if not blocks:
+            return None
+        block = blocks[0]
+        if not self._row_matches_block(block, entity_id):
+            return None
+        return block.id
+
+    def _get_move_block_ids(self, block_id: int) -> set[int]:
+        block = self._blocks_by_id.get(block_id)
+        if block is None:
+            return set()
+        return {member.id for member in self._block_group(block)}
+
+    def _stack_overflow(
+        self,
+        members: list,
+        day: int,
+        period: int,
+        excluded_ids: set[int] | None = None,
+    ) -> str | None:
         """Bir hücrede (aynı sınıf/öğretmen satırında) hiçbir zaman
         MAX_STACKED_PER_CELL'den fazla ders üst üste binmesin diye sert bir
         sınır - çakışma uyarısının aksine, 'yine de yerleştir' ile
@@ -2297,7 +2557,9 @@ class ScheduleTab(QWidget):
                 continue
             existing = [
                 b for b in self._cell_blocks(row_entity_id, day, period)
-                if b.id != member.id and b.type not in NON_BLOCKING_TYPES
+                if b.id != member.id
+                and (excluded_ids is None or b.id not in excluded_ids)
+                and b.type not in NON_BLOCKING_TYPES
             ]
             if len(existing) + 1 > self.MAX_STACKED_PER_CELL:
                 return (
@@ -2306,13 +2568,26 @@ class ScheduleTab(QWidget):
                 )
         return None
 
-    def _validate_drop(self, block, entity_id, day: int, period: int) -> bool:
+    def _validate_drop(
+        self, block, entity_id, day: int, period: int, excluded_ids=(),
+    ) -> bool:
         if not self._row_matches_block(block, entity_id):
             return False
-        members = self._block_group(block)
-        if self._stack_overflow(members, day, period):
+        holiday_date = self.navigator.week_start + _dt.timedelta(days=day)
+        if self.db.get_holiday(holiday_date) is not None:
             return False
-        return not scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable)
+        members = self._block_group(block)
+        # Taşınan dersin kendi eski yeri (excluded_ids) çakışma sayılmaz.
+        excluded = set(excluded_ids)
+        if self._stack_overflow(members, day, period, excluded):
+            return False
+        conflict_schedule = {
+            (day, period): [
+                candidate for candidate in self._schedule.get((day, period), [])
+                if candidate.id not in excluded
+            ]
+        }
+        return not scheduling.find_group_conflicts(conflict_schedule, day, period, members, self._unavailable)
 
     def _handle_drop(self, block_id: int, entity_id, day: int, period: int) -> None:
         block = self._blocks_by_id.get(block_id)
@@ -2338,6 +2613,14 @@ class ScheduleTab(QWidget):
                 "Lütfen kendi satırına bırakın (ya da uygun görünüme geçin).",
             )
             return
+        holiday_date = self.navigator.week_start + _dt.timedelta(days=day)
+        holiday = self.db.get_holiday(holiday_date)
+        if holiday is not None:
+            QMessageBox.warning(
+                self, "Resmî Tatil",
+                f"{holiday_date.strftime('%d.%m.%Y')} resmî tatil ({holiday['name']}); bu gün için ders yerleştirilemez.",
+            )
+            return
         members = self._block_group(block)
         label = self._group_label(members)
         overflow = self._stack_overflow(members, day, period)
@@ -2345,13 +2628,39 @@ class ScheduleTab(QWidget):
             QMessageBox.warning(self, "Hücre dolu", overflow)
             return
         conflicts = scheduling.find_group_conflicts(self._schedule, day, period, members, self._unavailable)
+        # Aynı öğretmenin bu saatteki diğer dersleri: yeni ders yerleşirse
+        # bunlar aynı kapsamda havuza alınır.
+        teacher_conflict_blocks = self._teacher_conflict_blocks(members, day, period)
+        displaced_ids = {member.id for member in teacher_conflict_blocks}
         if conflicts:
-            proceed = QMessageBox.question(
-                self,
-                "Çakışma bulundu",
-                f"'{label}' dersini bu hücreye yerleştirmek şu çakışmalara yol açar:\n- " + "\n- ".join(conflicts) +
-                "\n\nYine de yerleştirmek istiyor musunuz?",
+            remaining_schedule = {
+                (day, period): [
+                    candidate for candidate in self._schedule.get((day, period), [])
+                    if candidate.id not in displaced_ids
+                ]
+            }
+            remaining_conflicts = scheduling.find_group_conflicts(
+                remaining_schedule, day, period, members, self._unavailable
             )
+            if teacher_conflict_blocks:
+                displaced_labels = sorted({
+                    self._group_label(self._block_group(candidate))
+                    for candidate in self._schedule.get((day, period), [])
+                    if candidate.id in displaced_ids
+                })
+                message = (
+                    "Bu saatte aynı öğretmenin başka dersi var. Yeni dersi yerleştirirseniz aşağıdaki "
+                    "mevcut ders(ler) aynı kapsamda atanmamış havuzuna alınacak:\n- " + "\n- ".join(displaced_labels)
+                )
+                if remaining_conflicts:
+                    message += "\n\nAyrıca şu çakışmalar devam edecek:\n- " + "\n- ".join(remaining_conflicts)
+                message += "\n\nDevam etmek istiyor musunuz?"
+            else:
+                message = (
+                    f"'{label}' dersini bu hücreye yerleştirmek şu çakışmalara yol açar:\n- " + "\n- ".join(conflicts) +
+                    "\n\nYine de yerleştirmek istiyor musunuz?"
+                )
+            proceed = QMessageBox.question(self, "Çakışma bulundu", message)
             if proceed != QMessageBox.Yes:
                 return
 
@@ -2359,8 +2668,100 @@ class ScheduleTab(QWidget):
         if dialog.exec() != ScopeDialog.Accepted:
             return
         scope = dialog.scope()
-        for member in members:
-            scheduling.place_block(self.db, self.navigator.week_start, member.id, day, period, scope)
+        self._clear_assignments_undo = None
+        self.undo_clear_assignments_button.setVisible(False)
+        try:
+            for displaced_block in teacher_conflict_blocks:
+                scheduling.clear_block(self.db, self.navigator.week_start, displaced_block.id, scope)
+            self._clear_pool_selection()
+            for member in members:
+                scheduling.place_block(self.db, self.navigator.week_start, member.id, day, period, scope)
+        except Exception as exc:
+            QMessageBox.critical(self, "Ders Yerleştirilemedi", str(exc))
+            self.refresh()
+            return
+        self.refresh()
+
+    def _teacher_conflict_blocks(self, incoming_members: list, day: int, period: int) -> list:
+        teacher_ids = {
+            member.teacher_id
+            for member in incoming_members
+            if member.type not in NON_BLOCKING_TYPES and member.teacher_id is not None
+        }
+        if not teacher_ids:
+            return []
+        conflicting_ids = {
+            candidate.id
+            for candidate in self._schedule.get((day, period), [])
+            if candidate.type not in NON_BLOCKING_TYPES and candidate.teacher_id in teacher_ids
+        }
+        # Zümre gibi çok üyeli derslerin tüm üyeleri birlikte havuza alınır.
+        blocks = {}
+        for block_id in conflicting_ids:
+            block = self._blocks_by_id.get(block_id)
+            if block is None:
+                continue
+            for member in self._block_group(block):
+                blocks[member.id] = member
+        return list(blocks.values())
+
+    def _handle_move_drop(self, block_id: int, entity_id, day: int, period: int) -> None:
+        block = self._blocks_by_id.get(block_id)
+        if block is None:
+            return
+        members = self._block_group(block)
+        member_ids = {member.id for member in members}
+        if not self._row_matches_block(block, entity_id):
+            QMessageBox.warning(
+                self, "Yanlış satır",
+                "Bu ders yalnızca kendi sınıfının, öğretmeninin veya öğrencisinin satırına taşınabilir.",
+            )
+            return
+        old_positions = self._schedule_positions(self._schedule)
+        if all(old_positions.get(member.id) == (day, period) for member in members):
+            return  # aynı hücreye bırakıldı
+        holiday_date = self.navigator.week_start + _dt.timedelta(days=day)
+        holiday = self.db.get_holiday(holiday_date)
+        if holiday is not None:
+            QMessageBox.warning(
+                self, "Resmî Tatil",
+                f"{holiday_date.strftime('%d.%m.%Y')} resmî tatil ({holiday['name']}); bu gün için ders taşınamaz.",
+            )
+            return
+        overflow = self._stack_overflow(members, day, period, member_ids)
+        if overflow:
+            QMessageBox.warning(self, "Hücre dolu", overflow)
+            return
+        target_schedule = {
+            (day, period): [
+                candidate for candidate in self._schedule.get((day, period), [])
+                if candidate.id not in member_ids
+            ]
+        }
+        conflicts = scheduling.find_group_conflicts(target_schedule, day, period, members, self._unavailable)
+        if conflicts:
+            proceed = QMessageBox.question(
+                self,
+                "Çakışma bulundu",
+                "Bu dersi taşımak şu çakışmalara yol açar:\n- " + "\n- ".join(conflicts) +
+                "\n\nYine de taşımak istiyor musunuz?",
+            )
+            if proceed != QMessageBox.Yes:
+                return
+        label = self._group_label(members)
+        dialog = ScopeDialog(self.db, self, f"'{label}' dersini taşıma", week_start=self.navigator.week_start)
+        if dialog.exec() != ScopeDialog.Accepted:
+            return
+        scope = dialog.scope()
+        try:
+            for member in members:
+                scheduling.place_block(self.db, self.navigator.week_start, member.id, day, period, scope)
+        except Exception as exc:
+            QMessageBox.critical(self, "Ders Taşınamadı", str(exc))
+            self.refresh()
+            return
+        self._clear_assignments_undo = None
+        self.undo_clear_assignments_button.setVisible(False)
         self.refresh()
 
     def _handle_remove_request(self, entity_id, day: int, period: int) -> None:
@@ -2389,9 +2790,7 @@ class ScheduleTab(QWidget):
         if dialog.exec() != ScopeDialog.Accepted:
             return
         scope = dialog.scope()
-        for member in members:
-            scheduling.clear_block(self.db, self.navigator.week_start, member.id, scope)
-        self.refresh()
+        self._clear_blocks_with_undo(members, scope)
 
     def handle_show_unplaced_report(self) -> None:
         dialog = UnplacedReportDialog(self.db, self.navigator.week_start, self)
@@ -2428,7 +2827,7 @@ class ScheduleTab(QWidget):
         from_week = scheduling.week_key(self.navigator.week_start)
         for member in members:
             self.db.retire_or_delete_lesson_block(member.id, from_week)
-        self._selected_pool_block_id = None
+        self._clear_pool_selection()
         self.refresh()
 
     # ---------- ders ekle / oto ata ----------
@@ -2436,6 +2835,115 @@ class ScheduleTab(QWidget):
         dialog = AddLessonDialog(self.db, self)
         if dialog.exec() == AddLessonDialog.Accepted:
             self.refresh()
+
+    def handle_manage_holidays(self) -> None:
+        dialog = HolidaysDialog(self.db, self.navigator.week_start, self)
+        dialog.exec()
+        self.refresh()
+
+    def handle_add_makeup_lessons(self) -> None:
+        if self.mode != MODE_TEACHER or self._selected_row_entity_id is None:
+            return
+        current_week = scheduling.monday_of(_dt.date.today())
+        if self.navigator.week_start != current_week:
+            QMessageBox.information(
+                self, "Bu Hafta Gerekli",
+                "Telafi dersleri yalnızca içinde bulunduğumuz haftanın havuzuna eklenebilir.",
+            )
+            return
+        teacher_id = self._selected_row_entity_id
+        teacher_name = next((name for entity_id, name in self._row_entities if entity_id == teacher_id), "")
+        dialog = MakeupLessonsDialog(
+            self.db, current_week - _dt.timedelta(days=7), teacher_id, teacher_name, self
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        try:
+            created = self.db.add_makeup_lessons(dialog.selected_source_ids(), scheduling.week_key(current_week))
+        except Exception as exc:
+            QMessageBox.critical(self, "Telafi Dersi Eklenemedi", str(exc))
+            return
+        self.refresh()
+        if created:
+            QMessageBox.information(
+                self, "Telafi Dersleri Eklendi",
+                f"{len(created)} telafi dersi bu haftanın 'Atanmamış Dersler' havuzuna eklendi.",
+            )
+        else:
+            QMessageBox.information(
+                self, "Dersler Zaten Ekli",
+                "Seçilen dersler bu haftaya daha önce telafi dersi olarak eklenmiş.",
+            )
+
+    def handle_copy_week(self) -> None:
+        dialog = CopyWeekDialog(self.navigator.week_start, self.navigator.week_start + _dt.timedelta(days=7), self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        source_week = dialog.source_week()
+        target_week = dialog.target_week()
+        source_schedule, source_pool = scheduling.get_week_view(self.db, source_week)
+        target_schedule, target_pool = scheduling.get_week_view(self.db, target_week)
+        # Kaynak haftada havuzda olan dersler hedefte de atanmamış olur (None).
+        source_positions = {
+            block.id: (day, period) for (day, period), blocks in source_schedule.items() for block in blocks
+        }
+        source_positions.update({block.id: None for block in source_pool})
+        # Kaynak haftada sadece resmî tatil yüzünden havuza düşen dersler
+        # gerçekten atanmamış değildir: hedefte olduğu gibi bırakılır.
+        source_holidays = scheduling.holiday_names_by_day(self.db, source_week)
+        holiday_block_ids = set()
+        if source_holidays and source_pool:
+            rows = {row["id"]: row for row in self.db.list_lesson_blocks_detailed()}
+            exceptions = self.db.get_week_exceptions(scheduling.week_key(source_week))
+            history = self.db.get_block_position_history()
+            for block in source_pool:
+                row = rows.get(block.id)
+                if row is None:
+                    continue
+                day, _period = scheduling.resolve_week_position(row, scheduling.week_key(source_week), exceptions, history)
+                if day in source_holidays:
+                    holiday_block_ids.add(block.id)
+        target_blocks = [block for blocks in target_schedule.values() for block in blocks] + list(target_pool)
+        target_ids = [block.id for block in target_blocks if block.id not in holiday_block_ids]
+        if not target_ids:
+            QMessageBox.information(
+                self, "Kopyalanacak Ders Yok",
+                "Hedef haftada kopyalanabilecek ders bulunamadı; kaynak haftada tatil nedeniyle "
+                "havuzda görünen dersler değiştirilmez.",
+            )
+            return
+        source_text = source_week.strftime("%d.%m.%Y")
+        target_text = target_week.strftime("%d.%m.%Y")
+        confirm = QMessageBox.question(
+            self, "Hafta Kopyalama Onayı",
+            f"{source_text} haftasının programı {target_text} haftasına kopyalansın mı?\n\n"
+            "Yerleşimler hedef haftadan itibaren kalıcı olarak değişir; daha sonraki planlanmış kalıcı "
+            "yerleşimler silinir. Sonraki haftaların özel istisnaları korunur.\n\n"
+            "Kaynakta bulunmayan hedef haftadaki dersler de atanmamış olur. Hedef haftadan önceki "
+            "haftalar korunur."
+            + (
+                f"\n\nKaynak haftada tatil nedeniyle havuzdaki {len(holiday_block_ids)} ders değiştirilmeden bırakılır."
+                if holiday_block_ids else ""
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            copied = self.db.copy_week_schedule(
+                scheduling.week_key(target_week),
+                target_ids,
+                {block_id: source_positions.get(block_id) for block_id in target_ids},
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Hafta Kopyalanamadı", str(exc))
+            return
+        self.refresh()
+        QMessageBox.information(
+            self, "Hafta Kopyalandı",
+            f"{copied} dersin yerleşimi {target_text} haftasından itibaren uygulandı.",
+        )
 
     def handle_auto_assign(self) -> None:
         # Kısıt çözücü (bkz. scheduling.auto_assign) çok sayıda öğretmen/
